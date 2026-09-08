@@ -1,0 +1,19 @@
+# Data Pump dumps — too large for git
+data/*.dmp
+data/*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Node / CDK
+node_modules/
+cdk.out/
+
+# Credentials — never commit
+*.pem
+credentials*
+*secrets*
