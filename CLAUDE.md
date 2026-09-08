@@ -17,12 +17,23 @@ See `docs/02-architecture.md` for why, and do not re-add them.
 
 | Item | Status |
 |---|---|
-| Source Oracle estate | ✅ Built, 1.03 GB, 90 objects, verified |
+| Source Oracle estate | ✅ Built, 1.03 GB, 90 objects, 51 constraints, verified |
 | Seeded defects | ✅ 8 defects in place, documented |
 | Golden snapshot | ✅ `data/dbmig_golden.dmp` |
-| Discovery collector | ⬜ **Next task** |
-| Assessment engine | ⬜ Not started |
+| Discovery collector | ✅ `collector/`, 45 datasets, local JSON, 5/5 verify checks |
+| Assessment engine | ⬜ **Next task** |
 | Everything AWS-side | ⬜ Not started — no AWS account yet |
+
+## Running the collector
+
+```
+$env:DBSHIFT_COLLECTOR_PASSWORD='...'      # read-only dbmig_collector
+.\.venv\Scripts\python.exe -m collector.run
+.\.venv\Scripts\python.exe -m collector.verify
+```
+
+Output lands in `collector/output/<collector_run_id>/` (gitignored). There is no
+AWS push step yet — the envelope is shaped for one.
 
 ## Where things are
 

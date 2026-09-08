@@ -38,12 +38,14 @@ SELECT sys_context('USERENV','CON_NAME') FROM dual;   -- must return XEPDB1
 
 ## Size and object census (verified)
 
-**1.031 GB**, 90 objects in `USER_OBJECTS`, 50 constraints.
+**1.032 GB**, 90 objects in `USER_OBJECTS`, **51 constraints**.
+
+Re-verified by the discovery collector on 2026-09-08 against `DBA_*` views.
 
 | Object type | Count |
 |---|---|
-| INDEX | 30 |
-| TABLE | 19 |
+| INDEX | 31 |
+| TABLE | 21 |
 | LOB | 6 |
 | SEQUENCE | 5 |
 | TABLE PARTITION | 4 |
@@ -54,13 +56,30 @@ SELECT sys_context('USERENV','CON_NAME') FROM dual;   -- must return XEPDB1
 | SYNONYM | 2 |
 | PROCEDURE | 2 |
 | PACKAGE / PACKAGE BODY | 1 each |
+| DATABASE LINK | 1 |
 | TRIGGER | 1 |
 | JOB | 1 |
 | FUNCTION | 1 |
 | MATERIALIZED VIEW | 1 |
 
-Constraints: 10 primary key (P), 5 foreign key (R), 1 unique (U),
+Constraints: **11** primary key (P), 5 foreign key (R), 1 unique (U),
 32 check (C), 2 object-type (O, auto-generated for object columns).
+
+Only **5 of the 11 primary keys are user-named** business keys (`CUSTOMER`,
+`LOAN`, `LOAN_TXN`, `PAYMENT_HIST`, `COMM_LOG`). The other 6 are
+system-generated on Oracle-managed infrastructure: the AQ queue tables, the
+`DR$IX_COMM_NOTES_TEXT$*` Oracle Text index internals, `LOAN_NOTICE_XML`, and
+`"ORDER"`. **Assessment rules must not treat `DR$`, `AQ$`, `MLOG$` and `SYS_IOT`
+objects as user objects to migrate** — they are rebuilt by recreating the Text
+index, the queue and the mview log, not moved.
+
+### Why an earlier census said 50 constraints and 19 tables
+
+The Phase 0 figures were taken **before** `04_seed_defects.sql` ran. That script
+creates `"ORDER"` with an inline `PRIMARY KEY`, which is the 51st constraint
+(`SYS_C008270`) and the 11th PK. The 90-object count was taken *after* seeding,
+so the old numbers were never internally consistent. Post-seed values above are
+authoritative.
 
 ## Row counts
 
@@ -81,10 +100,23 @@ schema objects at all:
 
 - **Constraints** — in `USER_CONSTRAINTS`, they are table attributes
 - **Directory** (`DBMIG_EXT_DIR` -> `C:\oracle\ext_data`) — owned by SYS
-- **XML schema** (`http://dbmig.example.com/loan_notice.xsd`) — owned by XDB.
-  This URL is an identifier only; Oracle never fetches it.
+- **XML schema** (`http://dbmig.example.com/loan_notice.xsd`) — in
+  `DBA_XML_SCHEMAS`, not in `USER_OBJECTS`. The URL is an identifier only;
+  Oracle never fetches it.
 - **Users, roles, grants, profile** — database-level
-- **Database link** (`DBMIG_LOOPBACK_LNK`) — owned by `dbmig_rpt`, not `dbmig_app`
+
+### Corrected 2026-09-08 by collector output
+
+- **The database link *does* appear** in `USER_OBJECTS` as type `DATABASE LINK`,
+  and `DBMIG_LOOPBACK_LNK` is owned by **`dbmig_app`**, not `dbmig_rpt`. It is
+  one of the 90 objects.
+- **The XML schema is registered under owner `DBMIG_APP`**, not XDB.
+- **`dbmig_rpt` owns no objects at all** — it exists as a grantee only. Nothing
+  reads it today; keep it in the collected schema list so cross-schema grants
+  stay visible.
+- `PDBADMIN` is also flagged `ORACLE_MAINTAINED='N'` but is a PDB
+  administration account, not an application schema. The collector reports it as
+  discovered-but-not-collected rather than silently including it.
 
 ## Golden snapshot
 

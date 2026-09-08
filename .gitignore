@@ -2,6 +2,9 @@
 data/*.dmp
 data/*.log
 
+# Collector run artifacts
+collector/output/
+
 # Python
 __pycache__/
 *.py[cod]
