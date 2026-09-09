@@ -150,7 +150,7 @@
     "remediation_level": "L3",
     "title": "Near-unique column contains duplicate values",
     "rationale": "A column the optimizer treats as almost unique but which carries duplicates is a natural key with no enforcement. Adding a unique constraint on the target will fail until the duplicates are resolved.",
-    "sql": "SELECT owner, table_name || '.' || column_name AS object_name, 'COLUMN' AS object_type, CAST(duplicate_count AS TEXT) || ' duplicate values in a column with no unique constraint' AS detail FROM column_profile WHERE duplicate_count > 0"
+    "sql": "SELECT owner, table_name || '.' || column_name AS object_name, 'COLUMN' AS object_type, CAST(duplicate_count AS TEXT) || ' duplicate values in a column with no unique constraint' || CASE WHEN sampled = 'Y' THEN ' (found in a ' || CAST(sample_pct AS TEXT) || '% sample -- the true count is higher)' ELSE '' END AS detail FROM column_profile WHERE duplicate_count > 0"
   },
   {
     "rule_id": "DQ-003",
@@ -159,7 +159,7 @@
     "remediation_level": "L3",
     "title": "Text column contains non-ASCII characters",
     "rationale": "Characters outside ASCII are usually legitimate, but a cp1252 artifact such as CHR(146) becomes a replacement character or a load failure when the target character set differs.",
-    "sql": "SELECT owner, table_name || '.' || column_name AS object_name, 'COLUMN' AS object_type, CAST(non_ascii_count AS TEXT) || ' rows contain characters outside ASCII; verify against target character set' AS detail FROM column_profile WHERE non_ascii_count > 0"
+    "sql": "SELECT owner, table_name || '.' || column_name AS object_name, 'COLUMN' AS object_type, CAST(non_ascii_count AS TEXT) || ' rows contain characters outside ASCII; verify against target character set' || CASE WHEN sampled = 'Y' THEN ' (found in a ' || CAST(sample_pct AS TEXT) || '% sample -- the true count is higher)' ELSE '' END AS detail FROM column_profile WHERE non_ascii_count > 0"
   },
   {
     "rule_id": "DQ-004",
@@ -223,6 +223,15 @@
     "title": "Table could not be profiled for data quality",
     "rationale": "A table that was not profiled has no data-quality evidence behind it. The absence of findings is not the same as the absence of problems, and the report must not imply otherwise.",
     "sql": "SELECT owner, table_name AS object_name, 'TABLE' AS object_type, 'Not profiled: ' || skip_reason AS detail FROM table_profile WHERE profiled = 'N' AND skip_reason NOT IN ('oracle_internal_object')"
+  },
+  {
+    "rule_id": "DQ-011",
+    "category": "data_quality",
+    "severity": "INFO",
+    "remediation_level": "L2",
+    "title": "Table was profiled by sample, not in full",
+    "rationale": "Sampling makes a large table affordable to profile, but it changes what a clean result means. Finding a duplicate in a sample proves duplicates exist; finding none does not prove they are absent. Data-quality findings on these tables are a lower bound.",
+    "sql": "SELECT owner, table_name AS object_name, 'TABLE' AS object_type, 'Profiled from a ' || CAST(sample_pct AS TEXT) || '% sample of an estimated ' || CAST(estimated_rows AS TEXT) || ' rows; a clean result here is not proof of absence' AS detail FROM table_profile WHERE sampled = 'Y'"
   },
   {
     "rule_id": "PERF-001",

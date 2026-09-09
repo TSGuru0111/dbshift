@@ -109,3 +109,49 @@ def evaluate(conn: sqlite3.Connection) -> tuple[list[dict], list[dict]]:
 
     findings.sort(key=lambda f: (f["rule_id"], f["owner"] or "", f["object_name"] or ""))
     return findings, errors
+
+
+SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+# Objects listed inline per group. The count is always exact; this caps only how
+# many names travel in the payload, which is what keeps a large estate's output
+# bounded instead of growing with the object count.
+MAX_OBJECTS_LISTED = 250
+
+
+def group_findings(findings: list[dict]) -> list[dict]:
+    """Collapse findings to one entry per rule.
+
+    At 90 objects, one finding per object is readable. At 10,000 it is 7,500 rows
+    nobody triages. A rule that fires on 340 tables is one issue with a wide blast
+    radius, not 340 issues -- which is also how the score already counts it.
+    """
+    by_rule: dict[str, list[dict]] = {}
+    for f in findings:
+        by_rule.setdefault(f["rule_id"], []).append(f)
+
+    groups = []
+    for rule_id, items in by_rule.items():
+        head = items[0]
+        n = len(items)
+        objects = [i["object_name"] for i in items if i["object_name"]]
+        owners = sorted({i["owner"] for i in items if i["owner"]})
+        groups.append(
+            {
+                "rule_id": rule_id,
+                "category": head["category"],
+                "severity": head["severity"],
+                "remediation_level": head["remediation_level"],
+                "title": head["title"],
+                "rationale": head["rationale"],
+                "occurrences": n,
+                "owners": owners,
+                "objects": objects[:MAX_OBJECTS_LISTED],
+                "objects_truncated": max(0, len(objects) - MAX_OBJECTS_LISTED),
+                "sample_detail": head["detail"],
+                "finding_ids": [i["finding_id"] for i in items],
+            }
+        )
+
+    groups.sort(key=lambda g: (SEVERITY_RANK[g["severity"]], -g["occurrences"], g["rule_id"]))
+    return groups

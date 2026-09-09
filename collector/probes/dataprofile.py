@@ -21,10 +21,29 @@ IDENTIFIER = re.compile(r"^[A-Za-z0-9_$#]+$")
 
 
 def _max_rows() -> int:
+    """Above this, sample rather than scan in full."""
     try:
         return int(os.environ.get("DBSHIFT_PROFILE_MAX_ROWS", "2000000"))
     except ValueError:
         return 2_000_000
+
+
+def _sample_target() -> int:
+    """Rows a sampled scan aims to read, regardless of table size."""
+    try:
+        return int(os.environ.get("DBSHIFT_PROFILE_SAMPLE_ROWS", "1000000"))
+    except ValueError:
+        return 1_000_000
+
+
+def _sample_pct(est_rows: int, target: int) -> float:
+    """Block-sample percentage that reads roughly `target` rows.
+
+    Bounded below so a very large table still yields a usable sample, and
+    rounded so the percentage embedded in SQL stays short and predictable.
+    """
+    pct = target / est_rows * 100
+    return round(max(0.01, min(99.0, pct)), 4)
 
 
 def _quote(name: str) -> str:
@@ -93,6 +112,7 @@ def collect(s, owners):
         by_table.setdefault((c["owner"], c["table_name"]), []).append(c)
 
     max_rows = _max_rows()
+    sample_target = _sample_target()
     table_profile: list[dict] = []
     column_profile: list[dict] = []
     unreadable: set[str] = set()
@@ -109,8 +129,6 @@ def collect(s, owners):
             skip = "external_table"
         elif owner in unreadable:
             skip = "no_select_privilege"
-        elif est_rows is not None and est_rows > max_rows:
-            skip = f"estimated_rows_above_cap_{max_rows}"
 
         if skip:
             table_profile.append(
@@ -154,7 +172,14 @@ def collect(s, owners):
                 f'THEN 1 ELSE 0 END) AS "NA__{name}"'
             )
 
-        sql = f'SELECT {", ".join(selects)} FROM {_quote(owner)}.{_quote(table)}'
+        # Large tables are sampled, not skipped. Block sampling reads a fraction
+        # of blocks, so cost is bounded by the sample target rather than by table
+        # size -- which is what makes this survive a TB-scale estate.
+        sampled = est_rows is not None and est_rows > max_rows
+        pct = _sample_pct(est_rows, sample_target) if sampled else None
+        clause = f" SAMPLE ({pct})" if sampled else ""
+
+        sql = f'SELECT {", ".join(selects)} FROM {_quote(owner)}.{_quote(table)}{clause}'
         result = s.fetch(f"dataprofile.scan.{owner}.{table}", sql)
         if not result:
             error = s.query_log[-1].error or ""
@@ -177,13 +202,19 @@ def collect(s, owners):
             continue
 
         row = result[0]
-        actual = row["row_count"]
+        scanned = row["row_count"]
         table_profile.append(
             {
                 "owner": owner,
                 "table_name": table,
                 "estimated_rows": est_rows,
-                "actual_rows": actual,
+                # Only a full scan establishes a true row count. A sampled scan
+                # counts what it read; inflating that back up would be a guess
+                # presented as a measurement.
+                "actual_rows": None if sampled else scanned,
+                "scanned_rows": scanned,
+                "sampled": "Y" if sampled else "N",
+                "sample_pct": pct,
                 "profiled": "Y",
                 "skip_reason": None,
             }
@@ -196,7 +227,10 @@ def collect(s, owners):
                     "owner": owner,
                     "table_name": table,
                     "column_name": name,
-                    "actual_rows": actual,
+                    "actual_rows": None if sampled else scanned,
+                    "scanned_rows": scanned,
+                    "sampled": "Y" if sampled else "N",
+                    "sample_pct": pct,
                     "duplicate_count": row.get(f"dup__{name}".lower()),
                     "non_ascii_count": row.get(f"na__{name}".lower()),
                     "checked_duplicates": "Y" if name in dup_targets else "N",

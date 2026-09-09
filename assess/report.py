@@ -263,8 +263,36 @@ td.det { color:var(--ink-2); min-width:280px; }
 .sev::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; flex:none; }
 .sev-CRITICAL{color:var(--sev-critical)} .sev-HIGH{color:var(--sev-high)}
 .sev-MEDIUM{color:var(--sev-medium)} .sev-LOW{color:var(--sev-low)} .sev-INFO{color:var(--sev-info)}
-.empty { padding:34px; text-align:center; color:var(--ink-3); font-size:13.5px; }
+.empty { padding:34px; text-align:center; color:var(--ink-3); font-size:13.5px;
+  border:1px solid var(--rule); border-radius:3px; background:var(--surface); }
 .tcount { font-family:"IBM Plex Mono", monospace; font-size:11.5px; color:var(--ink-3); margin-top:10px; }
+
+/* issues: one block per rule, severity carried in the left edge */
+.issues { display:flex; flex-direction:column; gap:1px;
+  background:var(--rule); border:1px solid var(--rule); border-radius:3px; overflow:hidden; }
+.issue { background:var(--surface); padding:15px 18px; border-left:3px solid var(--sev-info); }
+.issue[data-sev="CRITICAL"]{ border-left-color:var(--sev-critical); }
+.issue[data-sev="HIGH"]    { border-left-color:var(--sev-high); }
+.issue[data-sev="MEDIUM"]  { border-left-color:var(--sev-medium); }
+.issue[data-sev="LOW"]     { border-left-color:var(--sev-low); }
+.ihead { display:flex; flex-wrap:wrap; align-items:baseline; gap:10px; }
+.ihead h3 { font-size:14.5px; font-weight:600; letter-spacing:-.005em; }
+.ibadge { font-family:"IBM Plex Mono", monospace; font-size:11px; font-weight:500;
+  background:var(--surface-2); border:1px solid var(--rule); padding:1px 7px;
+  border-radius:2px; color:var(--ink-2); font-variant-numeric:tabular-nums; }
+.imeta { font-family:"IBM Plex Mono", monospace; font-size:10.5px; color:var(--ink-3);
+  margin-left:auto; white-space:nowrap; }
+.idetail { font-family:"IBM Plex Mono", monospace; font-size:12px; color:var(--ink);
+  margin-top:8px; line-height:1.5; }
+.iwhy { font-size:13px; color:var(--ink-2); margin-top:7px; max-width:80ch; }
+.issue details { margin-top:10px; }
+.issue summary { cursor:pointer; font-family:"IBM Plex Mono", monospace; font-size:11px;
+  color:var(--accent); width:fit-content; }
+.issue summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.objs { display:flex; flex-wrap:wrap; gap:5px; margin-top:9px; }
+.objs span { font-family:"IBM Plex Mono", monospace; font-size:11px; background:var(--surface-2);
+  border:1px solid var(--rule); padding:2px 7px; border-radius:2px; color:var(--ink-2); }
+.objs .more { border-style:dashed; color:var(--ink-3); }
 
 /* pipeline */
 .figwrap { overflow-x:auto; border:1px solid var(--rule); border-radius:3px;
@@ -395,20 +423,18 @@ footer { margin-top:60px; padding-top:20px; border-top:1px solid var(--rule);
   </section>
 
   <section>
-    <div class="sec-head"><h2>Findings</h2><span class="count">filter by severity or category</span></div>
+    <div class="sec-head"><h2>Issues</h2><span class="count">__NISSUES__ issues &middot; __NFIND2__ occurrences</span></div>
+    <p class="explain">One entry per rule, not per object. A rule that fires on 340 tables is
+    <strong>one issue with a wide blast radius</strong>, not 340 issues &mdash; which is also how the
+    score counts it. Expand an issue to see every object it touched.</p>
     <div class="filters">
       <span class="flabel">Severity</span>__SEVCHIPS__
     </div>
     <div class="filters">
       <span class="flabel">Category</span>__CATCHIPS__
     </div>
-    <div class="tablewrap">
-      <table>
-        <thead><tr><th>Rule</th><th>Severity</th><th>Category</th><th>Object</th><th>Finding</th><th>Fix</th></tr></thead>
-        <tbody id="rows"></tbody>
-      </table>
-      <div class="empty" id="empty" hidden>No findings match these filters.</div>
-    </div>
+    <div class="issues" id="rows"></div>
+    <div class="empty" id="empty" hidden>No issues match these filters.</div>
     <div class="tcount" id="tcount"></div>
   </section>
 
@@ -428,7 +454,7 @@ footer { margin-top:60px; padding-top:20px; border-top:1px solid var(--rule);
 </div>
 
 <script>
-const FINDINGS = __FINDINGS__;
+const ISSUES = __ISSUES__;
 const CATLABEL = __CATLABEL__;
 const state = { sev:new Set(), cat:new Set() };
 const rows = document.getElementById('rows');
@@ -436,19 +462,33 @@ const empty = document.getElementById('empty');
 const tcount = document.getElementById('tcount');
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+function objectList(g){
+  if (!g.objects.length) return '';
+  const chips = g.objects.map(o => `<span>${esc(o)}</span>`).join('');
+  const more = g.objects_truncated
+    ? `<span class="more">+${g.objects_truncated} more</span>` : '';
+  const label = g.occurrences === 1 ? 'Affected object' : `Affected objects (${g.occurrences})`;
+  return `<details><summary>${label}</summary><div class="objs">${chips}${more}</div></details>`;
+}
+
 function render(){
-  const list = FINDINGS.filter(f =>
-    (state.sev.size === 0 || state.sev.has(f.severity)) &&
-    (state.cat.size === 0 || state.cat.has(f.category)));
-  rows.innerHTML = list.map(f => `<tr>
-    <td class="rid">${esc(f.rule_id)}</td>
-    <td><span class="sev sev-${esc(f.severity)}">${esc(f.severity)}</span></td>
-    <td>${esc(CATLABEL[f.category] || f.category)}</td>
-    <td class="obj">${esc(f.object_name)}</td>
-    <td class="det">${esc(f.detail)}</td>
-    <td class="rid">${esc(f.remediation_level)}</td></tr>`).join('');
+  const list = ISSUES.filter(g =>
+    (state.sev.size === 0 || state.sev.has(g.severity)) &&
+    (state.cat.size === 0 || state.cat.has(g.category)));
+  rows.innerHTML = list.map(g => `<article class="issue" data-sev="${esc(g.severity)}">
+    <div class="ihead">
+      <span class="sev sev-${esc(g.severity)}">${esc(g.severity)}</span>
+      <h3>${esc(g.title)}</h3>
+      ${g.occurrences > 1 ? `<span class="ibadge">&times;${g.occurrences}</span>` : ''}
+      <span class="imeta">${esc(g.rule_id)} &middot; ${esc(CATLABEL[g.category] || g.category)} &middot; ${esc(g.remediation_level)}</span>
+    </div>
+    <p class="idetail">${esc(g.sample_detail)}</p>
+    <p class="iwhy">${esc(g.rationale)}</p>
+    ${objectList(g)}
+  </article>`).join('');
   empty.hidden = list.length > 0;
-  tcount.textContent = `Showing ${list.length} of ${FINDINGS.length} findings`;
+  const occ = list.reduce((n,g) => n + g.occurrences, 0);
+  tcount.textContent = `Showing ${list.length} of ${ISSUES.length} issues (${occ} occurrences)`;
 }
 document.querySelectorAll('.chip').forEach(chip => {
   chip.addEventListener('click', () => {
@@ -731,13 +771,19 @@ def build(assessment: dict, manifest: dict, estate: str, datasets: int) -> str:
         "__SEVCHIPS__": _chips("sev", [(x, x.title()) for x in SEVERITY_ORDER]),
         "__CATCHIPS__": _chips("cat", [(k, v) for k, v in CATEGORY_LABEL.items()]),
         "__LIMITS__": _limits(assessment),
-        "__FINDINGS__": json.dumps(
+        "__NISSUES__": str(len(assessment["issues"])),
+        "__NFIND2__": str(total),
+        "__ISSUES__": json.dumps(
             [
                 {
-                    k: f[k]
-                    for k in ("rule_id", "severity", "category", "object_name", "detail", "remediation_level")
+                    k: g[k]
+                    for k in (
+                        "rule_id", "severity", "category", "title", "rationale",
+                        "remediation_level", "occurrences", "objects",
+                        "objects_truncated", "sample_detail",
+                    )
                 }
-                for f in findings
+                for g in assessment["issues"]
             ],
             ensure_ascii=False,
         ),

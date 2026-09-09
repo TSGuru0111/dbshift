@@ -63,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
 
     scores = scoring.score_findings(findings)
     recall = scoring.score_against_answer_key(findings)
+    groups = engine.group_findings(findings)
 
     assessment = {
         "collector_run_id": loaded["collector_run_id"],
@@ -72,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         "rule_errors": rule_errors,
         "scores": scores,
         "answer_key": recall,
+        "issues": groups,
         "findings": findings,
     }
     out = args.output_dir / "assessment.json"
@@ -91,7 +93,7 @@ def _report(a: dict) -> None:
     s, k = a["scores"], a["answer_key"]
     print(f"\ncollector_run_id : {a['collector_run_id']}")
     print(f"rules evaluated  : {a['rules_evaluated']}")
-    print(f"findings         : {s['total_findings']}")
+    print(f"issues           : {len(a['issues'])}  ({s['total_findings']} occurrences)")
 
     print("\nSCORES")
     for category, c in s["by_category"].items():
@@ -109,6 +111,14 @@ def _report(a: dict) -> None:
     for lvl, n in s["by_remediation_level"].items():
         if n:
             print(f"  {lvl} {n}")
+
+    print("\nISSUES  (one row per rule, not per object)")
+    for g in a["issues"]:
+        count = f"x{g['occurrences']}" if g["occurrences"] > 1 else "  "
+        print(
+            f"  {g['severity']:<8} {g['rule_id']:<9} {count:>4}  {g['title'][:52]:<52} "
+            f"{g['remediation_level']}"
+        )
 
     print(f"\nANSWER KEY  (docs/04-defects.md)")
     for d in k["defects"]:

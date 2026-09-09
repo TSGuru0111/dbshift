@@ -296,6 +296,68 @@ SE2-vs-EE verdict still rests on partitioning alone.
 
 Report published as an artifact; regenerate with `python -m assess.report`.
 
+### Addendum — scale hardening for client estates (2026-09-09)
+
+Prompted by reviewing AWS's own
+[sample-oracle-modernization-accelerator](https://github.com/aws-samples/sample-oracle-modernization-accelerator).
+
+**What that sample is, and is not.** It targets PostgreSQL/MySQL — a
+*heterogeneous* accelerator whose value is conversion: DMS Schema Conversion
+handles ~95% of DDL, a Bedrock agent takes the failing 5%, an LLM rewrites SQL
+inside MyBatis mappers. That is the branch this project deliberately deleted, so
+it is not a competitor. Two things in it confirm decisions already made here:
+its LLM sits on residual hard cases and semantic conversion, **not** on
+generating dictionary queries; and it has **no assessment layer at all** — no
+findings, severities, scores or recall metric. It also requires Oracle Instant
+Client, where this collector is thin-mode.
+
+Its headline scale figure is 688 tables / 15M+ rows, and the TB-scale claim is
+about **DMS data movement**, not assessment. Moving TB is solved; assessing a
+large unfamiliar estate is not — in their sample or previously in this one.
+
+**Aggregation — findings collapse to issues.** 68 findings from 90 objects is
+~0.75 per object; at 10,000 objects that is ~7,500 rows nobody triages. Findings
+now group to one entry per rule carrying occurrence count, affected owners and a
+capped object list. **68 findings → 36 issues**, severity-ranked with blast
+radius visible, and the count stays bounded by the rule catalogue rather than by
+the estate. The scoring model already counted this way, so scores did not move.
+
+**Sampling — large tables are profiled, not skipped.** `DBSHIFT_PROFILE_MAX_ROWS`
+previously *skipped* anything above 2M rows, so `LOAN_TXN` (3M) had no
+data-quality evidence at all. Above the threshold the probe now block-samples to
+a row target (`DBSHIFT_PROFILE_SAMPLE_ROWS`, default 1M) instead:
+
+```
+LOAN_TXN   est=3,000,000   scanned=1,000,092   SAMPLE 33.3333%
+```
+
+Cost is bounded by the target, not by table size — a 3B-row table samples at
+0.033% and still reads ~1M rows.
+
+**Sampling changes what a clean result means**, so this is recorded rather than
+glossed. A sampled scan sets `actual_rows = NULL` (only a full scan establishes
+a true count; scaling the sample back up would be a guess presented as a
+measurement), `DQ-002` and `DQ-003` append "found in an N% sample — the true
+count is higher", and new rule **DQ-011** flags every sampled table: *finding a
+duplicate in a sample proves duplicates exist; finding none does not prove
+absence.*
+
+50 rules, 36 issues, **recall still 7/7 (100%)**, severity exact 7/7.
+
+**Still open before a client engagement**
+
+- **Preflight** — verify granted privileges and Oracle version first and report
+  gaps, rather than failing on query 40 of 60
+- **Version matrix** — the catalogue is 21c-shaped; 19c and 23ai differ
+- **PL/SQL text out-of-line** — full source is inlined in JSON today; at 100s of
+  MB it must move out, keyed by the hash already stored
+- **Loader streaming and SQLite indexes** — the loader reads whole files into
+  memory, and `PERF-008` self-joins `index_columns` with no index behind it
+- **Semantic vs structural rules** — structural rules port to any client
+  unchanged; semantic ones like `DQ-002`'s near-unique heuristic already
+  misfired twice here on money columns. At a client they should be presented as
+  **hypotheses to confirm**, not findings
+
 ---
 
 ## Phase 3 — Size & Edition Decision (not started)

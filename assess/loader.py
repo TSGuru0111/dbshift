@@ -14,11 +14,12 @@ INTERNAL_PATTERNS = ("DR$%", "AQ$%", "MLOG$%", "RUPD$%", "SYS_IOT%")
 EMPTY_DATASET_COLUMNS = {
     "column_profile": [
         "collector_run_id", "owner", "table_name", "column_name", "actual_rows",
-        "duplicate_count", "non_ascii_count", "checked_duplicates", "checked_non_ascii",
+        "scanned_rows", "sampled", "sample_pct", "duplicate_count", "non_ascii_count",
+        "checked_duplicates", "checked_non_ascii",
     ],
     "table_profile": [
         "collector_run_id", "owner", "table_name", "estimated_rows", "actual_rows",
-        "profiled", "skip_reason",
+        "scanned_rows", "sampled", "sample_pct", "profiled", "skip_reason",
     ],
     "plsql_errors": [
         "collector_run_id", "owner", "name", "type", "sequence", "line", "position",
