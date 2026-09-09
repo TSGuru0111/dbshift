@@ -4,11 +4,12 @@
   "invoke_status": "BLOCKED",
   "invoke_blocker": "AccessDeniedException on every model: 'not authorized to perform the required AWS Marketplace actions (aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe)'. Listing works, invoking does not. Fix by enabling model access in the Bedrock console (admin, one-time) or adding aws-marketplace actions to the permission set. See docs/05-aws-services.md.",
   "note": "Model bindings live here, not in phase code. A phase asks for a tier; this file decides which model serves it. Swapping a model is editing this file. 'verified' below means an actual invoke succeeded -- set it only from a passing `python -m bedrock.verify` run, never from a report.",
+
   "tiers": {
     "fast": {
       "purpose": "Narration of already-computed facts. Discovery summaries, provisioning status, load progress, report prose. No judgement.",
-      "model_id": "anthropic.claude-3-haiku-20240307-v1:0",
-      "invocation": "direct",
+      "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "invocation": "inference_profile",
       "verified": false
     },
     "reasoning": {
@@ -18,24 +19,30 @@
       "verified": false
     }
   },
+
+  "policy": {
+    "no_opus_tier": "Sonnet 4.5 serves every reasoning task, including work an Opus-class model could do. There is deliberately no third tier: the architecture dropped the frontier tier when PL/SQL conversion left scope, and a homogeneous Oracle-to-Oracle migration has no task that needs one. Opus profiles are available on this account (global.anthropic.claude-opus-4-5 through opus-5) but are not bound -- reaching for one is a cost decision that needs justifying, not a default.",
+    "both_tiers_use_profiles": "ap-south-1 carries no on-demand throughput for current-generation models, so both tiers bind a global.* inference profile rather than a bare model id. A bare id returns a ValidationException that reads like a permissions error but is routing."
+  },
+
   "alternates": {
     "reasoning_apac": {
       "model_id": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
       "invocation": "inference_profile",
       "verified": false,
       "note": "APAC-scoped Sonnet 4. Use when data residency requires the request stay in-region rather than routing globally."
+    },
+    "fast_legacy": {
+      "model_id": "anthropic.claude-3-haiku-20240307-v1:0",
+      "invocation": "direct",
+      "verified": false,
+      "note": "Claude 3 Haiku. Roughly a quarter the token cost of Haiku 4.5 and callable as a bare model id. Fall back to this only if fast-tier spend becomes the binding budget constraint -- see docs/06-cost-model.md."
     }
   },
-  "unavailable": {
-    "anthropic.claude-sonnet-5": {
-      "reason": "AccessDeniedException \u2014 not entitled on account 106325261146",
-      "detail": "Fails identically whether called directly or via global.anthropic.claude-sonnet-5. This is a real entitlement gap, not a routing error. Needs an AWS Sales conversation, not a retry. NOTE: reported by a session transcript, not reproduced locally -- all models currently fail with the Marketplace error, so this specific verdict is unconfirmed.",
-      "verified_on": "2026-09-09"
-    }
-  },
+
+  "unavailable": {},
+
   "untested": [
-    "anthropic.claude-haiku-4-5-20251001-v1:0",
-    "anthropic.claude-opus-4-5-20251101-v1:0",
     "amazon.nova-lite-v1:0",
     "amazon.nova-pro-v1:0"
   ]

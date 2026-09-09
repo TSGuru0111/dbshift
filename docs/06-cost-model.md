@@ -42,6 +42,33 @@ Also: use the fast/cheap model tier for narration of already-computed facts.
 Reserve the reasoning tier for genuine judgement — code dependency analysis,
 root cause, remediation SQL, edition rationale.
 
+### Model bindings and what they cost — updated 2026-09-09
+
+Both tiers in `bedrock/models.json` now bind current-generation models:
+
+| Tier | Model | Why |
+|---|---|---|
+| fast | Claude Haiku 4.5 | narration only |
+| reasoning | Claude Sonnet 4.5 | **all judgement, including anything Opus-class** |
+
+**There is no Opus tier, by decision.** Sonnet 4.5 handles every reasoning task
+here. Opus profiles are available on the account but binding one is a cost
+choice that needs justifying, not a default.
+
+**The fast tier got more expensive.** Haiku 4.5 is roughly **4× the token cost**
+of the Claude 3 Haiku it replaced. Since the fast tier carries the high-volume
+narration calls, that is the line most likely to move the $6–10 per-run figure
+above. Two mitigations, in order:
+
+1. **The SHA-256 unchanged-object skip matters more now, not less** — it removes
+   most fast-tier calls on a re-run, which is where the volume is.
+2. If fast-tier spend still binds the budget, `bedrock/models.json` keeps
+   `alternates.fast_legacy` pointing at Claude 3 Haiku. Swapping the fast tier
+   back is a one-line config edit and touches no phase code.
+
+Re-derive the per-run figure once a real run is measurable — the numbers above
+are planning approximations, and no full run has executed yet.
+
 ## Free-tier reality checks
 
 - **RDS for Oracle is not free-tier eligible in any form.** Free plan RDS covers
