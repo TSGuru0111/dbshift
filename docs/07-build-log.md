@@ -473,6 +473,74 @@ left to the TCO engine with rates the user supplies.
 
 1 override, 2 warnings, proposal **not** accepted as-is.
 
+### Addendum — the OLA utilization hook (2026-09-09)
+
+**Where AWS OLA actually fits.** AWS OLA and DB OLA are **funded,
+partner-delivered engagements with no API** — requested through an AWS account
+manager or a partner private offer, delivered in three phases (planning,
+script-based discovery, reporting), producing right-sizing, a five-year TCO and
+BYOL-vs-license-included guidance. There is nothing to call from code.
+
+What OLA does that this platform **structurally cannot** is measure utilization
+over a window. A point-in-time read-only scan has no history to take a
+percentile of. That was the standing `utilization_evidence` warning.
+
+So the integration is a file handoff, not an API call. `sizing/utilization.py`
+accepts a documented CSV — our contract, not a claim about any product's native
+export — that an OLA, Migration Evaluator, AWR, Statspack or vendor monitoring
+export can be mapped onto:
+
+```
+metric,unit,p50,p90,p95,p99,max,samples,window_start,window_end,source
+```
+
+`cpu_cores_used` and `memory_used_gb` are required; `iops` and
+`storage_used_gb` are reported only.
+
+**Sizing is on p95 with 1.3x headroom.** Not `max`, which sizes for one outlier
+and over-provisions an Oracle licence; not `p50`, which under-provisions by
+construction. Both the percentile and the headroom are recorded in `sizing.json`
+so the choice is auditable rather than folded into a magic number.
+
+**A feed is refused, never ignored.** Missing required metrics, a window under 7
+days, bad dates or non-numeric percentiles all cause rejection, sizing falls back
+to the capacity floor, and **the validation trail records why** — so a rejected
+feed can never be mistaken for an absent one.
+
+Seven days is a floor with a reason: below that there is no distribution, and a
+short weekday window misses month-end batch, which is when a database is at its
+real peak.
+
+**New check `peak_headroom`** compares the chosen class against the observed
+*maximum*, not just the sizing percentile, and warns when it sits below.
+
+### It changes the answer, which is the point
+
+| | No feed | With a 21-day feed |
+|---|---|---|
+| Basis | capacity floor | load-derived |
+| Instance | `db.t3.medium` (2 vCPU / 4 GiB) | `db.m5.2xlarge` (8 vCPU / 32 GiB) |
+| **Processor licences** | **1** | **4** |
+| `utilization_evidence` | WARN | PASS |
+
+Capacity-only sizing would have under-provisioned *and* understated the Oracle
+licence exposure fourfold. That gap is the commercial argument for running an
+OLA, and it is now quantifiable rather than asserted.
+
+The example CSV is marked `example_not_real_data` in every `source` value, and
+the committed `sizing.json` and published report are generated **without** it —
+they show the honest capacity floor for this estate.
+
+### Positioning
+
+Run this assessment first: seconds, free, and it answers whether the estate
+forces Enterprise Edition — the question that decides whether an OLA's weeks are
+worth spending. Then use the OLA for the two inputs this platform correctly
+refuses to invent: measured utilization and contract economics.
+
+DB OLA produces **no object-level findings** — no severities, no blocker gate,
+no recall metric. It answers *what should I buy*, not *what will break*.
+
 ---
 
 ## Phase 4 — Detect & Remediate (not started)

@@ -16,6 +16,7 @@ from assess import loader
 
 from . import facts as facts_mod
 from . import propose as propose_mod
+from . import utilization as utilization_mod
 from . import validate as validate_mod
 
 log = logging.getLogger("sizing")
@@ -39,6 +40,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run", type=str, default=None, help="collector_run_id")
     parser.add_argument("--collector-output", type=Path, default=DEFAULT_COLLECTOR_OUTPUT)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--utilization",
+        type=Path,
+        default=None,
+        help="CSV of measured utilization (AWS OLA / DB OLA, Migration Evaluator, AWR, "
+        "vendor monitoring). See sizing/samples/utilization_example.csv",
+    )
     parser.add_argument("--bedrock", action="store_true", help="use the Bedrock proposer")
     parser.add_argument("--model-id", type=str, default=None)
     parser.add_argument("--quiet", action="store_true")
@@ -53,10 +61,26 @@ def main(argv: list[str] | None = None) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     db_path = args.output_dir / "sizing.sqlite"
 
+    measured = None
+    if args.utilization:
+        try:
+            measured = utilization_mod.load(args.utilization)
+            log.info(
+                "utilization loaded source=%s window_days=%d usable=%s",
+                measured["source"],
+                measured["window_days"],
+                measured["usable_for_sizing"],
+            )
+        except utilization_mod.UtilizationError as exc:
+            # Refused, not ignored. Sizing continues on the capacity floor and
+            # the validation trail records why the feed was not used.
+            print(f"utilization file rejected: {exc}", file=sys.stderr)
+            measured = {"path": str(args.utilization), "usable_for_sizing": False, "reason": str(exc)}
+
     loaded = loader.load_run(run_dir, db_path)
     conn = sqlite3.connect(db_path)
     try:
-        facts = facts_mod.extract(conn)
+        facts = facts_mod.extract(conn, measured=measured)
     finally:
         conn.close()
 

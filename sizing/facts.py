@@ -16,7 +16,7 @@ def _scalar(conn, sql, default=0):
     return row[0]
 
 
-def extract(conn: sqlite3.Connection) -> dict:
+def extract(conn: sqlite3.Connection, measured: dict | None = None) -> dict:
     conn.row_factory = sqlite3.Row
 
     features = [
@@ -55,6 +55,21 @@ def extract(conn: sqlite3.Connection) -> dict:
     # percentiles at all. A handful of AWR snapshots is not a distribution, and
     # AWR on an edition without Diagnostic Pack should not be relied on anyway.
     # Both conditions must hold, or the sizing is capacity-derived and says so.
+    # An external measured feed -- an AWS OLA / DB OLA export, Migration
+    # Evaluator, AWR or vendor monitoring -- supersedes what the source can tell
+    # us about itself, because the source cannot tell us anything about load.
+    if measured and measured.get("usable_for_sizing"):
+        return_util = {
+            "sysmetric_rows": sysmetric_rows,
+            "awr_snapshots": awr_snapshots,
+            "available": True,
+            "basis": "measured",
+            "reason": f"external feed -- {measured['reason']}",
+            "measured": measured,
+        }
+    else:
+        return_util = None
+
     has_metrics = sysmetric_rows > 0
     has_history = awr_snapshots >= MIN_AWR_SNAPSHOTS
     if has_metrics and has_history:
@@ -84,10 +99,13 @@ def extract(conn: sqlite3.Connection) -> dict:
         "character_set": charset,
         "log_mode": db["log_mode"] if db else None,
         "supplemental_logging": db["supplemental_log_data_min"] if db else None,
-        "utilization": {
+        "utilization": return_util
+        or {
             "sysmetric_rows": sysmetric_rows,
             "awr_snapshots": awr_snapshots,
             "available": has_metrics and has_history,
+            "basis": "capacity",
             "reason": util_reason,
+            "measured": measured,
         },
     }

@@ -1,0 +1,5 @@
+metric,unit,p50,p90,p95,p99,max,samples,window_start,window_end,source
+cpu_cores_used,cores,1.2,2.8,3.4,4.6,5.9,20160,2026-08-04,2026-08-25,example_not_real_data
+memory_used_gb,gb,6.1,9.4,10.8,12.2,13.5,20160,2026-08-04,2026-08-25,example_not_real_data
+iops,iops,240,910,1180,1740,2310,20160,2026-08-04,2026-08-25,example_not_real_data
+storage_used_gb,gb,1.0,1.0,1.0,1.1,1.1,20160,2026-08-04,2026-08-25,example_not_real_data

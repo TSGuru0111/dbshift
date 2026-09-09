@@ -16,7 +16,7 @@ was involved. Nothing here pretends a model ran when it did not.
 
 from __future__ import annotations
 
-from . import instances, policy
+from . import instances, policy, utilization
 
 # Without utilization data the only defensible input is capacity. These are
 # floors derived from data volume, not recommendations derived from load.
@@ -35,8 +35,32 @@ def heuristic_proposal(facts: dict) -> dict:
     ]
 
     data_gb = facts["segment_gb"]
-    memory = max(MIN_MEMORY_GIB, int(-(-(data_gb * MEMORY_PER_DATA_GB) // 1)))
-    pick = instances.smallest_meeting(MIN_VCPU, memory)
+    util = facts["utilization"]
+    measured = util.get("measured") if util else None
+
+    if util and util.get("basis") == "measured" and measured:
+        # Load-derived: size to what the workload actually consumed.
+        req = utilization.requirements(measured)
+        vcpu = max(MIN_VCPU, req["required_vcpu"] or MIN_VCPU)
+        memory = max(MIN_MEMORY_GIB, req["required_memory_gib"] or MIN_MEMORY_GIB)
+        pick = instances.smallest_meeting(vcpu, memory)
+        sizing_basis = req
+        basis_text = (
+            f"Measured load over {measured['window_days']} days from "
+            f"{measured['source']}: {req['percentile']} of {req['cpu_cores_observed']} cores "
+            f"and {req['memory_gb_observed']} GB, plus {req['headroom']}x headroom, "
+            f"requires {vcpu} vCPU and {memory} GiB, giving {pick['class']}. "
+        )
+    else:
+        # Capacity-derived floor: the only defensible input without measured load.
+        memory = max(MIN_MEMORY_GIB, int(-(-(data_gb * MEMORY_PER_DATA_GB) // 1)))
+        pick = instances.smallest_meeting(MIN_VCPU, memory)
+        sizing_basis = {"basis": "capacity", "percentile": None, "headroom": None}
+        basis_text = (
+            f"{data_gb} GB of segments across {facts['table_count']} tables. "
+            f"No measured load, so a capacity floor of {memory} GiB memory and "
+            f"{MIN_VCPU} vCPU gives {pick['class']}. "
+        )
 
     return {
         "source": "heuristic",
@@ -45,10 +69,9 @@ def heuristic_proposal(facts: dict) -> dict:
         "apparent_forcing_features": apparent_forcing,
         "instance_class": pick["class"],
         "storage_gb": policy.storage_floor_gb(facts["segment_bytes"]),
+        "sizing_basis": sizing_basis,
         "rationale": (
-            f"{data_gb} GB of segments across {facts['table_count']} tables. "
-            f"Capacity floor of {memory} GiB memory and {MIN_VCPU} vCPU gives "
-            f"{pick['class']}. "
+            basis_text
             + (
                 "Feature usage reports " + ", ".join(apparent_forcing) + " in use, "
                 "which appears to require Enterprise Edition."

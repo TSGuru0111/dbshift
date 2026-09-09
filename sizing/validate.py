@@ -143,25 +143,67 @@ def validate(proposal: dict, facts: dict) -> dict:
         )
 
     # 7 -- Sizing rests on capacity alone when there is no measured load.
-    if not facts["utilization"]["available"]:
-        checks.append(
-            _check(
-                "utilization_evidence",
-                "WARN",
-                f"No usable utilization data -- {facts['utilization']['reason']}. This sizing is "
-                "a capacity-derived floor, not a load-derived recommendation. It must be "
-                "validated against measured production load before cutover, and nothing here "
-                "should be presented as measured headroom.",
-            )
+    util = facts["utilization"]
+    measured = util.get("measured")
+
+    if not util["available"]:
+        detail = (
+            f"No usable utilization data -- {util['reason']}. This sizing is a "
+            "capacity-derived floor, not a load-derived recommendation. It must be validated "
+            "against measured production load before cutover, and nothing here should be "
+            "presented as measured headroom."
         )
+        if measured and not measured.get("usable_for_sizing"):
+            detail += f" A utilization file was supplied but rejected: {measured['reason']}."
+        else:
+            detail += (
+                " An AWS OLA / DB OLA, Migration Evaluator export or vendor monitoring feed "
+                "supplies this; see sizing/samples/utilization_example.csv for the format."
+            )
+        checks.append(_check("utilization_evidence", "WARN", detail))
     else:
         checks.append(
             _check(
                 "utilization_evidence",
                 "PASS",
-                f"Utilization data usable -- {facts['utilization']['reason']}.",
+                f"Sizing is load-derived -- {util['reason']}. Measured over "
+                f"{measured['window_days']} days, minimum {measured['min_samples']} samples "
+                f"per metric.",
             )
         )
+
+    # 8 -- Headroom against the observed peak, not just the sizing percentile.
+    # A class that satisfies p95 but sits under the observed maximum will throttle
+    # at exactly the moment the business notices.
+    if util["available"] and measured:
+        peak_cpu = measured["metrics"].get("cpu_cores_used", {}).get("max")
+        peak_mem = measured["metrics"].get("memory_used_gb", {}).get("max")
+        shortfalls = []
+        if peak_cpu is not None and spec["vcpu"] < peak_cpu:
+            shortfalls.append(f"{spec['vcpu']} vCPU against an observed peak of {peak_cpu} cores")
+        if peak_mem is not None and spec["memory_gib"] < peak_mem:
+            shortfalls.append(
+                f"{spec['memory_gib']} GiB against an observed peak of {peak_mem} GB"
+            )
+        if shortfalls:
+            checks.append(
+                _check(
+                    "peak_headroom",
+                    "WARN",
+                    f"{instance_class} is sized on {measured['sizing_percentile']} and sits below "
+                    "the observed maximum: " + "; ".join(shortfalls) + ". Acceptable if the peak "
+                    "is a tolerable brief degradation; not acceptable if it coincides with "
+                    "month-end or batch.",
+                )
+            )
+        else:
+            checks.append(
+                _check(
+                    "peak_headroom",
+                    "PASS",
+                    f"{instance_class} covers the observed maximum on every sizing metric.",
+                )
+            )
 
     overrides = [c for c in checks if c["verdict"] == "OVERRIDE"]
     warnings = [c for c in checks if c["verdict"] == "WARN"]
