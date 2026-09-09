@@ -33,6 +33,43 @@ LEVEL_NOTE = {
     "L4": "Never auto-fixed",
 }
 
+SIZING_SECTION = """<section>
+    <div class="sec-head"><h2>Target decision</h2><span class="count">__SZ_OVERRIDES__ override &middot; __SZ_WARNINGS__ warnings</span></div>
+    <p class="explain">This is the <strong>one place a model is allowed a judgement call</strong>.
+    A proposer reads the raw facts and suggests an edition, an instance class and a storage
+    allocation. A deterministic rules engine then checks that proposal and
+    <strong>overrules it where they disagree</strong> &mdash; and the disagreement is recorded
+    rather than quietly reconciled, because that record is the evidence the AI is bounded.</p>
+
+    <div class="target">
+      <div class="target-head">
+        <span class="tlabel">Recommended target</span>
+        <div class="edition">__SZ_EDITION__ <span class="lm">__SZ_LICMODEL__</span></div>
+        <p class="treason">__SZ_REASON__</p>
+      </div>
+      <div class="spec">__SZ_SPEC__</div>
+    </div>
+
+    <div class="dist-grid" style="margin-top:26px">
+      <div>
+        <h3 class="subhead" style="margin-top:0">What forced this edition</h3>
+        <div class="flist">__SZ_FORCED__</div>
+      </div>
+      <div>
+        <h3 class="subhead" style="margin-top:0">Detected, but not forcing</h3>
+        <p class="explain" style="margin-bottom:14px">A feature showing as used is not the same as
+        a feature you owe a licence for. Reading the usage view naively hands a client a bill for
+        an option they do not owe.</p>
+        <div class="flist">__SZ_DISMISSED__</div>
+      </div>
+    </div>
+
+    <h3 class="subhead">Proposal versus decision</h3>
+    <p class="explain">Seven checks. <strong>Where the rules and the proposal disagree, the rules
+    win.</strong> Severity of the disagreement is not the point &mdash; the audit trail is.</p>
+    <div class="checks">__SZ_CHECKS__</div>
+  </section>"""
+
 PIPELINE_SECTION = """<section>
     <div class="sec-head"><h2>How the data moves</h2><span class="count">source &rarr; findings, one run</span></div>
     <p class="explain">Every number on this page is traceable back through this chain to a specific
@@ -294,6 +331,53 @@ td.det { color:var(--ink-2); min-width:280px; }
   border:1px solid var(--rule); padding:2px 7px; border-radius:2px; color:var(--ink-2); }
 .objs .more { border-style:dashed; color:var(--ink-3); }
 
+/* target decision */
+.target { display:grid; grid-template-columns:minmax(260px,1fr) 1.4fr; gap:1px;
+  background:var(--rule); border:1px solid var(--rule); border-radius:3px; overflow:hidden; }
+@media (max-width:760px){ .target { grid-template-columns:1fr; } }
+.target-head { background:var(--surface); padding:20px 22px; border-left:3px solid var(--accent); }
+.tlabel { font-family:"IBM Plex Mono", monospace; font-size:10.5px; letter-spacing:.11em;
+  text-transform:uppercase; color:var(--ink-3); }
+.edition { font-family:"Archivo", sans-serif; font-size:27px; font-weight:700;
+  letter-spacing:-.025em; margin-top:7px; line-height:1.15; }
+.edition .lm { font-family:"IBM Plex Mono", monospace; font-size:12px; font-weight:500;
+  letter-spacing:.04em; color:var(--accent); vertical-align:middle;
+  border:1px solid var(--accent); border-radius:2px; padding:2px 7px; margin-left:4px; }
+.treason { font-size:13px; color:var(--ink-2); margin-top:11px; }
+.spec { background:var(--surface); display:grid; grid-template-columns:repeat(2,1fr); gap:1px;
+  background:var(--rule); }
+.spec div { background:var(--surface); padding:16px 20px; }
+.spec .k { font-family:"IBM Plex Mono", monospace; font-size:10.5px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--ink-3); }
+.spec .v { font-family:"IBM Plex Mono", monospace; font-size:16px; font-weight:500;
+  margin-top:5px; font-variant-numeric:tabular-nums; }
+.spec .s { font-size:12px; color:var(--ink-2); margin-top:3px; }
+
+.flist { display:flex; flex-direction:column; gap:1px; background:var(--rule);
+  border:1px solid var(--rule); border-radius:3px; overflow:hidden; }
+.fitem { background:var(--surface); padding:13px 16px; }
+.fitem .fn { font-family:"IBM Plex Mono", monospace; font-size:12.5px; font-weight:500; }
+.fitem .fw { font-size:12.5px; color:var(--ink-2); margin-top:4px; }
+.fitem .fe { font-family:"IBM Plex Mono", monospace; font-size:10.5px; color:var(--ink-3);
+  margin-top:5px; }
+.fitem.forced { border-left:3px solid var(--sev-high); }
+.fitem.dismissed { border-left:3px solid var(--ink-3); }
+
+.checks { display:flex; flex-direction:column; gap:1px; background:var(--rule);
+  border:1px solid var(--rule); border-radius:3px; overflow:hidden; }
+.chk { background:var(--surface); padding:13px 16px; display:grid;
+  grid-template-columns:86px 1fr; gap:16px; align-items:start; }
+@media (max-width:620px){ .chk { grid-template-columns:1fr; gap:6px; } }
+.chk .cv { font-family:"IBM Plex Mono", monospace; font-size:10px; letter-spacing:.08em;
+  font-weight:500; padding:3px 8px; border-radius:2px; text-align:center; white-space:nowrap; }
+.cv-PASS { color:var(--ink-3); border:1px solid var(--rule-strong); }
+.cv-OVERRIDE { color:var(--accent); border:1px solid var(--accent); background:var(--accent-soft); }
+.cv-WARN { color:var(--sev-medium); border:1px solid var(--sev-medium); }
+.chk .cn { font-family:"IBM Plex Mono", monospace; font-size:12.5px; font-weight:500; }
+.chk .cd { font-size:12.5px; color:var(--ink-2); margin-top:4px; }
+.chk .cx { font-family:"IBM Plex Mono", monospace; font-size:11px; margin-top:6px; color:var(--ink-3); }
+.chk .cx b { color:var(--accent); font-weight:500; }
+
 /* pipeline */
 .figwrap { overflow-x:auto; border:1px solid var(--rule); border-radius:3px;
   background:var(--surface); padding:20px 18px 12px; }
@@ -371,6 +455,8 @@ footer { margin-top:60px; padding-top:20px; border-top:1px solid var(--rule);
       <div class="blockers">__BLOCKERS__</div>
     </div>
   </section>
+
+  __SIZING_SECTION__
 
   <section>
     <div class="sec-head"><h2>Detection accuracy</h2><span class="count">measured, not estimated</span></div>
@@ -502,6 +588,84 @@ document.querySelectorAll('.chip').forEach(chip => {
 render();
 </script>
 """
+
+
+def _sizing_section(sizing: dict | None) -> str:
+    """Render the Phase 3 decision. Absent sizing.json simply omits the section."""
+    if not sizing:
+        return ""
+    d, p, f = sizing["decision"], sizing["proposal"], sizing["facts"]
+
+    edition_full = "Enterprise Edition" if d["edition"] == "EE" else "Standard Edition 2"
+    licences = (
+        f'{d["processor_licences"]} processor'
+        if d["licence_model"] == "BYOL"
+        else "included in the hourly rate"
+    )
+    spec = [
+        ("Instance class", d["instance_class"], f'{d["vcpu"]} vCPU &middot; {d["memory_gib"]} GiB'),
+        ("Storage", f'{d["storage_gb"]} GB', f'{d["storage_type"]} &middot; from {f["segment_gb"]} GB of segments'),
+        ("Character set", d["character_set"], "the target must be created with this"),
+        ("Oracle licences", licences, "two vCPU count as one processor on AWS"),
+    ]
+    spec_html = "\n".join(
+        f'<div><div class="k">{k}</div><div class="v">{v}</div><div class="s">{s}</div></div>'
+        for k, v, s in spec
+    )
+
+    forced = "\n".join(
+        f'<div class="fitem forced"><div class="fn">{x["feature"]}</div>'
+        f'<div class="fw">{x["why"]}</div>'
+        f'<div class="fe">evidence: {x["evidence"]} &middot; {x["detected_usages"]} detected</div></div>'
+        for x in d["forced_by"]
+    ) or '<div class="fitem"><div class="fw">No edition-forcing feature detected.</div></div>'
+
+    dismissed = "\n".join(
+        f'<div class="fitem dismissed"><div class="fn">{x["feature"]}</div>'
+        f'<div class="fw">{x["why_not_forcing"]}</div>'
+        f'<div class="fe">evidence: {x["evidence"]} &middot; {x["detected_usages"]} detected</div></div>'
+        for x in d["dismissed"]
+    ) or '<div class="fitem"><div class="fw">Nothing was dismissed &mdash; every detected feature genuinely forces the edition.</div></div>'
+
+    checks = []
+    for c in d["checks"]:
+        delta = ""
+        if c["verdict"] == "OVERRIDE" and c.get("proposed") is not None:
+            delta = (
+                f'<div class="cx">proposed <span>{c["proposed"]}</span> '
+                f'&rarr; decided <b>{c["decided"]}</b></div>'
+            )
+        checks.append(
+            f'<div class="chk"><span class="cv cv-{c["verdict"]}">{c["verdict"]}</span>'
+            f'<div><div class="cn">{c["check"]}</div>'
+            f'<div class="cd">{c["detail"]}</div>{delta}</div></div>'
+        )
+
+    reason = (
+        f'Proposed by the <b>{p["source"]}</b> proposer, then validated. '
+        if p["source"] == "heuristic"
+        else f'Proposed by {p.get("model_id")}, then validated. '
+    )
+    reason += (
+        "The rules engine overruled part of the proposal."
+        if not d["agreed_with_proposal"]
+        else "The rules engine confirmed the proposal unchanged."
+    )
+
+    html = SIZING_SECTION
+    for k, v in {
+        "__SZ_OVERRIDES__": str(d["override_count"]),
+        "__SZ_WARNINGS__": str(d["warning_count"]),
+        "__SZ_EDITION__": edition_full,
+        "__SZ_LICMODEL__": d["licence_model"],
+        "__SZ_REASON__": reason,
+        "__SZ_SPEC__": spec_html,
+        "__SZ_FORCED__": forced,
+        "__SZ_DISMISSED__": dismissed,
+        "__SZ_CHECKS__": "\n".join(checks),
+    }.items():
+        html = html.replace(k, v)
+    return html
 
 
 def _pipeline_svg(manifest: dict, assessment: dict) -> str:
@@ -725,7 +889,7 @@ def _limits(assessment: dict) -> str:
     )
 
 
-def build(assessment: dict, manifest: dict, estate: str, datasets: int) -> str:
+def build(assessment: dict, manifest: dict, estate: str, datasets: int, sizing: dict | None = None) -> str:
     s, key = assessment["scores"], assessment["answer_key"]
     findings = assessment["findings"]
     total = s["total_findings"]
@@ -743,6 +907,7 @@ def build(assessment: dict, manifest: dict, estate: str, datasets: int) -> str:
     )
 
     html = TEMPLATE.replace("__PIPELINE_SECTION__", PIPELINE_SECTION)
+    html = html.replace("__SIZING_SECTION__", _sizing_section(sizing))
     subs = {
         "__PIPELINE__": _pipeline_svg(manifest, assessment),
         "__PROBEROWS__": _probe_rows(manifest),
@@ -799,12 +964,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_ASSESS_OUTPUT)
     parser.add_argument("--collector-output", type=Path, default=DEFAULT_COLLECTOR_OUTPUT)
     parser.add_argument("--estate", type=str, default="Oracle 21c XE / DBMIG_APP / 1.03 GB / 90 objects")
+    parser.add_argument("--sizing", type=Path, default=None, help="path to sizing.json")
     args = parser.parse_args(argv)
 
     assessment = json.loads((args.output_dir / "assessment.json").read_text(encoding="utf-8"))
     run_dir = args.collector_output / assessment["collector_run_id"]
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    html = build(assessment, manifest, args.estate, len(manifest["datasets"]))
+
+    # Optional: the report stands on its own if Phase 3 has not run.
+    sizing = None
+    sizing_path = args.sizing or (Path(__file__).resolve().parent.parent / "sizing" / "output" / "sizing.json")
+    if sizing_path.exists():
+        candidate = json.loads(sizing_path.read_text(encoding="utf-8"))
+        if candidate.get("collector_run_id") == assessment["collector_run_id"]:
+            sizing = candidate
+        else:
+            print(
+                f"note: {sizing_path.name} is from run "
+                f"{candidate.get('collector_run_id','?')[:8]}, not "
+                f"{assessment['collector_run_id'][:8]} -- target section omitted. "
+                "Re-run 'python -m sizing.run' against this run to include it."
+            )
+
+    html = build(assessment, manifest, args.estate, len(manifest["datasets"]), sizing)
     out = args.output_dir / "report.html"
     out.write_text(html, encoding="utf-8")
     print(f"written: {out}  ({len(html):,} bytes)")
