@@ -19,18 +19,61 @@ Full permission set: `infra/dba-permissions-policy.json`.
 
 ## Credentials — never stored in this repo
 
-The access portal offers three options. **Use `aws configure sso`, not the
-pasted keys.** Portal keys are `ASIA…` session credentials that expire in hours;
-copying them into a file or `.env` means re-pasting them several times a day and
-leaving live secrets on disk in between.
+The access portal offers three options. **`aws configure sso` is still the
+right answer if you have it** — the SSO profile stores no secrets, only the
+start URL, region, account ID and role name, all of which are already in this
+file. But it needs **AWS CLI v2**, and v2 only ships as an MSI on Windows,
+which needs **admin rights**. This account does not have them.
 
-The SSO profile stores **no secrets** — only the start URL, region, account ID
-and role name, all of which are already in this file.
+### What actually works on this machine
 
-### One-time setup
+`winget install Amazon.AWSCLI` fails silently without admin (exit 1602,
+elevation refused) — do not assume it succeeded just because winget reported no
+error early on. **`pip install --user awscli`** installs **CLI v1** instead, no
+admin required. Trade-off: this v1 build has no `aws sso login` /
+`aws configure sso` — only the low-level `aws sso` API client
+(`get-role-credentials`, `list-accounts`, …), not the login convenience
+wrapper.
+
+So until someone with admin installs CLI v2, the working path is a **static
+session-credential profile**, refreshed by hand from the access portal:
 
 ```powershell
-winget install -e --id Amazon.AWSCLI      # or the MSI from AWS
+python -m pip install --user awscli
+$env:Path += ";$env:APPDATA\Python\Python314\Scripts"    # or python313, matching your install
+```
+
+Portal → **Option 2** → click the **copy icon** (not manual selection — the
+session token is 300–1000+ characters and gets visibly truncated on screen).
+Paste into `%USERPROFILE%\.aws\credentials`:
+
+```ini
+[dbshift-static]
+aws_access_key_id=...
+aws_secret_access_key=...
+aws_session_token=...
+```
+
+**Use a profile name that is not also an SSO profile in `config`.** A profile
+that declares `sso_session` makes botocore attempt SSO token resolution first
+and it will not fall back to static keys under the same name — this cost real
+debugging time. Keep `dbshift` for the SSO profile (below, for whoever has CLI
+v2) and `dbshift-static` for this one.
+
+```powershell
+aws sts get-caller-identity --profile dbshift-static
+```
+
+These tokens are **session-scoped and expire in hours** — that is by design,
+not a workaround to fix. Re-copy from the portal each session; never write them
+into a script, `.env`, or memory file. `.gitignore` already blocks
+`credentials*` and `*secrets*`, `.aws/` and `aws_session*`, but the rule is the
+point, not the safety net.
+
+### One-time setup, once CLI v2 / admin is available
+
+```powershell
+winget install -e --id Amazon.AWSCLI
 aws configure sso
 ```
 
@@ -50,7 +93,7 @@ CLI profile name            : dbshift
 
 That writes `%USERPROFILE%\.aws\config` — a config file, not a credentials file.
 
-### Daily use
+### Daily use, with CLI v2
 
 ```powershell
 aws sso login --profile dbshift
@@ -60,10 +103,6 @@ aws sts get-caller-identity
 
 `aws sso login` opens a browser, and the CLI refreshes short-lived credentials
 itself from then on. Nothing in this repo ever reads a secret key.
-
-**Never** commit `.aws/credentials`, paste portal keys into a file, or add
-`AWS_SECRET_ACCESS_KEY` to a `.env`. `.gitignore` already blocks
-`credentials*` and `*secrets*`, but the rule is the point, not the safety net.
 
 ---
 
@@ -124,6 +163,78 @@ If the intended model is absent, request access in the Bedrock console first.
 Also confirm whether the model is reachable directly or only through an
 inference profile — `bedrock:ListInferenceProfiles` is granted, which suggests
 cross-region inference profiles are expected.
+
+### Tested 2026-09-09 — `ap-south-1` — **invoke is currently BLOCKED**
+
+| Call | Result |
+|---|---|
+| `sts get-caller-identity` | OK — assumed-role `DBA_permissions` |
+| `bedrock:ListFoundationModels` | OK — **75 models** returned |
+| `bedrock-runtime:InvokeModel` (every model tried) | **AccessDeniedException** |
+
+**Catalogue listing works; invoking does not.** The full error is the important
+part, because it names a cause that is neither IAM `bedrock:*` nor console model
+access:
+
+> Model access is denied due to IAM user or service role is not authorized to
+> perform the required AWS Marketplace actions
+> (`aws-marketplace:ViewSubscriptions`, `aws-marketplace:Subscribe`) to enable
+> access to this model. … Your AWS Marketplace subscription for this model
+> cannot be completed at this time.
+
+Bedrock validates a Marketplace subscription for the model at invoke time. This
+account has no active subscription for these models, and the `DBA_permissions`
+role cannot create one because the policy grants no `aws-marketplace:*` actions.
+So Bedrock tries to self-subscribe, fails, and reports it as an access denial.
+
+**Two ways to fix it — either is sufficient:**
+
+1. **An account admin enables model access in the Bedrock console** for the
+   wanted models in `ap-south-1`. This performs the subscription once,
+   centrally, and is the cleaner option — the role then needs no Marketplace
+   permissions at all. This is the step listed under "Do these first" that has
+   not yet been done.
+2. **Add the Marketplace actions to the permission set**, letting the role
+   subscribe on first use:
+
+   ```json
+   {
+     "Sid": "BedrockMarketplaceSubscription",
+     "Effect": "Allow",
+     "Action": [
+       "aws-marketplace:ViewSubscriptions",
+       "aws-marketplace:Subscribe"
+     ],
+     "Resource": "*"
+   }
+   ```
+
+   Requires whoever administers the Identity Center permission set — it cannot
+   be self-granted, since `iam:*` here is scoped to `dbshift-*` and `cdk-*`.
+
+Re-run `python -m bedrock.verify` after either fix. The error message itself
+advises waiting ~2 minutes after the change before retrying.
+
+**A separate, unrelated failure mode worth knowing** (seen while testing, and
+easy to mistake for a permissions problem): calling a current-generation model
+by its bare `anthropic.*` / `amazon.*` id in `ap-south-1` returns
+
+> `ValidationException: Invocation of model ID ... with on-demand throughput
+> isn't supported. Retry your request with the ID or ARN of an inference profile
+> that contains this model.`
+
+That is a **routing** error, not an access error. `ap-south-1` carries no
+on-demand throughput for those models directly; they route through a
+cross-region inference profile (`apac.*` APAC-scoped, `global.*` global). Use
+`aws bedrock list-inference-profiles` and bind the profile id. `bedrock/models.json`
+already records which tier uses which form.
+
+**Unverified claim to be careful with:** a session transcript reported
+successful invokes of Claude Sonnet 4, Sonnet 4.5 and Claude 3 Haiku on this
+account, and reported `claude-sonnet-5` as the only denial. **That could not be
+reproduced here** — every invoke fails with the Marketplace error above, from
+valid credentials on the same role ARN. Treat those model-by-model results as
+unconfirmed until `bedrock.verify` passes.
 
 ## Do these first, before any billable resource
 

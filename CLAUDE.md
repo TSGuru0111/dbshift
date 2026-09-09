@@ -24,7 +24,8 @@ See `docs/02-architecture.md` for why, and do not re-add them.
 | Assessment engine | ✅ `assess/`, 50 rules as data, **7/7 recall**, HTML report |
 | Size & Edition decision | ✅ `sizing/`, EE BYOL verdict, rules overrode the proposal |
 | AWS account | ✅ Granted 2026-09-09, SSO + `DBA_permissions`. See `docs/05-aws-services.md` |
-| Detect & Remediate | ⬜ **Next task** — verify Bedrock model access first |
+| Bedrock access | ⛔ **Blocked** — listing works, every invoke fails on a Marketplace subscription gap. `docs/05-aws-services.md` has the two fixes |
+| Detect & Remediate | ⬜ Blocked on the above — Bedrock invoke must work first |
 | Everything AWS-side | ⬜ Nothing provisioned yet. Set budget alerts before the first resource |
 
 ## Running it
