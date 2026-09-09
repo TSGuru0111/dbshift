@@ -22,3 +22,7 @@ cdk.out/
 *.pem
 credentials*
 *secrets*
+.aws/
+*.credentials
+aws_session*
+*.tfvars
