@@ -1,0 +1,443 @@
+[
+  {
+    "rule_id": "RDS-001",
+    "category": "rds_compatibility",
+    "severity": "HIGH",
+    "remediation_level": "L3",
+    "title": "Object name is a reserved word",
+    "rationale": "A reserved word used as an identifier must be double-quoted everywhere forever. Any tool, ORM or ad-hoc query that omits the quotes fails at runtime rather than at migration time.",
+    "sql": "SELECT owner, object_name, object_type, 'Object name \"' || object_name || '\" is a reserved word' AS detail FROM v_user_objects WHERE UPPER(object_name) IN ('ORDER','GROUP','SELECT','TABLE','INDEX','SESSION','SIZE','COMMENT','LEVEL','DATE','NUMBER','ROW','ROWS','START','CHECK','CLUSTER','ACCESS','AUDIT','MODE','RESOURCE','SHARE','UID','USER','VALUES','VIEW','PUBLIC','RAW','LONG','FILE','TYPE','ONLINE','OFFLINE','MINUS','DEFAULT','EXCLUSIVE','IDENTIFIED','IMMEDIATE','INCREMENT','INITIAL','LOCK','MAXEXTENTS','NOAUDIT','NOCOMPRESS','NOWAIT','OPTION','PCTFREE','PRIOR','SUCCESSFUL','SYNONYM','SYSDATE','THEN','TRIGGER','VALIDATE','WHENEVER')"
+  },
+  {
+    "rule_id": "RDS-002",
+    "category": "rds_compatibility",
+    "severity": "HIGH",
+    "remediation_level": "L3",
+    "title": "Column name is a reserved word",
+    "rationale": "Same failure mode as a reserved-word table name, but harder to spot because it only surfaces when that specific column is referenced unquoted.",
+    "sql": "SELECT owner, table_name || '.' || column_name AS object_name, 'COLUMN' AS object_type, 'Column \"' || column_name || '\" is a reserved word' AS detail FROM v_user_columns WHERE UPPER(column_name) IN ('ORDER','GROUP','SELECT','TABLE','INDEX','SESSION','SIZE','COMMENT','LEVEL','DATE','NUMBER','ROW','ROWS','START','CHECK','ACCESS','AUDIT','MODE','RESOURCE','SHARE','UID','USER','VALUES','VIEW','RAW','LONG','FILE','TYPE','ONLINE','OFFLINE','MINUS','DEFAULT','PRIOR','THEN','VALIDATE')"
+  },
+  {
+    "rule_id": "RDS-003",
+    "category": "rds_compatibility",
+    "severity": "HIGH",
+    "remediation_level": "L3",
+    "title": "Directory object requires S3 integration on RDS",
+    "rationale": "RDS for Oracle gives no operating-system filesystem access. A DIRECTORY pointing at a local path has no equivalent; file exchange must go through S3_INTEGRATION.",
+    "sql": "SELECT owner, directory_name AS object_name, 'DIRECTORY' AS object_type, 'Directory points at ' || directory_path || '; no OS filesystem on RDS' AS detail FROM directories WHERE directory_name NOT LIKE 'ORACLE_%' AND directory_name NOT LIKE 'OPATCH%' AND directory_name NOT LIKE 'DATA_PUMP%' AND directory_name NOT LIKE 'JAVA$%' AND directory_name NOT LIKE 'DBMS_OPTIM%'"
+  },
+  {
+    "rule_id": "RDS-004",
+    "category": "rds_compatibility",
+    "severity": "CRITICAL",
+    "remediation_level": "L3",
+    "title": "External table cannot be migrated as-is",
+    "rationale": "An external table reads a file from the database server's filesystem. RDS has none, so the table will exist but return nothing. The data source must move to S3 or the table must be replaced.",
+    "sql": "SELECT owner, table_name AS object_name, 'EXTERNAL TABLE' AS object_type, 'Reads from directory ' || COALESCE(default_directory_name,'?') || '; unsupported on RDS without S3 integration' AS detail FROM external_tables"
+  },
+  {
+    "rule_id": "RDS-005",
+    "category": "rds_compatibility",
+    "severity": "MEDIUM",
+    "remediation_level": "L3",
+    "title": "Database link requires re-creation and network path",
+    "rationale": "Links are not carried by Data Pump in usable form. The target needs the link recreated and a network route plus credentials to the remote database.",
+    "sql": "SELECT owner, db_link AS object_name, 'DATABASE LINK' AS object_type, 'Link to ' || COALESCE(SUBSTR(host,1,60),'?') || ' must be recreated with a valid network path' AS detail FROM db_links WHERE owner <> 'PUBLIC'"
+  },
+  {
+    "rule_id": "RDS-006",
+    "category": "rds_compatibility",
+    "severity": "LOW",
+    "remediation_level": "L2",
+    "title": "Scheduler job needs review after cutover",
+    "rationale": "Jobs migrate but resume on the target on their existing schedule. An unreviewed job can run against production the moment the instance opens.",
+    "sql": "SELECT owner, job_name AS object_name, 'JOB' AS object_type, 'Job is ' || COALESCE(enabled,'?') || '; confirm schedule and privileges on target' AS detail FROM scheduler_jobs"
+  },
+  {
+    "rule_id": "RDS-007",
+    "category": "rds_compatibility",
+    "severity": "MEDIUM",
+    "remediation_level": "L3",
+    "title": "Advanced Queuing objects present",
+    "rationale": "AQ queues carry internal state and subscribers that Data Pump does not reliably reproduce. Queues normally need recreating and draining before cutover.",
+    "sql": "SELECT owner, name AS object_name, 'QUEUE' AS object_type, 'Queue on table ' || COALESCE(queue_table,'?') || ' needs recreation and drain before cutover' AS detail FROM queues"
+  },
+  {
+    "rule_id": "RDS-008",
+    "category": "rds_compatibility",
+    "severity": "MEDIUM",
+    "remediation_level": "L3",
+    "title": "Oracle Text index requires option group configuration",
+    "rationale": "A CONTEXT index depends on Oracle Text being present in the RDS option group. Without it the index cannot be created and dependent queries fail.",
+    "sql": "SELECT owner, index_name AS object_name, 'INDEX' AS object_type, 'Domain index of type ' || COALESCE(index_type,'?') || ' requires Oracle Text in the option group' AS detail FROM indexes WHERE index_type LIKE 'DOMAIN%'"
+  },
+  {
+    "rule_id": "RDS-009",
+    "category": "rds_compatibility",
+    "severity": "MEDIUM",
+    "remediation_level": "L3",
+    "title": "Registered XML schema must be re-registered on target",
+    "rationale": "XMLType columns bound to a registered schema fail to load if the schema is not registered on the target first, and Data Pump ordering does not guarantee that.",
+    "sql": "SELECT owner, schema_url AS object_name, 'XML SCHEMA' AS object_type, 'XML schema must be registered on the target before dependent tables load' AS detail FROM xml_schemas"
+  },
+  {
+    "rule_id": "RDS-010",
+    "category": "rds_compatibility",
+    "severity": "MEDIUM",
+    "remediation_level": "L3",
+    "title": "User-defined type is not supported by DMS",
+    "rationale": "AWS DMS does not replicate user-defined object types. Tables with object columns need Data Pump or a redesign, which changes the movement strategy for those tables.",
+    "sql": "SELECT owner, type_name AS object_name, 'TYPE' AS object_type, 'Object type (' || COALESCE(typecode,'?') || ') is not replicated by DMS' AS detail FROM types WHERE predefined = 'NO'"
+  },
+  {
+    "rule_id": "RDS-011",
+    "category": "rds_compatibility",
+    "severity": "LOW",
+    "remediation_level": "L2",
+    "title": "Materialized view needs refresh strategy on target",
+    "rationale": "An MV and its log must be rebuilt and re-primed on the target. Migrating the container table alone leaves a view that never refreshes.",
+    "sql": "SELECT owner, mview_name AS object_name, 'MATERIALIZED VIEW' AS object_type, 'Refresh mode ' || COALESCE(refresh_mode,'?') || '/' || COALESCE(refresh_method,'?') || ' must be rebuilt on target' AS detail FROM materialized_views"
+  },
+  {
+    "rule_id": "RDS-012",
+    "category": "rds_compatibility",
+    "severity": "MEDIUM",
+    "remediation_level": "L2",
+    "title": "LOB column affects DMS load configuration",
+    "rationale": "DMS truncates LOBs silently in limited-LOB mode and runs far slower in full-LOB mode. The choice must be deliberate and sized, not defaulted.",
+    "sql": "SELECT owner, table_name || '.' || column_name AS object_name, 'LOB' AS object_type, 'LOB column; DMS LOB mode and max size must be set explicitly' AS detail FROM lobs"
+  },
+  {
+    "rule_id": "RDS-013",
+    "category": "rds_compatibility",
+    "severity": "HIGH",
+    "remediation_level": "L4",
+    "title": "Partitioned table requires Enterprise Edition",
+    "rationale": "Partitioning is not available on RDS SE2 at any price. A partitioned source either forces EE BYOL or the partitions must be collapsed, which changes performance characteristics.",
+    "sql": "SELECT owner, table_name AS object_name, 'TABLE' AS object_type, partitioning_type || ' partitioned with ' || CAST(partition_count AS TEXT) || ' partitions; requires EE on RDS' AS detail FROM partitioned_tables"
+  },
+  {
+    "rule_id": "RDS-014",
+    "category": "rds_compatibility",
+    "severity": "LOW",
+    "remediation_level": "L2",
+    "title": "Synonym may resolve to an object that does not migrate",
+    "rationale": "A synonym pointing across a database link or at a schema outside the migration scope becomes a broken reference on the target.",
+    "sql": "SELECT owner, synonym_name AS object_name, 'SYNONYM' AS object_type, 'Synonym resolves to ' || COALESCE(table_owner,'?') || '.' || COALESCE(table_name,'?') || COALESCE('@' || db_link,'') AS detail FROM synonyms WHERE db_link IS NOT NULL OR table_owner NOT IN (SELECT DISTINCT owner FROM v_user_tables)"
+  },
+  {
+    "rule_id": "RDS-015",
+    "category": "rds_compatibility",
+    "severity": "INFO",
+    "remediation_level": "L2",
+    "title": "Source character set must match the target",
+    "rationale": "Creating the RDS instance with a different character set silently corrupts non-ASCII data on load. The target must be created with this value; it cannot be changed afterwards.",
+    "sql": "SELECT NULL AS owner, parameter AS object_name, 'NLS' AS object_type, 'Source is ' || value || '; RDS instance must be created with this character set' AS detail FROM nls_parameters WHERE parameter = 'NLS_CHARACTERSET'"
+  },
+  {
+    "rule_id": "DQ-001",
+    "category": "data_quality",
+    "severity": "CRITICAL",
+    "remediation_level": "L2",
+    "title": "Table has no primary key",
+    "rationale": "DMS change data capture cannot reliably apply updates or deletes to a table with no primary key or unique index. Rows can be duplicated or missed during CDC with no error raised.",
+    "sql": "SELECT t.owner, t.table_name AS object_name, 'TABLE' AS object_type, 'No primary key; DMS CDC cannot reliably replicate updates or deletes' AS detail FROM v_user_tables t WHERE NOT EXISTS (SELECT 1 FROM constraints c WHERE c.owner = t.owner AND c.table_name = t.table_name AND c.constraint_type = 'P')"
+  },
+  {
+    "rule_id": "DQ-002",
+    "category": "data_quality",
+    "severity": "MEDIUM",
+    "remediation_level": "L3",
+    "title": "Near-unique column contains duplicate values",
+    "rationale": "A column the optimizer treats as almost unique but which carries duplicates is a natural key with no enforcement. Adding a unique constraint on the target will fail until the duplicates are resolved.",
+    "sql": "SELECT owner, table_name || '.' || column_name AS object_name, 'COLUMN' AS object_type, CAST(duplicate_count AS TEXT) || ' duplicate values in a column with no unique constraint' AS detail FROM column_profile WHERE duplicate_count > 0"
+  },
+  {
+    "rule_id": "DQ-003",
+    "category": "data_quality",
+    "severity": "LOW",
+    "remediation_level": "L3",
+    "title": "Text column contains non-ASCII characters",
+    "rationale": "Characters outside ASCII are usually legitimate, but a cp1252 artifact such as CHR(146) becomes a replacement character or a load failure when the target character set differs.",
+    "sql": "SELECT owner, table_name || '.' || column_name AS object_name, 'COLUMN' AS object_type, CAST(non_ascii_count AS TEXT) || ' rows contain characters outside ASCII; verify against target character set' AS detail FROM column_profile WHERE non_ascii_count > 0"
+  },
+  {
+    "rule_id": "DQ-004",
+    "category": "data_quality",
+    "severity": "HIGH",
+    "remediation_level": "L3",
+    "title": "Constraint is enabled but not validated",
+    "rationale": "ENABLE NOVALIDATE means existing rows were never checked. Data that violates the constraint is already present and will fail a validated rebuild on the target.",
+    "sql": "SELECT owner, table_name || '.' || constraint_name AS object_name, 'CONSTRAINT' AS object_type, 'Constraint type ' || constraint_type || ' is ENABLE NOVALIDATE; pre-existing rows may violate it' AS detail FROM constraints WHERE validated = 'NOT VALIDATED' AND status = 'ENABLED'"
+  },
+  {
+    "rule_id": "DQ-005",
+    "category": "data_quality",
+    "severity": "MEDIUM",
+    "remediation_level": "L2",
+    "title": "Constraint is disabled",
+    "rationale": "A disabled constraint enforces nothing, so the data behind it is unverified. Re-enabling it on the target may fail.",
+    "sql": "SELECT owner, table_name || '.' || constraint_name AS object_name, 'CONSTRAINT' AS object_type, 'Constraint is DISABLED and enforcing nothing' AS detail FROM constraints WHERE status = 'DISABLED'"
+  },
+  {
+    "rule_id": "DQ-006",
+    "category": "data_quality",
+    "severity": "MEDIUM",
+    "remediation_level": "L2",
+    "title": "NUMBER column has no precision or scale",
+    "rationale": "An unconstrained NUMBER accepts up to 38 digits with arbitrary scale. Mapping it to a fixed-width type on any target risks silent truncation or overflow.",
+    "sql": "SELECT owner, table_name || '.' || column_name AS object_name, 'COLUMN' AS object_type, 'NUMBER with no precision or scale; mapping risk to a fixed-width target type' AS detail FROM v_user_columns WHERE data_type = 'NUMBER' AND data_precision IS NULL AND data_scale IS NULL"
+  },
+  {
+    "rule_id": "DQ-007",
+    "category": "data_quality",
+    "severity": "MEDIUM",
+    "remediation_level": "L1",
+    "title": "Optimizer statistics are stale or missing",
+    "rationale": "Sizing and cardinality decisions read these statistics. Stale numbers produce a wrong target size and hide data-quality problems that only cardinality would reveal.",
+    "sql": "SELECT t.owner, t.table_name AS object_name, 'TABLE' AS object_type, CASE WHEN t.last_analyzed IS NULL THEN 'Never analyzed' ELSE 'Last analyzed ' || t.last_analyzed END || '; sizing and cardinality decisions read these statistics' AS detail FROM v_user_tables t WHERE t.last_analyzed IS NULL OR EXISTS (SELECT 1 FROM table_profile p WHERE p.owner = t.owner AND p.table_name = t.table_name AND p.actual_rows IS NOT NULL AND t.num_rows IS NOT NULL AND ABS(p.actual_rows - t.num_rows) > 0)"
+  },
+  {
+    "rule_id": "DQ-008",
+    "category": "data_quality",
+    "severity": "LOW",
+    "remediation_level": "L2",
+    "title": "Column contains only NULLs",
+    "rationale": "An entirely NULL column is either dead weight to drop before migration or evidence that a load never populated it. Either way it should be a decision, not an accident.",
+    "sql": "SELECT c.owner, c.table_name || '.' || c.column_name AS object_name, 'COLUMN' AS object_type, 'Every row is NULL across ' || CAST(c.num_nulls AS TEXT) || ' rows' AS detail FROM v_user_columns c WHERE c.num_nulls > 0 AND c.num_distinct = 0"
+  },
+  {
+    "rule_id": "DQ-009",
+    "category": "data_quality",
+    "severity": "LOW",
+    "remediation_level": "L2",
+    "title": "Character column uses byte length semantics",
+    "rationale": "BYTE semantics on a multibyte character set truncates at fewer characters than the declared length suggests. Moving to AL32UTF8 can overflow columns that fit today.",
+    "sql": "SELECT owner, table_name || '.' || column_name AS object_name, 'COLUMN' AS object_type, 'VARCHAR2 declared with BYTE semantics; may overflow on a multibyte target character set' AS detail FROM v_user_columns WHERE char_used = 'B' AND data_type IN ('VARCHAR2','CHAR')"
+  },
+  {
+    "rule_id": "DQ-010",
+    "category": "data_quality",
+    "severity": "INFO",
+    "remediation_level": "L2",
+    "title": "Table could not be profiled for data quality",
+    "rationale": "A table that was not profiled has no data-quality evidence behind it. The absence of findings is not the same as the absence of problems, and the report must not imply otherwise.",
+    "sql": "SELECT owner, table_name AS object_name, 'TABLE' AS object_type, 'Not profiled: ' || skip_reason AS detail FROM table_profile WHERE profiled = 'N' AND skip_reason NOT IN ('oracle_internal_object')"
+  },
+  {
+    "rule_id": "PERF-001",
+    "category": "performance",
+    "severity": "MEDIUM",
+    "remediation_level": "L1",
+    "title": "Foreign key has no supporting index",
+    "rationale": "An unindexed foreign key forces a full scan of the child table on parent delete or update, and in Oracle takes a share lock on the child table while it does so. It is the classic cause of migration-day lock contention.",
+    "sql": "SELECT c.owner, c.table_name || '.' || cc.column_name AS object_name, 'FOREIGN KEY' AS object_type, 'FK column has no index with it in the leading position; delete and update on the parent will scan and lock' AS detail FROM constraints c JOIN constraint_columns cc ON cc.owner = c.owner AND cc.constraint_name = c.constraint_name WHERE c.constraint_type = 'R' AND cc.position = 1 AND NOT EXISTS (SELECT 1 FROM index_columns ic WHERE ic.table_owner = c.owner AND ic.table_name = c.table_name AND ic.column_name = cc.column_name AND ic.column_position = 1)"
+  },
+  {
+    "rule_id": "PERF-002",
+    "category": "performance",
+    "severity": "LOW",
+    "remediation_level": "L2",
+    "title": "Table has no indexes at all",
+    "rationale": "Every access is a full scan. Tolerable while the table is small, but it is also a signal that access patterns were never considered.",
+    "sql": "SELECT t.owner, t.table_name AS object_name, 'TABLE' AS object_type, 'No indexes; every access is a full table scan' AS detail FROM v_user_tables t WHERE NOT EXISTS (SELECT 1 FROM indexes i WHERE i.table_owner = t.owner AND i.table_name = t.table_name)"
+  },
+  {
+    "rule_id": "PERF-003",
+    "category": "performance",
+    "severity": "LOW",
+    "remediation_level": "L2",
+    "title": "Table carries an unusually high number of indexes",
+    "rationale": "Every index is re-applied after the data load and maintained on every DML. A large index count materially extends the migration window and slows writes afterwards.",
+    "sql": "SELECT i.table_owner AS owner, i.table_name AS object_name, 'TABLE' AS object_type, CAST(COUNT(*) AS TEXT) || ' indexes on one table; each is rebuilt after load and maintained on every write' AS detail FROM indexes i WHERE i.table_name IN (SELECT table_name FROM v_user_tables) GROUP BY i.table_owner, i.table_name HAVING COUNT(*) >= 6"
+  },
+  {
+    "rule_id": "PERF-004",
+    "category": "performance",
+    "severity": "MEDIUM",
+    "remediation_level": "L1",
+    "title": "Index is unusable or invisible",
+    "rationale": "An unusable index is not maintained and not used; an invisible one is maintained but ignored by the optimizer. Both migrate as dead weight unless the state is deliberate.",
+    "sql": "SELECT owner, index_name AS object_name, 'INDEX' AS object_type, 'Index status ' || COALESCE(status,'?') || ', visibility ' || COALESCE(visibility,'?') AS detail FROM indexes WHERE status = 'UNUSABLE' OR visibility = 'INVISIBLE'"
+  },
+  {
+    "rule_id": "PERF-005",
+    "category": "performance",
+    "severity": "MEDIUM",
+    "remediation_level": "L2",
+    "title": "Table shows significant row chaining",
+    "rationale": "Chained rows span blocks, so each read costs extra I/O. A migration is the natural point to fix it, because the rebuild happens anyway.",
+    "sql": "SELECT owner, table_name AS object_name, 'TABLE' AS object_type, CAST(chain_cnt AS TEXT) || ' chained rows; each spans blocks and costs extra I/O per read' AS detail FROM v_user_tables WHERE chain_cnt > 0"
+  },
+  {
+    "rule_id": "PERF-006",
+    "category": "performance",
+    "severity": "LOW",
+    "remediation_level": "L2",
+    "title": "Large table is not partitioned",
+    "rationale": "A large unpartitioned table loads as a single DMS task with no parallelism and cannot be archived by partition afterwards. Worth a deliberate decision before the move.",
+    "sql": "SELECT s.owner, s.segment_name AS object_name, 'TABLE' AS object_type, 'Segment is ' || CAST(ROUND(SUM(s.bytes)/1048576.0) AS TEXT) || ' MB and not partitioned; loads as a single serial task' AS detail FROM segments s WHERE s.segment_type = 'TABLE' AND s.segment_name IN (SELECT table_name FROM v_user_tables) AND s.segment_name NOT IN (SELECT table_name FROM partitioned_tables) GROUP BY s.owner, s.segment_name HAVING SUM(s.bytes) > 268435456"
+  },
+  {
+    "rule_id": "PERF-007",
+    "category": "performance",
+    "severity": "LOW",
+    "remediation_level": "L2",
+    "title": "Index has a poor clustering factor",
+    "rationale": "A clustering factor approaching the row count means range scans read almost one block per row, so the optimizer will usually prefer a full scan and the index earns little.",
+    "sql": "SELECT i.owner, i.index_name AS object_name, 'INDEX' AS object_type, 'Clustering factor ' || CAST(i.clustering_factor AS TEXT) || ' against ' || CAST(i.num_rows AS TEXT) || ' rows; range scans approach one block per row' AS detail FROM indexes i WHERE i.num_rows > 10000 AND i.clustering_factor > (i.num_rows * 0.9)"
+  },
+  {
+    "rule_id": "PERF-008",
+    "category": "performance",
+    "severity": "LOW",
+    "remediation_level": "L2",
+    "title": "Redundant index on the same leading column",
+    "rationale": "Two indexes sharing a leading column often means one is never chosen. Both are still rebuilt after the load and maintained on every write.",
+    "sql": "SELECT a.index_owner AS owner, a.table_name || ' (' || a.column_name || ')' AS object_name, 'INDEX' AS object_type, 'Indexes ' || a.index_name || ' and ' || b.index_name || ' share leading column ' || a.column_name AS detail FROM index_columns a JOIN index_columns b ON a.table_name = b.table_name AND a.column_name = b.column_name AND a.column_position = 1 AND b.column_position = 1 AND a.index_name < b.index_name WHERE a.table_name IN (SELECT table_name FROM v_user_tables)"
+  },
+  {
+    "rule_id": "SEC-001",
+    "category": "security",
+    "severity": "HIGH",
+    "remediation_level": "L3",
+    "title": "Invalid object will not compile",
+    "rationale": "An object that does not compile on the source will not compile on the target either. Migrating it moves a known-broken object into production and masks the failure among expected post-load invalidations.",
+    "sql": "SELECT owner, object_name, object_type, 'Object status is ' || status || '; resolve before migration' AS detail FROM invalid_objects"
+  },
+  {
+    "rule_id": "SEC-002",
+    "category": "security",
+    "severity": "HIGH",
+    "remediation_level": "L3",
+    "title": "Privilege granted to PUBLIC",
+    "rationale": "A grant to PUBLIC is a grant to every current and future database user. It migrates silently and widens access on the target by default.",
+    "sql": "SELECT grantee AS owner, owner || '.' || table_name AS object_name, 'GRANT' AS object_type, privilege || ' granted to PUBLIC' AS detail FROM table_privileges WHERE grantee = 'PUBLIC'"
+  },
+  {
+    "rule_id": "SEC-003",
+    "category": "security",
+    "severity": "HIGH",
+    "remediation_level": "L3",
+    "title": "Powerful ANY system privilege granted",
+    "rationale": "ANY privileges cross schema boundaries entirely. They are rarely needed by an application account and should not be carried to the target unexamined.",
+    "sql": "SELECT grantee AS owner, privilege AS object_name, 'SYSTEM PRIVILEGE' AS object_type, 'Account holds ' || privilege || ', which crosses schema boundaries' AS detail FROM system_privileges WHERE privilege LIKE '%ANY%'"
+  },
+  {
+    "rule_id": "SEC-004",
+    "category": "security",
+    "severity": "MEDIUM",
+    "remediation_level": "L3",
+    "title": "Application account holds DBA or elevated role",
+    "rationale": "An application schema with DBA can do anything on the target, including bypass the controls this migration is meant to preserve.",
+    "sql": "SELECT grantee AS owner, granted_role AS object_name, 'ROLE' AS object_type, 'Account holds role ' || granted_role AS detail FROM role_privileges WHERE granted_role IN ('DBA','IMP_FULL_DATABASE','EXP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE','SELECT_ANY_DICTIONARY')"
+  },
+  {
+    "rule_id": "SEC-005",
+    "category": "security",
+    "severity": "MEDIUM",
+    "remediation_level": "L3",
+    "title": "Account has unlimited tablespace",
+    "rationale": "UNLIMITED TABLESPACE removes any storage ceiling on the account. On RDS, where storage is billed and autoscaled, that becomes a cost exposure as well as an operational one.",
+    "sql": "SELECT grantee AS owner, privilege AS object_name, 'SYSTEM PRIVILEGE' AS object_type, 'Account can consume storage without limit' AS detail FROM system_privileges WHERE privilege = 'UNLIMITED TABLESPACE'"
+  },
+  {
+    "rule_id": "SEC-006",
+    "category": "security",
+    "severity": "MEDIUM",
+    "remediation_level": "L3",
+    "title": "Password never expires",
+    "rationale": "A profile with unlimited password life means credentials migrated to the target stay valid indefinitely, including any that were shared during the migration itself.",
+    "sql": "SELECT NULL AS owner, profile AS object_name, 'PROFILE' AS object_type, 'PASSWORD_LIFE_TIME is ' || \"limit\" || '; credentials never expire' AS detail FROM profiles WHERE resource_name = 'PASSWORD_LIFE_TIME' AND \"limit\" = 'UNLIMITED'"
+  },
+  {
+    "rule_id": "SEC-007",
+    "category": "security",
+    "severity": "MEDIUM",
+    "remediation_level": "L3",
+    "title": "Column name suggests sensitive data without encryption",
+    "rationale": "Columns holding national identifiers or similar are candidates for TDE or application-level encryption. TDE on RDS requires Enterprise Edition, so this also bears on the edition decision.",
+    "sql": "SELECT owner, table_name || '.' || column_name AS object_name, 'COLUMN' AS object_type, 'Column name suggests sensitive data; no encryption detected on source' AS detail FROM v_user_columns WHERE (UPPER(column_name) LIKE '%NATIONAL_ID%' OR UPPER(column_name) LIKE '%SSN%' OR UPPER(column_name) LIKE '%PASSPORT%' OR UPPER(column_name) LIKE '%TAX_ID%' OR UPPER(column_name) LIKE '%CARD_NUMBER%' OR UPPER(column_name) LIKE '%PASSWORD%')"
+  },
+  {
+    "rule_id": "SEC-008",
+    "category": "security",
+    "severity": "LOW",
+    "remediation_level": "L2",
+    "title": "Account is locked or expired",
+    "rationale": "A locked or expired account still migrates, complete with its grants. It is either dead weight to remove or an access path someone forgot about.",
+    "sql": "SELECT NULL AS owner, username AS object_name, 'USER' AS object_type, 'Account status is ' || account_status AS detail FROM users WHERE oracle_maintained = 'N' AND account_status <> 'OPEN'"
+  },
+  {
+    "rule_id": "OPS-001",
+    "category": "operational_risk",
+    "severity": "CRITICAL",
+    "remediation_level": "L3",
+    "title": "Database is not in ARCHIVELOG mode",
+    "rationale": "DMS change data capture reads redo. Without ARCHIVELOG there is no CDC, which means no near-zero-downtime cutover -- only a full outage load.",
+    "sql": "SELECT NULL AS owner, name AS object_name, 'DATABASE' AS object_type, 'Log mode is ' || log_mode || '; DMS CDC requires ARCHIVELOG' AS detail FROM database WHERE log_mode <> 'ARCHIVELOG'"
+  },
+  {
+    "rule_id": "OPS-002",
+    "category": "operational_risk",
+    "severity": "CRITICAL",
+    "remediation_level": "L3",
+    "title": "Supplemental logging is not enabled",
+    "rationale": "Without minimum supplemental logging, redo records omit the column data DMS needs to build an UPDATE on the target. CDC starts and then silently applies incomplete changes.",
+    "sql": "SELECT NULL AS owner, name AS object_name, 'DATABASE' AS object_type, 'Minimum supplemental logging is ' || COALESCE(supplemental_log_data_min,'?') || '; DMS CDC needs it enabled' AS detail FROM database WHERE supplemental_log_data_min IS NULL OR supplemental_log_data_min NOT IN ('YES','IMPLICIT')"
+  },
+  {
+    "rule_id": "OPS-003",
+    "category": "operational_risk",
+    "severity": "HIGH",
+    "remediation_level": "L4",
+    "title": "Edition-forcing feature is in use",
+    "rationale": "This feature is unavailable on RDS SE2 at any price. Its detected use is what forces Enterprise Edition BYOL, and it is the single largest driver of the licensing case.",
+    "sql": "SELECT NULL AS owner, name AS object_name, 'FEATURE' AS object_type, 'Detected ' || CAST(detected_usages AS TEXT) || ' usages, currently_used=' || COALESCE(currently_used,'?') || '; not available on RDS SE2' AS detail FROM feature_usage WHERE edition_forcing = 'Y' AND detected_usages > 0"
+  },
+  {
+    "rule_id": "OPS-004",
+    "category": "operational_risk",
+    "severity": "MEDIUM",
+    "remediation_level": "L3",
+    "title": "PL/SQL object has stored compilation errors",
+    "rationale": "Stored errors mean the object is broken now, not merely stale. It needs fixing before migration or it becomes a post-cutover incident.",
+    "sql": "SELECT owner, name || ' (' || type || ')' AS object_name, 'PLSQL' AS object_type, 'Line ' || CAST(line AS TEXT) || ': ' || SUBSTR(text, 1, 120) AS detail FROM plsql_errors"
+  },
+  {
+    "rule_id": "OPS-005",
+    "category": "operational_risk",
+    "severity": "MEDIUM",
+    "remediation_level": "L3",
+    "title": "Scheduler job has a failure history",
+    "rationale": "A job already failing on the source will keep failing on the target, and the migration will be blamed for it.",
+    "sql": "SELECT owner, job_name AS object_name, 'JOB' AS object_type, CAST(failure_count AS TEXT) || ' failures against ' || CAST(run_count AS TEXT) || ' runs' AS detail FROM scheduler_jobs WHERE failure_count > 0"
+  },
+  {
+    "rule_id": "OPS-006",
+    "category": "operational_risk",
+    "severity": "INFO",
+    "remediation_level": "L2",
+    "title": "Utilization data is unavailable for sizing",
+    "rationale": "Instance sizing should rest on observed utilization percentiles. This source exposes no usable metric history, so any sizing recommendation rests on capacity and feature use alone -- and the report must say so rather than imply measured headroom.",
+    "sql": "SELECT NULL AS owner, 'V$SYSMETRIC' AS object_name, 'METRIC' AS object_type, 'No rows in v$sysmetric; utilization percentiles are not available from this source' AS detail FROM (SELECT COUNT(*) AS n FROM system_metrics) WHERE n = 0"
+  },
+  {
+    "rule_id": "OPS-007",
+    "category": "operational_risk",
+    "severity": "LOW",
+    "remediation_level": "L2",
+    "title": "Object depends on a database link",
+    "rationale": "A view or synonym reaching through a link fails on the target until the link is recreated and the network path opened. These break after cutover, not during it.",
+    "sql": "SELECT owner, synonym_name AS object_name, 'SYNONYM' AS object_type, 'Resolves through database link ' || db_link AS detail FROM synonyms WHERE db_link IS NOT NULL"
+  },
+  {
+    "rule_id": "OPS-008",
+    "category": "operational_risk",
+    "severity": "INFO",
+    "remediation_level": "L2",
+    "title": "Estate size drives the migration window",
+    "rationale": "Total segment size sets the floor on load time and the target storage allocation. It is the number every migration plan is built on.",
+    "sql": "SELECT owner, 'TOTAL_SEGMENT_SIZE' AS object_name, 'ESTATE' AS object_type, CAST(ROUND(SUM(bytes)/1073741824.0, 3) AS TEXT) || ' GB across ' || CAST(COUNT(*) AS TEXT) || ' segments' AS detail FROM segments GROUP BY owner HAVING SUM(bytes) > 0"
+  }
+]

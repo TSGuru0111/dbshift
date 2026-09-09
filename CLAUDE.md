@@ -20,20 +20,32 @@ See `docs/02-architecture.md` for why, and do not re-add them.
 | Source Oracle estate | ✅ Built, 1.03 GB, 90 objects, 51 constraints, verified |
 | Seeded defects | ✅ 8 defects in place, documented |
 | Golden snapshot | ✅ `data/dbmig_golden.dmp` |
-| Discovery collector | ✅ `collector/`, 45 datasets, local JSON, 5/5 verify checks |
-| Assessment engine | ⬜ **Next task** |
+| Discovery collector | ✅ `collector/`, 47 datasets, local JSON, 5/5 verify checks |
+| Assessment engine | ✅ `assess/`, 49 rules as data, **7/7 recall**, HTML report |
+| Size & Edition decision | ⬜ **Next task** |
 | Everything AWS-side | ⬜ Not started — no AWS account yet |
 
-## Running the collector
+## Running it
 
 ```
 $env:DBSHIFT_COLLECTOR_PASSWORD='...'      # read-only dbmig_collector
-.\.venv\Scripts\python.exe -m collector.run
-.\.venv\Scripts\python.exe -m collector.verify
+.\.venv\Scripts\python.exe -m collector.run       # discover  -> collector/output/<run_id>/
+.\.venv\Scripts\python.exe -m collector.verify    # reconcile against ground truth
+.\.venv\Scripts\python.exe -m assess.run          # assess    -> assess/output/assessment.json
+.\.venv\Scripts\python.exe -m assess.report       # render    -> assess/output/report.html
 ```
 
-Output lands in `collector/output/<collector_run_id>/` (gitignored). There is no
-AWS push step yet — the envelope is shaped for one.
+Both output directories are gitignored. **No AWS is required for Discover or
+Assess** — SQLite stands in for Aurora and the rules are plain SQL, so they port
+to the metadata repository later with a dialect change. Bedrock does not enter
+until Phase 4 remediation.
+
+## Two things that bite
+
+- **`SELECT_CATALOG_ROLE` is not data access.** Row-level profiling needs the
+  explicit grants in `scripts/oracle-source/05_grant_collector_read.sql`.
+- **Seeded defect 7 is not in the database** — the seed script is broken. See
+  `docs/04-defects.md`. Max recall is 7/8 until it is re-seeded.
 
 ## Where things are
 

@@ -179,6 +179,125 @@ Also confirmed: exactly one INVALID object (`SP_BROKEN_DEMO`), matching the
 
 ---
 
-## Phase 2 — Assessment engine (not started)
+## Phase 2 — Assessment engine (complete) — 2026-09-08
+
+**Outcome:** `assess/` loads a collector run into SQLite, evaluates **49 rules
+stored as data**, and produces 68 findings, five category scores and a measured
+recall figure. **7 of 7 detectable seeded defects found — 100% recall, 7/7
+severity exact, 0 missed.** Renders a standalone HTML report. Still no AWS.
+
+### What was built
+
+- `loader.py` — collector JSON into SQLite, the local stand-in for Aurora, plus
+  three analysis views (`v_user_tables`, `v_user_objects`, `v_user_columns`)
+  that centralise the "what counts as a user object" definition instead of
+  repeating it across 49 predicates
+- `rules.json` — the catalogue: `rule_id`, category, severity,
+  `remediation_level`, rationale, SQL predicate. Installed into a `rules` table
+  at run time. **Adding rule 50 is inserting a row**
+- `engine.py` — validates the catalogue, runs each predicate, turns every
+  returned row into a finding carrying *the rule's own* severity and level
+- `scoring.py` — five category scores, overall with the critical cap, and the
+  answer-key comparison
+- `report.py` — renders `assessment.json` as HTML on every run, so the page
+  cannot drift from the numbers it claims
+
+### Why SQLite
+
+Rules had to be SQL to satisfy "stored as data with a SQL predicate". SQLite
+gives that locally with no service, and the predicates port to the Aurora
+metadata repository later with little more than a dialect change. It is the
+piece that makes Discover→Assess demonstrable with no AWS account.
+
+### The read-only account could not read data
+
+`SELECT_CATALOG_ROLE` grants **dictionary** access, not **data** access. The
+collector could read metadata about `dbmig_app.customer` and not select from it
+(ORA-00942) — correct security posture, and fatal to data profiling.
+
+Added `scripts/oracle-source/05_grant_collector_read.sql`: explicit per-table
+`SELECT`, **deliberately not `GRANT SELECT ANY TABLE`**, which a client DBA is
+right to refuse. Applied as `dbmig_app`, 12 tables granted, revoke block
+documented in the script. The probe now detects ORA-00942 once and marks the
+whole owner `no_select_privilege` rather than failing per table.
+
+### Defect 7 was never seeded — the answer key was wrong
+
+The engine reported it missing; direct inspection showed it is **not in the
+database**. `04_seed_defects.sql` appends `CHR(146)`, but in AL32UTF8 byte
+`0x92` is a bare continuation byte, so `CHR(146)` yields NULL and the
+concatenation is a no-op. The UPDATE reported success having changed nothing —
+the same silent-failure class as the Phase 0 substitution-variable incident.
+
+Full detail and the `UNISTR('\2019')` fix are in `04-defects.md`. The engine
+now reports it as `N/A — not present in source` and **excludes it from the
+recall denominator** rather than scoring it as a miss. Counting it as a miss
+would understate the engine and hide a broken seed script.
+
+### False positives found and eliminated
+
+First clean run flagged `LOAN.PRINCIPAL_AMT` and `MV_LOAN_SUMMARY.TOTAL_PRINCIPAL`
+as near-unique columns carrying duplicates. Both are decimal money columns —
+near-uniqueness there is arithmetic coincidence, not an unenforced key. Two
+tightenings, both principled rather than ad-hoc:
+
+- duplicate candidates must be text or a **whole** number (`data_scale = 0`)
+- materialized-view containers are not profiled; duplicates in an aggregate are
+  arithmetic
+
+Additional findings dropped 68 → 60 and the seeded-defect detection was
+unaffected.
+
+### The scoring model had to be rebuilt
+
+The first model subtracted severity weights from 100. With enough findings any
+category saturates at 0, so `rds_compatibility` and `data_quality` both read
+zero and a bad category was indistinguishable from a catastrophic one.
+
+Replaced with: penalty accrues **per rule, not per finding**, scaled
+logarithmically by hit count — one rule firing on ten objects is one issue with
+a wider blast radius, not ten issues — and the score decays exponentially
+(`100·e^(−penalty/60)`) so it keeps resolution everywhere and never bottoms out.
+Scores moved from `0 / 0 / 89 / 86 / 26` to `18 / 34 / 88 / 74 / 33`.
+
+### Other problems hit
+
+**`OverflowError: Python int too large to convert to SQLite INTEGER`** — a
+sequence `MAXVALUE` defaults to 28 nines, well past 64-bit. *Fix: store
+out-of-range integers as text rather than losing the value.*
+
+**`near "limit": syntax error`** — `limit` is reserved in SQLite and
+`DBA_PROFILES` has a column by that name. *Fix: quote it.*
+
+**Rules failed to parse against empty datasets.** A dataset with no rows
+produced a table with no columns, so every rule referencing it errored. *Fix:
+declared fallback schemas for datasets that can legitimately come back empty.*
+
+### Findings the estate did not expect
+
+**The source is `NOARCHIVELOG` with supplemental logging off.** Both are
+CRITICAL, and together they mean **DMS CDC cannot run at all** on this estate —
+only a full-outage load. The reference architecture assumes ARCHIVELOG plus
+supplemental logging as seeded; it is not. Decide before building Phase 6.
+
+`Partitioning (user)` remains the only edition-forcing feature detected, so the
+SE2-vs-EE verdict still rests on partitioning alone.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| Rules evaluated | 49 |
+| Findings | 68 |
+| Overall score | 39 → **49** after scoring rebuild (capped by 5 criticals) |
+| Recall | **7 of 7 detectable (100%)** |
+| Severity exact | 7 of 7 |
+| Additional findings | 60, triage pending — **not** claimed as false positives |
+
+Report published as an artifact; regenerate with `python -m assess.report`.
+
+---
+
+## Phase 3 — Size & Edition Decision (not started)
 
 <!-- Append entries here as work proceeds -->

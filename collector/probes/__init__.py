@@ -1,5 +1,6 @@
 from . import (
     constraints,
+    dataprofile,
     features,
     identity,
     indexes,
@@ -24,4 +25,5 @@ PROBES = (
     programmatic,
     security,
     features,
+    dataprofile,
 )
