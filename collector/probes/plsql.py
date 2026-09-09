@@ -2,6 +2,15 @@ from ..db import in_binds, sha256_text
 
 NAME = "plsql"
 
+# Stored code is the one field that grows without bound: a large estate carries
+# thousands of packages and hundreds of MB of text, which would make a single
+# JSON file unloadable and unpushable. The runner writes these out to one file
+# per object keyed by hash and leaves an excerpt inline.
+# (dataset, large field, key field, excerpt chars)
+EXTERNALIZE = [
+    ("source_inventory.plsql_source", "source_text", "source_sha256", 800),
+]
+
 
 def collect(s, owners):
     frag, binds = in_binds("o", owners)

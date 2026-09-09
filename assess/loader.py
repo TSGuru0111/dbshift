@@ -89,12 +89,16 @@ def load_run(run_dir: Path, db_path: Path) -> dict:
         conn.execute(f'CREATE TABLE "{table}" ({cols})')
         if rows:
             placeholders = ", ".join("?" for _ in seen)
+            # Generator, not a list comprehension: executemany consumes it lazily,
+            # so the converted copy never coexists with the parsed rows.
             conn.executemany(
                 f'INSERT INTO "{table}" ({cols}) VALUES ({placeholders})',
-                [[_sqlite_value(r.get(c)) for c in seen] for r in rows],
+                ([_sqlite_value(r.get(c)) for c in seen] for r in rows),
             )
         loaded[table] = len(rows)
+        del payload, rows
 
+    _create_indexes(conn, loaded)
     _create_views(conn, loaded)
     conn.commit()
     return {
@@ -104,6 +108,50 @@ def load_run(run_dir: Path, db_path: Path) -> dict:
         "source": manifest.get("source", {}),
         "schemas": manifest.get("schemas", {}),
     }
+
+
+# Join keys the rule catalogue actually uses. Without these, the NOT EXISTS and
+# self-join rules (DQ-001, PERF-001, PERF-008) degrade to quadratic scans -- fine
+# at 90 objects, minutes per rule at 50,000.
+RULE_INDEXES = {
+    "objects": [("owner", "object_type"), ("object_name",)],
+    "tables": [("owner", "table_name")],
+    "columns": [("owner", "table_name"), ("data_type",)],
+    "indexes": [("table_owner", "table_name"), ("owner", "index_name")],
+    "index_columns": [
+        ("table_owner", "table_name", "column_name", "column_position"),
+        ("index_owner", "index_name"),
+        ("table_name", "column_name", "column_position"),
+    ],
+    "constraints": [
+        ("owner", "table_name", "constraint_type"),
+        ("owner", "constraint_name"),
+    ],
+    "constraint_columns": [("owner", "constraint_name"), ("owner", "table_name")],
+    "segments": [("owner", "segment_name", "segment_type")],
+    "lobs": [("owner", "table_name")],
+    "partitioned_tables": [("owner", "table_name")],
+    "table_profile": [("owner", "table_name")],
+    "column_profile": [("owner", "table_name")],
+    "materialized_views": [("container_name",)],
+    "queues": [("queue_table",)],
+    "external_tables": [("owner", "table_name")],
+    "table_privileges": [("grantee",)],
+    "feature_usage": [("name",)],
+}
+
+
+def _create_indexes(conn: sqlite3.Connection, loaded: dict[str, int]) -> None:
+    for table, keysets in RULE_INDEXES.items():
+        if not loaded.get(table):
+            continue
+        existing = {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+        for i, keys in enumerate(keysets):
+            if not set(keys).issubset(existing):
+                continue
+            cols = ", ".join(f'"{k}"' for k in keys)
+            conn.execute(f'CREATE INDEX IF NOT EXISTS "ix_{table}_{i}" ON "{table}" ({cols})')
+    conn.execute("ANALYZE")
 
 
 def _create_views(conn: sqlite3.Connection, loaded: dict[str, int]) -> None:

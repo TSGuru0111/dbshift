@@ -344,15 +344,46 @@ absence.*
 
 50 rules, 36 issues, **recall still 7/7 (100%)**, severity exact 7/7.
 
+### Hard walls removed (2026-09-09)
+
+**SQLite indexes on rule join keys.** `DQ-001`, `PERF-001` and `PERF-008` use
+`NOT EXISTS` and self-joins against `constraints` and `index_columns`. With no
+index those are quadratic — invisible at 90 objects, minutes per rule at 50,000.
+The loader now creates **24 indexes** from a declared map of the join keys the
+catalogue actually uses, then runs `ANALYZE`.
+
+**PL/SQL source moved out of line.** Full stored code was inlined in the dataset
+file. A large estate carries thousands of packages and hundreds of MB of text,
+which makes the file unloadable and unpushable. The runner now writes one file
+per object under `<run_id>/plsql_source/<sha256>.txt` and leaves an 800-character
+excerpt plus a pointer in the row. **`plsql_source.json` dropped to 7 KB.**
+
+The hash was already the identity used for skip-unchanged, so it doubles as the
+filename — identical text is stored once regardless of how many objects share it.
+The mechanism is declarative (`EXTERNALIZE` on the probe), not special-cased in
+the runner, so any future unbounded field uses the same path.
+
+**Loader insert.** `executemany` now consumes a generator rather than a
+materialised list, so the converted copy never coexists with the parsed rows.
+True constant-memory streaming needs NDJSON or `ijson` and is deliberately
+deferred — with source text externalised there is no measured case for it yet.
+
+50 rules, recall still 7/7.
+
 **Still open before a client engagement**
 
 - **Preflight** — verify granted privileges and Oracle version first and report
   gaps, rather than failing on query 40 of 60
 - **Version matrix** — the catalogue is 21c-shaped; 19c and 23ai differ
-- **PL/SQL text out-of-line** — full source is inlined in JSON today; at 100s of
-  MB it must move out, keyed by the hash already stored
-- **Loader streaming and SQLite indexes** — the loader reads whole files into
-  memory, and `PERF-008` self-joins `index_columns` with no index behind it
+- **Two-tier profiling and a wall-clock budget** — clients grant a fixed window;
+  metadata checks are cheap and complete, data checks are expensive and should
+  be opt-in per table
+- **Sampling cannot find rare events** — two duplicates in three billion rows
+  will not surface in a 0.03% sample. `DQ-011` marks the limit; it does not
+  remove it
+- **Per-schema rollup** — at 40 application schemas one overall score is
+  useless; the valuable sentence is "three schemas carry 80% of the risk"
+- **Checkpoint and resume** — a run that dies at probe 9 of 12 restarts from zero
 - **Semantic vs structural rules** — structural rules port to any client
   unchanged; semantic ones like `DQ-002`'s near-unique heuristic already
   misfired twice here on money columns. At a client they should be presented as

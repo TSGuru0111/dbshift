@@ -58,6 +58,33 @@ def _resolve_owners(session: Session, configured: tuple[str, ...]) -> dict:
     }
 
 
+def _externalize(probe, produced: dict[str, list[dict]], run_dir: Path) -> None:
+    """Move unbounded text fields out of the dataset file.
+
+    Keeps the row payload proportional to object count rather than code volume.
+    The hash is already the identity used for skip-unchanged, so it is also the
+    filename -- identical text is written once no matter how many objects share it.
+    """
+    for dataset, field, key_field, excerpt_chars in getattr(probe, "EXTERNALIZE", []):
+        rows = produced.get(dataset)
+        if not rows:
+            continue
+        target = run_dir / dataset.split(".")[-1]
+        target.mkdir(parents=True, exist_ok=True)
+        for row in rows:
+            text = row.get(field)
+            if text is None:
+                continue
+            key = row.get(key_field) or ""
+            path = target / f"{key}.txt"
+            if not path.exists():
+                path.write_text(text, encoding="utf-8")
+            row[field] = text[:excerpt_chars]
+            row[f"{field}_truncated"] = max(0, len(text) - excerpt_chars)
+            row[f"{field}_file"] = f"{target.name}/{path.name}"
+        log.info("externalized dataset=%s rows=%d dir=%s", dataset, len(rows), target.name)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="DBShift discovery collector")
     parser.add_argument("--output-dir", type=Path, default=None)
@@ -105,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
             mark = len(session.query_log)
             probe_started = time.perf_counter()
             produced = probe.collect(session, owners)
+            _externalize(probe, produced, run_dir)
             labels = session.labels_since(mark)
             elapsed_ms = int((time.perf_counter() - probe_started) * 1000)
             for dataset, rows in produced.items():
