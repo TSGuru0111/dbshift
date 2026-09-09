@@ -391,6 +391,90 @@ deferred — with source text externalised there is no measured case for it yet.
 
 ---
 
-## Phase 3 — Size & Edition Decision (not started)
+## Phase 3 — Size & Edition Decision (complete) — 2026-09-09
+
+**Outcome:** `sizing/` produces the target specification and the licence verdict.
+**This is the only phase where a model makes a judgement call**, and the whole
+design exists to bound it: the proposer suggests, the rules engine decides.
+
+**Decision for this estate:** Enterprise Edition BYOL, `db.t3.medium`
+(2 vCPU / 4 GiB), 20 GB gp3, AL32UTF8, **1 Oracle processor licence**.
+
+### The split that matters
+
+- `propose.py` — reads raw facts and suggests edition, instance and storage with
+  a rationale. Deliberately naive about licensing nuance: it reports what the
+  evidence appears to say. Two implementations, `heuristic` (deterministic, runs
+  today) and `bedrock` (wired, unreachable without an account). **Whichever ran
+  is recorded in `source`**, so nothing ever implies a model ran when it did not
+- `policy.py` — the deterministic rules. Hard EE-forcing features, contextual
+  features, the SE2 vCPU ceiling, storage floors, licence arithmetic
+- `validate.py` — seven checks, each PASS / OVERRIDE / WARN. **Where they
+  disagree the rules win and the disagreement is recorded** as a first-class
+  output, because that logged disagreement is the evidence the AI is bounded
+
+### The override fired, and it is the real demo
+
+The proposer read `DBA_FEATURE_USAGE_STATISTICS` and cited **Oracle Multitenant
+and Partitioning** as forcing Enterprise Edition. The rules engine **overruled
+the Multitenant half**:
+
+> A single PDB is included in every edition, and RDS for Oracle runs a container
+> database with one PDB by default. Only PDB counts above the included allowance
+> require the Multitenant option.
+
+The verdict did not change — Partitioning forces EE on its own — but **the
+justification did**, and in a licence negotiation the justification is what gets
+audited. XE reports Multitenant as used simply because it runs as a CDB; a naive
+read hands a client a bill for an option they do not owe.
+
+This was not manufactured. The proposer does the reasonable naive thing with the
+raw evidence, and the policy layer carries the knowledge that the raw evidence
+lacks.
+
+### Edition evidence comes from two independent sources
+
+Feature usage statistics **and** structural evidence (`DBA_PART_TABLES`, bitmap
+indexes, compressed segments). Either alone misleads: usage stats can be sampled
+before a feature was exercised, and a structure can exist unused. Either is
+sufficient to force EE.
+
+### A bug caught in validation, worth recording
+
+The first implementation treated utilization as available when
+`sysmetric_rows > 0 OR awr_snapshots > 8`. This estate has **0 live metrics and
+15 AWR snapshots**, so it passed — and the tool would have silently claimed
+measured headroom it does not have. Exactly the failure class this project
+exists to prevent.
+
+Corrected: utilization requires live metrics **and** at least 24 AWR snapshots
+(one day hourly, the minimum before a percentile means anything), and the
+reason is carried in the output either way. It now correctly warns that the
+sizing is a **capacity-derived floor, not a load-derived recommendation**.
+
+### Deliberately not included
+
+**No prices.** An hourly rate depends on region, term, edition and licence model,
+and a wrong number quoted to a client is worse than no number. Licence *counts*
+are derivable and are computed; licence *cost* is a commercial negotiation and is
+left to the TCO engine with rates the user supplies.
+
+### Results
+
+| Check | Verdict |
+|---|---|
+| edition | PASS — EE confirmed |
+| edition_rationale | **OVERRIDE** — Multitenant removed from the justification |
+| instance_known | PASS |
+| se2_vcpu_ceiling | PASS |
+| storage_floor | PASS — 20 GB engine minimum |
+| burstable_class | WARN — t3 is fine for rehearsal, verify credits for production |
+| utilization_evidence | WARN — capacity floor only, no measured load |
+
+1 override, 2 warnings, proposal **not** accepted as-is.
+
+---
+
+## Phase 4 — Detect & Remediate (not started)
 
 <!-- Append entries here as work proceeds -->

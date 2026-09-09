@@ -21,8 +21,9 @@ See `docs/02-architecture.md` for why, and do not re-add them.
 | Seeded defects | ✅ 8 defects in place, documented |
 | Golden snapshot | ✅ `data/dbmig_golden.dmp` |
 | Discovery collector | ✅ `collector/`, 47 datasets, local JSON, 5/5 verify checks |
-| Assessment engine | ✅ `assess/`, 49 rules as data, **7/7 recall**, HTML report |
-| Size & Edition decision | ⬜ **Next task** |
+| Assessment engine | ✅ `assess/`, 50 rules as data, **7/7 recall**, HTML report |
+| Size & Edition decision | ✅ `sizing/`, EE BYOL verdict, rules overrode the proposal |
+| Detect & Remediate | ⬜ **Next task** — needs Bedrock, so needs an AWS account |
 | Everything AWS-side | ⬜ Not started — no AWS account yet |
 
 ## Running it
@@ -33,6 +34,7 @@ $env:DBSHIFT_COLLECTOR_PASSWORD='...'      # read-only dbmig_collector
 .\.venv\Scripts\python.exe -m collector.verify    # reconcile against ground truth
 .\.venv\Scripts\python.exe -m assess.run          # assess    -> assess/output/assessment.json
 .\.venv\Scripts\python.exe -m assess.report       # render    -> assess/output/report.html
+.\.venv\Scripts\python.exe -m sizing.run          # size+edition -> sizing/output/sizing.json
 ```
 
 Both output directories are gitignored. **No AWS is required for Discover or
