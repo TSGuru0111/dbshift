@@ -86,20 +86,39 @@ def syntax_check(fix: dict, finding: dict) -> dict:
     )
 
 
-def dry_run(fix: dict, finding: dict, rehearsal_dsn: str | None = None) -> dict:
+def dry_run(fix: dict, finding: dict, target=None) -> dict:
     """Apply and roll back on a copy of the estate. Requires that copy to exist."""
-    if not rehearsal_dsn:
+    if target is None:
         return _gate(
             "dry_run", BLOCKED,
             "no rehearsal database configured",
-            "Restore data/dbmig_golden.dmp into a separate instance and set DBSHIFT_REHEARSAL_DSN. "
-            "Until then no fix can be proven safe, so none may be applied.",
+            "Restore the estate into a rehearsal schema and set DBSHIFT_REHEARSAL_DSN and "
+            "DBSHIFT_REHEARSAL_PASSWORD. Until then no fix can be proven safe, so none may "
+            "be applied. See scripts/oracle-source/06_create_rehearsal.sql.",
         )
+
+    from . import rehearsal
+
+    result = rehearsal.dry_run(fix, target)
+    if result["ok"]:
+        return _gate("dry_run", PASS, result["detail"])
+
+    if result.get("dirty"):
+        # The fix applied and its rollback did not. That is a defective fix and a
+        # rehearsal copy that now needs restoring -- both must be said plainly.
+        return _gate(
+            "dry_run", FAIL,
+            f"rollback failed after the fix applied -- {result['detail']}",
+            "The rollback is wrong, so this fix is rejected. The rehearsal copy has been "
+            "changed and should be re-imported before the next run.",
+        )
+
+    stage = result["stage"]
+    if stage in ("connect", "remap"):
+        return _gate("dry_run", BLOCKED, f"{stage}: {result['detail']}")
     return _gate(
-        "dry_run", BLOCKED,
-        f"rehearsal target {rehearsal_dsn} is configured but the harness is not built",
-        "Phase 4 currently plans fixes; executing them against the rehearsal copy is the next "
-        "piece of work.",
+        "dry_run", FAIL, f"the fix failed to apply on the rehearsal copy -- {result['detail']}",
+        "It would have failed on production too. Rejected here instead.",
     )
 
 
@@ -117,7 +136,7 @@ def approval(fix: dict, finding: dict, approved_by: str | None = None) -> dict:
     )
 
 
-def run_all(fix: dict, finding: dict, rehearsal_dsn=None, approved_by=None) -> list[dict]:
+def run_all(fix: dict, finding: dict, rehearsal_target=None, approved_by=None) -> list[dict]:
     """Gates run in order and stop at the first failure -- there is no value in
     syntax-checking a statement that policy has already refused."""
     results = []
@@ -126,7 +145,7 @@ def run_all(fix: dict, finding: dict, rehearsal_dsn=None, approved_by=None) -> l
         results.append(result)
         if result["status"] == FAIL:
             return results
-    results.append(dry_run(fix, finding, rehearsal_dsn))
+    results.append(dry_run(fix, finding, rehearsal_target))
     results.append(approval(fix, finding, approved_by))
     return results
 

@@ -31,7 +31,7 @@ def _fix_id(finding: dict) -> str:
 def plan_finding(
     finding: dict,
     allow_model: bool = False,
-    rehearsal_dsn: str | None = None,
+    rehearsal_target=None,
     approvals: dict | None = None,
 ) -> dict:
     approvals = approvals or {}
@@ -83,7 +83,7 @@ def plan_finding(
     })
 
     results = gates.run_all(
-        fix, finding, rehearsal_dsn=rehearsal_dsn, approved_by=approvals.get(fix_id)
+        fix, finding, rehearsal_target=rehearsal_target, approved_by=approvals.get(fix_id)
     )
     entry["gates"] = results
     outcome = gates.verdict(results)
@@ -102,7 +102,7 @@ def plan_finding(
 def build(
     assessment: dict,
     allow_model: bool = False,
-    rehearsal_dsn: str | None = None,
+    rehearsal_target=None,
     approvals: dict | None = None,
     on_event=None,
 ) -> dict:
@@ -118,7 +118,7 @@ def build(
                 "object_name": finding.get("object_name"),
             })
         entry = plan_finding(
-            finding, allow_model=allow_model, rehearsal_dsn=rehearsal_dsn, approvals=approvals
+            finding, allow_model=allow_model, rehearsal_target=rehearsal_target, approvals=approvals
         )
         entries.append(entry)
         if on_event:
@@ -145,7 +145,7 @@ def build(
         "collector_run_id": assessment.get("collector_run_id"),
         "planned_at_utc": datetime.now(timezone.utc).isoformat(),
         "model_generation_enabled": allow_model,
-        "rehearsal_dsn_configured": bool(rehearsal_dsn),
+        "rehearsal_configured": bool(rehearsal_target),
         "totals": counts,
         "fixes_with_sql": sum(1 for e in entries if e["sql"]),
         "what_is_in_the_way": blockers,

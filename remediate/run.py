@@ -39,8 +39,17 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"no assessment at {args.assessment} -- run 'python -m assess.run' first")
     assessment = json.loads(args.assessment.read_text(encoding="utf-8"))
 
+    from . import rehearsal as rehearsal_mod
+    target = rehearsal_mod.RehearsalTarget.from_env(args.rehearsal_dsn)
+    if target:
+        check = rehearsal_mod.check_target(target)
+        print(f"rehearsal target : {check['detail']}")
+        if not check['ok']:
+            print('  the dry-run gate will report blocked')
+            target = None
+
     result = plan_mod.build(
-        assessment, allow_model=args.allow_model, rehearsal_dsn=args.rehearsal_dsn
+        assessment, allow_model=args.allow_model, rehearsal_target=target
     )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -59,7 +68,7 @@ def _report(r: dict) -> None:
     print(f"findings planned : {sum(r['totals'].values())}")
     print(f"fixes with SQL   : {r['fixes_with_sql']}")
     print(f"model generation : {'enabled' if r['model_generation_enabled'] else 'disabled'}")
-    print(f"rehearsal target : {'configured' if r['rehearsal_dsn_configured'] else 'not configured'}")
+    print(f"rehearsal        : {'in use' if r['rehearsal_configured'] else 'not configured'}")
 
     print("\nOUTCOMES")
     order = ["AUTO_APPLY", "READY_TO_APPLY", "BLOCKED", "REJECTED",

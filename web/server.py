@@ -70,6 +70,7 @@ class State:
     utilization: dict | None = None
     remediation: dict | None = None
     rehearsal_dsn: str | None = None
+    rehearsal: Any = None
     gate: dict | None = None
     waivers: list = field(default_factory=list)
 
@@ -612,14 +613,45 @@ def sizing():
 
 class RehearsalRequest(BaseModel):
     dsn: str = ""
+    user: str = "dbmig_rehearsal"
+    password: str = ""
+    schema_name: str = "DBMIG_REHEARSAL"
+
+
+def _rehearsal_target():
+    """The registered rehearsal copy, or None. Held in memory like every other
+    credential in this process -- never written to disk."""
+    return STATE.rehearsal
 
 
 @app.post("/api/rehearsal")
 def set_rehearsal(req: RehearsalRequest):
-    """Register a rehearsal database. Not validated here -- the dry-run harness
-    is the thing that must prove it works, and it is not built yet."""
-    STATE.rehearsal_dsn = req.dsn.strip() or None
-    return {"ok": True, "rehearsal_dsn": STATE.rehearsal_dsn}
+    """Register a rehearsal copy, and prove it is usable before accepting it.
+
+    Registering something unreachable would let the dry-run gate look configured
+    while every fix silently failed at connect.
+    """
+    from remediate import rehearsal as rehearsal_mod
+
+    if not req.dsn.strip():
+        STATE.rehearsal = None
+        STATE.rehearsal_dsn = None
+        return {"ok": True, "rehearsal_dsn": None}
+
+    target = rehearsal_mod.RehearsalTarget(
+        dsn=req.dsn.strip(),
+        user=req.user.strip() or "dbmig_rehearsal",
+        password=req.password,
+        schema=(req.schema_name.strip() or "DBMIG_REHEARSAL").upper(),
+        source_schema=(STATE.schemas[0] if STATE.schemas else "DBMIG_APP"),
+    )
+    check = rehearsal_mod.check_target(target)
+    if not check["ok"]:
+        raise HTTPException(400, check["detail"])
+
+    STATE.rehearsal = target
+    STATE.rehearsal_dsn = target.dsn
+    return {"ok": True, "rehearsal_dsn": target.dsn, "detail": check["detail"]}
 
 
 @app.get("/api/remediate")
@@ -631,7 +663,7 @@ def remediate():
         result = remediate_plan.build(
             STATE.assessment,
             allow_model=False,          # Bedrock invoke is blocked; never claim otherwise
-            rehearsal_dsn=STATE.rehearsal_dsn,
+            rehearsal_target=_rehearsal_target(),
             on_event=emit,
         )
         STATE.remediation = result
@@ -645,7 +677,7 @@ def remediate():
             "totals": result["totals"],
             "fixes_with_sql": result["fixes_with_sql"],
             "blockers": result["what_is_in_the_way"],
-            "rehearsal": result["rehearsal_dsn_configured"],
+            "rehearsal": result["rehearsal_configured"],
         })
 
     return _stream(work)
