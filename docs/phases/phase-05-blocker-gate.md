@@ -1,7 +1,9 @@
 # Phase 5 — Blocker gate
 
-> **Latest update — 2026-09-10.** Phase built **and added to the console as
-> stage 6**, including granting and revoking waivers from each blocker. The gate
+> **Latest update — 2026-09-10.** Phase built **and added to the console**,
+> including granting and revoking waivers from each blocker. The console rail was
+> relabelled to architecture phase numbers at the same time, so this is
+> **Phase 5** on screen as well as in the docs. The gate
 > halts the run when any critical finding is open, but it also reports **which
 > downstream phases each blocker actually stands in front of**, because a binary
 > halt sends people to fix the wrong thing. On the current estate it returns
@@ -101,7 +103,7 @@ Waiver file shape:
   "reason": "Client accepts a full-outage cutover; the restart ARCHIVELOG needs is not scheduled before the pilot."}]
 ```
 
-**Console: stage 6.** Waivers are granted and revoked per blocker there, with
+**Console: Phase 5 - Blocker gate.** Waivers are granted and revoked per blocker there, with
 validation shared from `blocker/policy.py` so the two cannot drift on what counts
 as a real waiver.
 

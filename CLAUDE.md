@@ -45,8 +45,13 @@ $env:DBSHIFT_COLLECTOR_PASSWORD='...'      # read-only dbmig_collector
 .\.venv\Scripts\python.exe -m web.server          # http://127.0.0.1:8765
 ```
 
-Three stages, gated in order: **Connect → Discovery → Assessment**, with a stage
-rail across the top that advances as each finishes. The browser never talks to
+Connect, then **Phases 1–5** gated in order — Discover, Assess, Size & Edition,
+Remediate, Blocker gate — with a stage rail across the top that advances as each
+finishes, and Next/Back navigation beneath each screen.
+
+**The rail is numbered by architecture phase, not by screen order.** Connect is a
+prerequisite, not a phase, so it carries no number. Numbering it would shift every
+phase by one and contradict `docs/02-architecture.md` in front of a client. The browser never talks to
 Oracle — the server does, calling the same `collector` and `assess` modules the
 CLI uses, so the UI cannot show a result the CLI would not.
 

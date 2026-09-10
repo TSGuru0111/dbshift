@@ -246,6 +246,9 @@ tr:last-child td{border-bottom:none}
 .note.bad{background:var(--bad-soft);color:var(--bad);border-left:2px solid var(--bad)}
 .note.warn{background:var(--warn-soft);color:var(--warn);border-left:2px solid var(--warn)}
 .empty{padding:34px;text-align:center;color:var(--ink-3);font-size:13px}
+.pagenav{display:flex;justify-content:space-between;align-items:center;gap:14px;
+  margin-top:36px;padding-top:18px;border-top:1px solid var(--rule)}
+.pagenav:empty{display:none}
 .mt{margin-top:20px}.mt-s{margin-top:12px}
 .spread{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -511,6 +514,8 @@ tr:last-child td{border-bottom:none}
     <div id="gateEmpty" class="panel"><div class="empty">Run the assessment first, then evaluate the gate.</div></div>
   </section>
 
+  <div class="pagenav" id="pagenav"></div>
+
   <!-- ============ CATALOGUE ============ -->
   <section class="view" id="view-catalogue">
     <div class="head">
@@ -585,13 +590,16 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt = n => (typeof n === 'number' ? n.toLocaleString() : n ?? '—');
 
+// Numbers match docs/02-architecture.md, not the order of the screens. Connect
+// is a prerequisite, not a phase -- numbering it shifted every other phase by
+// one and would have contradicted the docs in front of a client.
 const STAGES = [
-  {id:'connect',   label:'Connect',   n:1},
-  {id:'discover',  label:'Discovery', n:2},
-  {id:'assess',    label:'Assessment',n:3},
-  {id:'target',    label:'Target',    n:4},
-  {id:'remediate', label:'Remediate', n:5},
-  {id:'gate',      label:'Gate',      n:6},
+  {id:'connect',   label:'Connect',        n:null},
+  {id:'discover',  label:'Discover',       n:1},
+  {id:'assess',    label:'Assess',         n:2},
+  {id:'target',    label:'Size & Edition', n:3},
+  {id:'remediate', label:'Remediate',      n:4},
+  {id:'gate',      label:'Blocker gate',   n:5},
 ];
 const IDLE_STAGES = {connect:'active', discover:'idle', assess:'idle',
                      target:'idle', remediate:'idle', gate:'idle'};
@@ -605,15 +613,32 @@ function renderRail(){
     const st = stageState[s.id];
     const cls = [st === 'done' ? 'done' : '', st === 'active' || st === 'busy' ? 'active' : '',
                  st === 'busy' ? 'busy' : ''].filter(Boolean).join(' ');
+    const mark = st === 'done' ? '✓' : (s.n === null ? '·' : s.n);
     return `<button class="stage ${cls}" data-stage="${s.id}">
-      <div class="dot">${st === 'done' ? '✓' : s.n}</div>
-      <div class="label">${s.label}</div>
+      <div class="dot">${mark}</div>
+      <div class="label">${s.n === null ? '' : 'Phase ' + s.n + ' · '}${s.label}</div>
       <div class="sub">${esc(stageSub[s.id])}</div></button>`;
   }).join('');
   document.querySelectorAll('.stage').forEach(el => el.onclick = () => {
     const id = el.dataset.stage;
     if (stageState[id] !== 'idle') show(id);
   });
+}
+
+function renderPageNav(){
+  const nav = $('#pagenav');
+  if (current === 'catalogue') { nav.innerHTML = ''; return; }
+  const i = STAGES.findIndex(s => s.id === current);
+  const prev = STAGES[i - 1], next = STAGES[i + 1];
+  const nextLocked = next && stageState[next.id] === 'idle';
+  const nextLabel = next ? (next.n === null ? next.label : `Phase ${next.n} · ${next.label}`) : '';
+  nav.innerHTML = `
+    ${prev ? `<button class="btn ghost sm" onclick="show('${prev.id}')">&larr; ${esc(prev.label)}</button>`
+           : '<span></span>'}
+    ${next ? `<button class="btn sm" ${nextLocked ? 'disabled' : ''}
+                onclick="show('${next.id}')"
+                title="${nextLocked ? 'Finish this stage first' : ''}">${esc(nextLabel)} &rarr;</button>`
+           : '<span class="mono" style="font-size:11.5px;color:var(--ink-3)">Phase 6 onward is not built</span>'}`;
 }
 function show(id){
   current = id;
@@ -625,6 +650,8 @@ function show(id){
     if (stageState[id] !== 'done') stageState[id] = 'active';
     renderRail();
   }
+  renderPageNav();
+  window.scrollTo({top:0, behavior:'smooth'});
 }
 function setStage(id, state, sub){
   stageState[id] = state;
@@ -1375,6 +1402,7 @@ $('#ruleForm').onsubmit = async e => {
 };
 
 renderRail();
+renderPageNav();
 loadState();
 </script>
 </body>

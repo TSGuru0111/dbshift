@@ -109,7 +109,7 @@ python -m collector.run
 python -m collector.verify     # reconcile two runs against ground truth
 ```
 
-Console: stage 2, with probe-by-probe progress.
+Console: **Phase 1 - Discover**, with probe-by-probe progress.
 
 ## Change log
 

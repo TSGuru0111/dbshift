@@ -88,7 +88,7 @@ python -m sizing.run
 python -m sizing.run --utilization path/to/feed.csv
 ```
 
-Console: stage 4, with CSV upload.
+Console: **Phase 3 - Size & Edition**, with CSV upload.
 
 ## Current result on the reference estate
 

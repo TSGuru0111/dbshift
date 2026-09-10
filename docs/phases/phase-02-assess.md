@@ -97,7 +97,7 @@ python -m assess.run
 python -m assess.report
 ```
 
-Console: stage 3, with rule-by-rule progress.
+Console: **Phase 2 - Assess**, with rule-by-rule progress.
 
 ## Current result on the reference estate
 

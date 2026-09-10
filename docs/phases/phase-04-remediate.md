@@ -1,7 +1,7 @@
 # Phase 4 — Detect & Remediate
 
-> **Latest update — 2026-09-10.** Structure built and added to the console as
-> stage 5. **This phase plans fixes and applies nothing.** Two of the five gates
+> **Latest update — 2026-09-10.** Structure built and added to the console.
+> **This phase plans fixes and applies nothing.** Two of the five gates
 > report `BLOCKED` because the infrastructure they need does not exist, and model
 > generation is unavailable because Bedrock `InvokeModel` is blocked on this
 > account. On the reference estate: 66 findings planned, 2 with SQL, 61 routed to
@@ -97,7 +97,7 @@ python -m remediate.run
 python -m remediate.run --rehearsal-dsn host:1521/SERVICE
 ```
 
-Console: stage 5.
+Console: **Phase 4 - Remediate**.
 
 ## What unblocks it
 
