@@ -132,8 +132,25 @@ console cannot claim a model produced a fix while invoke is blocked.
 - **XML-typed findings cannot be rehearsed** on a same-instance copy, because an
   XML schema URL is unique per database. They stay `BLOCKED`, which is honest —
   a separate instance would lift this.
-- **61 of 66 findings need a human**, because model generation is unavailable.
-  That number falls when Bedrock is wired; it is not a defect in the router.
+- **61 of 66 findings are routed to a human — but Bedrock would only move 25.**
+  The earlier wording here implied all 61 were waiting on a model. They are not:
+
+  | Level | n | Reason recorded | Bedrock helps? |
+  |---|---|---|---|
+  | L2 | **25** | `no_template_and_model_disabled` | **yes** |
+  | L2 | 11 | `template_declined` (DQ-009) | no — see below |
+  | L3 | 25 | `human_authored` | no — policy, not availability |
+  | L4 | 3 | a decision, not a statement | no |
+
+  `generate.build_fix()` returns on `human_authored` **before** templates or
+  Bedrock are tried, so L3 is reserved by design. Wiring Bedrock does not touch
+  those 25 unless the policy itself changes.
+
+- **The 11 DQ-009 findings are a discovery gap, not a model gap.** The template
+  declines because the finding does not carry the column's declared length, and
+  a model would be missing the same number. Collecting `CHAR_LENGTH` in the
+  column probe converts all 11 into templated fixes — deterministic, no model,
+  no AWS. This is the cheapest remaining win in the phase.
 - **No retry loop yet.** `policy.MAX_ATTEMPTS` is 3 and recorded, but a failed
   generation is not retried — there is nothing to retry into.
 - **The two `OPS` criticals are source-side.** `ALTER DATABASE ARCHIVELOG` needs a
@@ -156,7 +173,9 @@ Console: **Phase 4 - Remediate**.
 ## What unblocks it
 
 1. ~~A rehearsal database~~ — **done 2026-09-10.**
-2. **Bedrock Marketplace access** — moves the 61 toward drafted fixes.
+2. **Bedrock Marketplace access** — moves **25** of the 61 toward drafted fixes,
+   not all 61. See Known limits for where the other 36 actually sit.
+3. **`CHAR_LENGTH` in the column probe** — converts 11 more without a model.
 
 ## Change log
 
