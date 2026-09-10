@@ -34,6 +34,8 @@ from assess import loader as assess_loader
 from assess import scoring as assess_scoring
 from collector import config as collector_config
 from collector import run as collector_run
+from sizing import run as sizing_run
+from sizing import utilization as sizing_utilization
 from collector.db import in_binds  # noqa: F401  (kept for custom probe authors)
 from collector.probes import PROBES
 
@@ -61,6 +63,8 @@ class State:
     run_dir: Path | None = None
     manifest: dict | None = None
     assessment: dict | None = None
+    sizing: dict | None = None
+    utilization: dict | None = None
 
 
 STATE = State()
@@ -200,6 +204,8 @@ def get_state():
         "checks": STATE.checks,
         "has_discovery": STATE.manifest is not None,
         "has_assessment": STATE.assessment is not None,
+        "has_sizing": STATE.sizing is not None,
+        "utilization": STATE.utilization,
         "run_id": STATE.run_id,
         "network_requirements": preflight.NETWORK_REQUIREMENTS,
     }
@@ -503,6 +509,86 @@ def assessment():
     if not STATE.assessment:
         raise HTTPException(409, "no assessment run yet")
     return STATE.assessment
+
+
+class UtilizationRequest(BaseModel):
+    filename: str = "utilization.csv"
+    content: str
+
+
+@app.post("/api/utilization")
+def upload_utilization(req: UtilizationRequest):
+    """Accept a measured-utilization feed as CSV text.
+
+    A rejected feed is recorded rather than discarded, so the sizing trail can
+    say why it fell back to a capacity floor instead of silently doing so.
+    """
+    out_dir = Path(__file__).resolve().parent.parent / "sizing" / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "utilization_uploaded.csv"
+    path.write_text(req.content, encoding="utf-8")
+
+    measured = sizing_run.load_utilization(path)
+    measured["filename"] = req.filename
+    STATE.utilization = measured
+    if not measured.get("usable_for_sizing"):
+        raise HTTPException(400, measured.get("reason", "unusable utilization feed"))
+    return {"ok": True, "utilization": measured}
+
+
+@app.delete("/api/utilization")
+def clear_utilization():
+    STATE.utilization = None
+    return {"ok": True}
+
+
+@app.get("/api/utilization/sample")
+def utilization_sample():
+    sample = Path(__file__).resolve().parent.parent / "sizing" / "samples" / "utilization_example.csv"
+    return {
+        "content": sample.read_text(encoding="utf-8") if sample.exists() else "",
+        "columns": list(sizing_utilization.REQUIRED_COLUMNS),
+        "sizing_metrics": list(sizing_utilization.SIZING_METRICS),
+        "min_window_days": sizing_utilization.MIN_WINDOW_DAYS,
+        "percentile": sizing_utilization.SIZING_PERCENTILE,
+        "headroom": sizing_utilization.HEADROOM,
+    }
+
+
+@app.get("/api/size")
+def size():
+    if not STATE.manifest:
+        raise HTTPException(409, "no discovery run yet")
+
+    def work(emit):
+        measured = STATE.utilization if (STATE.utilization or {}).get("usable_for_sizing") else None
+        out = sizing_run.execute(
+            STATE.run_dir,
+            Path(__file__).resolve().parent.parent / "sizing" / "output",
+            measured=measured,
+            on_event=emit,
+        )
+        STATE.sizing = out
+        d = out["decision"]
+        emit({
+            "event": "complete",
+            "edition": d["edition"],
+            "licence_model": d["licence_model"],
+            "instance_class": d["instance_class"],
+            "storage_gb": d["storage_gb"],
+            "overrides": d["override_count"],
+            "warnings": d["warning_count"],
+            "basis": out["facts"]["utilization"]["basis"],
+        })
+
+    return _stream(work)
+
+
+@app.get("/api/sizing")
+def sizing():
+    if not STATE.sizing:
+        raise HTTPException(409, "no sizing run yet")
+    return STATE.sizing
 
 
 def main() -> int:

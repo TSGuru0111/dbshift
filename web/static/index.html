@@ -130,6 +130,9 @@ main{max-width:1180px;margin:0 auto;padding:28px 24px 80px}
 .check.pass .mark{background:var(--ok)}
 .check.warn .mark{background:var(--warn)}
 .check.fail .mark{background:var(--bad)}
+/* An override is the rules engine working, not a failure -- it reads as the accent. */
+.check.over .mark{background:var(--accent)}
+.check.over .remedy{border-left-color:var(--accent);background:var(--accent-soft)}
 .check .name{font-size:12.5px;font-weight:600}
 .check .detail{font-size:12px;color:var(--ink-2);margin-top:2px}
 .check .remedy{font-size:12px;color:var(--ink-2);margin-top:6px;padding:8px 10px;
@@ -142,7 +145,12 @@ main{max-width:1180px;margin:0 auto;padding:28px 24px 80px}
 .facts div{background:var(--surface);padding:10px 13px}
 .facts .k{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.1em;
   text-transform:uppercase;color:var(--ink-3)}
-.facts .v{font-family:"IBM Plex Mono",monospace;font-size:12.5px;margin-top:3px;word-break:break-word}
+/* Wrap between tokens, never inside one -- "db.t3.medium" split across lines
+   reads as a different instance class. */
+.facts .v{font-family:"IBM Plex Mono",monospace;font-size:12.5px;margin-top:3px;
+  overflow-wrap:anywhere;word-break:normal}
+#targetSpec .facts{grid-template-columns:repeat(4,1fr)}
+@media(max-width:760px){#targetSpec .facts{grid-template-columns:repeat(2,1fr)}}
 
 .netreq{display:flex;flex-direction:column;gap:12px}
 .netreq div{padding-left:13px;border-left:2px solid var(--accent)}
@@ -360,6 +368,64 @@ tr:last-child td{border-bottom:none}
     <div id="assessEmpty" class="panel"><div class="empty">Run discovery first, then assess.</div></div>
   </section>
 
+  <!-- ============ 4. TARGET ============ -->
+  <section class="view" id="view-target">
+    <div class="head">
+      <h2>Target decision</h2>
+      <p>The one place a model is allowed a judgement call. A proposer suggests an edition,
+         instance class and storage; a deterministic rules engine then checks it and
+         <b>overrules it where they disagree</b> — and the disagreement is recorded rather than
+         quietly reconciled.</p>
+    </div>
+
+    <div class="panel pad" style="margin-bottom:16px">
+      <div class="spread">
+        <div>
+          <div class="eyebrow" style="margin:0">Measured utilization — optional</div>
+          <p style="font-size:12.5px;color:var(--ink-2);margin-top:6px;max-width:74ch">
+            A catalogue scan cannot produce utilization percentiles — there is no history to take
+            a percentile of. Without a feed this sizing is a <b>capacity floor</b>, not a
+            load-derived recommendation. An AWS OLA / DB OLA, Migration Evaluator or monitoring
+            export supplies it.</p>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn ghost sm" id="btnUtilSample">Show format</button>
+          <label class="btn ghost sm" style="cursor:pointer">Upload CSV
+            <input type="file" id="utilFile" accept=".csv,text/csv" style="display:none"></label>
+        </div>
+      </div>
+      <div id="utilStatus" class="mt-s"></div>
+      <div id="utilSample" style="display:none" class="mt-s"></div>
+    </div>
+
+    <div class="spread" style="margin-bottom:16px">
+      <button class="btn" id="btnSize">Decide target</button>
+      <span class="mono" id="sizeMeta" style="font-size:12px;color:var(--ink-3)"></span>
+    </div>
+    <div id="sizeLive" style="display:none"><div class="ticker" id="sizeTicker"></div></div>
+    <div id="sizeResult" style="display:none">
+      <div class="panel pad mt">
+        <div class="eyebrow">Recommended target</div>
+        <div id="targetSpec"></div>
+      </div>
+      <div class="split mt">
+        <div class="panel pad">
+          <div class="eyebrow">What forced this edition</div>
+          <div class="acc" id="forcedList"></div>
+        </div>
+        <div class="panel pad">
+          <div class="eyebrow">Detected, but not forcing</div>
+          <p style="font-size:12.5px;color:var(--ink-2);margin-bottom:12px">A feature showing as
+            used is not a feature you owe a licence for.</p>
+          <div class="acc" id="dismissedList"></div>
+        </div>
+      </div>
+      <div class="mt"><div class="eyebrow">Proposal versus decision</div>
+        <div class="checks" id="sizeChecks"></div></div>
+    </div>
+    <div id="sizeEmpty" class="panel"><div class="empty">Run discovery first, then decide the target.</div></div>
+  </section>
+
   <!-- ============ CATALOGUE ============ -->
   <section class="view" id="view-catalogue">
     <div class="head">
@@ -438,10 +504,11 @@ const STAGES = [
   {id:'connect',   label:'Connect',   n:1},
   {id:'discover',  label:'Discovery', n:2},
   {id:'assess',    label:'Assessment',n:3},
+  {id:'target',    label:'Target',    n:4},
 ];
 let current = 'connect';
-let stageState = {connect:'active', discover:'idle', assess:'idle'};
-let stageSub = {connect:'', discover:'', assess:''};
+let stageState = {connect:'active', discover:'idle', assess:'idle', target:'idle'};
+let stageSub = {connect:'', discover:'', assess:'', target:''};
 let ISSUES = [], sevFilter = new Set(), catFilter = new Set();
 
 function renderRail(){
@@ -552,8 +619,8 @@ $('#btnDisconnect').onclick = async () => {
   $('#btnDisconnect').style.display = 'none'; $('#facts').innerHTML = '';
   $('#checks').innerHTML = '<div class="empty">Connect to run the preflight checks.</div>';
   $('#btnDiscover').disabled = true;
-  stageState = {connect:'active', discover:'idle', assess:'idle'};
-  stageSub = {connect:'', discover:'', assess:''};
+  stageState = {connect:'active', discover:'idle', assess:'idle', target:'idle'};
+  stageSub = {connect:'', discover:'', assess:'', target:''};
   renderRail();
 };
 
@@ -597,6 +664,7 @@ $('#btnDiscover').onclick = () => {
         `run ${d.run_id.slice(0,8)} · ${(d.elapsed_ms/1000).toFixed(1)}s` +
         (d.failed && d.failed.length ? ` · ${d.failed.length} failed queries` : '');
       $('#btnAssess').disabled = false;
+      $('#btnSize').disabled = false;
       await renderDiscovery();
       btn.disabled = false;
       $('#toAssess').style.display = '';
@@ -669,6 +737,7 @@ $('#btnAssess').onclick = () => {
       es.close();
       if (last) last.className = 'tick done';
       setStage('assess', 'done', `${d.issues} issues · score ${d.overall}`);
+      setStage('target', stageState.target === 'idle' ? 'active' : stageState.target);
       $('#assessMeta').textContent =
         `${d.findings} findings across ${d.issues} issues · recall ${Math.round(d.recall*100)}%`;
       await renderAssessment();
@@ -742,6 +811,138 @@ function renderIssues(){
       </div></details>`).join('') || '<div class="empty">No issues match these filters.</div>';
   const occ = list.reduce((n,i) => n + i.occurrences, 0);
   $('#issueCount').textContent = `Showing ${list.length} of ${ISSUES.length} issues (${occ} occurrences)`;
+}
+
+/* ---------------- target decision ---------------- */
+$('#btnSize').disabled = true;
+
+$('#btnUtilSample').onclick = async () => {
+  const box = $('#utilSample');
+  if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+  const s = await (await fetch('/api/utilization/sample')).json();
+  box.style.display = '';
+  box.innerHTML = `<div class="note info">Sizing uses <b>${esc(s.percentile)}</b> with
+    <b>${s.headroom}&times;</b> headroom, over a window of at least <b>${s.min_window_days} days</b>.
+    Required metrics: <span class="mono">${s.sizing_metrics.join(', ')}</span>.
+    Below the window, or missing either metric, the feed is refused and sizing falls back to the
+    capacity floor — recorded, not silent.</div>
+    <div class="tblwrap"><table><tbody><tr><td style="white-space:pre;max-width:none">${esc(s.content)}</td></tr></tbody></table></div>`;
+};
+
+$('#utilFile').onchange = async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const content = await file.text();
+  const r = await fetch('/api/utilization', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({filename:file.name, content})});
+  const d = await r.json();
+  if (!r.ok) {
+    $('#utilStatus').innerHTML = `<div class="note bad">Feed refused — ${esc(d.detail)}<br>
+      Sizing will use the capacity floor.</div>`;
+    return;
+  }
+  const u = d.utilization;
+  $('#utilStatus').innerHTML = `<div class="note info">
+    <b>${esc(u.filename)}</b> accepted — ${u.window_days} day window from
+    <span class="mono">${esc(u.source)}</span>. Sizing will be load-derived.
+    <button class="btn ghost sm" style="margin-left:10px" onclick="clearUtil()">Remove</button></div>`;
+  e.target.value = '';
+};
+
+async function clearUtil(){
+  await fetch('/api/utilization', {method:'DELETE'});
+  $('#utilStatus').innerHTML = '';
+}
+
+$('#btnSize').onclick = () => {
+  const btn = $('#btnSize');
+  btn.disabled = true;
+  $('#sizeEmpty').style.display = 'none';
+  $('#sizeResult').style.display = 'none';
+  $('#sizeLive').style.display = '';
+  $('#sizeTicker').innerHTML = '';
+  setStage('target', 'busy', 'starting');
+  const es = new EventSource('/api/size');
+  let last = null;
+  es.onmessage = async ev => {
+    const d = JSON.parse(ev.data);
+    if (d.event === 'stage') {
+      if (last) last.className = 'tick done';
+      const el = document.createElement('div');
+      el.className = 'tick run';
+      el.innerHTML = `<span class="st"></span><span class="nm">${esc(d.stage)}</span>
+        <span class="meta">${esc(d.detail)}</span>`;
+      $('#sizeTicker').appendChild(el); el.scrollIntoView({block:'nearest'}); last = el;
+      setStage('target', 'busy', d.stage);
+    } else if (d.event === 'complete') {
+      es.close();
+      if (last) last.className = 'tick done';
+      setStage('target', 'done', `${esc(d.edition)} · ${esc(d.instance_class)}`);
+      $('#sizeMeta').textContent =
+        `${d.edition} ${d.licence_model} · ${d.instance_class} · ${d.storage_gb} GB · ` +
+        `${d.overrides} override${d.overrides === 1 ? '' : 's'} · sizing basis: ${d.basis}`;
+      await renderSizing();
+      btn.disabled = false;
+    } else if (d.event === 'error') {
+      es.close(); setStage('target','active','failed');
+      $('#sizeLive').insertAdjacentHTML('beforeend', `<div class="note bad mt-s">${esc(d.message)}</div>`);
+      btn.disabled = false;
+    }
+  };
+  es.onerror = () => { es.close(); btn.disabled = false; setStage('target','active','connection lost'); };
+};
+
+async function renderSizing(){
+  const s = await (await fetch('/api/sizing')).json();
+  const d = s.decision, p = s.proposal, f = s.facts;
+  const editionFull = d.edition === 'EE' ? 'Enterprise Edition' : 'Standard Edition 2';
+
+  $('#targetSpec').innerHTML = `
+    <div style="font-family:Archivo,sans-serif;font-size:25px;font-weight:700;letter-spacing:-.02em">
+      ${esc(editionFull)}
+      <span class="mono" style="font-size:12px;font-weight:500;color:var(--accent);
+        border:1px solid var(--accent);border-radius:2px;padding:2px 8px;margin-left:6px;
+        vertical-align:middle">${esc(d.licence_model)}</span></div>
+    <p style="font-size:12.5px;color:var(--ink-2);margin-top:8px">Proposed by the
+      <b>${esc(p.source)}</b> proposer, then validated.
+      ${d.agreed_with_proposal ? 'The rules engine confirmed it unchanged.'
+        : 'The rules engine overruled part of the proposal.'}</p>
+    <div class="facts" style="grid-template-columns:repeat(4,1fr);margin-top:14px">
+      ${[['Instance', d.instance_class, `${d.vcpu} vCPU · ${d.memory_gib} GiB`],
+         ['Storage', d.storage_gb + ' GB', d.storage_type + ' · from ' + f.segment_gb + ' GB'],
+         ['Character set', d.character_set, 'target must match'],
+         ['Oracle licences', d.licence_model === 'BYOL' ? d.processor_licences + ' processor' : 'included',
+          'two vCPU = one processor']]
+        .map(([k,v,h]) => `<div><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>
+          <div style="font-size:11.5px;color:var(--ink-2);margin-top:3px">${esc(h)}</div></div>`).join('')}
+    </div>`;
+
+  $('#forcedList').innerHTML = (d.forced_by || []).map(x => `
+    <details class="item"><summary><span class="title">${esc(x.feature)}</span><span></span>
+      <span class="count">${esc(x.evidence)}</span></summary>
+      <div class="body"><p class="why">${esc(x.why)}</p>
+        <p class="why mono" style="font-size:11.5px">detected ${esc(x.detected_usages)} ·
+          currently_used=${esc(x.currently_used)}</p></div></details>`).join('')
+    || '<div class="empty">Nothing forces an edition — SE2 is viable.</div>';
+
+  $('#dismissedList').innerHTML = (d.dismissed || []).map(x => `
+    <details class="item"><summary><span class="title">${esc(x.feature)}</span><span></span>
+      <span class="count">not forcing</span></summary>
+      <div class="body"><p class="why">${esc(x.why_not_forcing)}</p></div></details>`).join('')
+    || '<div class="empty">Every detected feature genuinely forces the edition.</div>';
+
+  $('#sizeChecks').innerHTML = d.checks.map(c => {
+    const cls = c.verdict === 'PASS' ? 'pass' : c.verdict === 'WARN' ? 'warn' : 'over';
+    const mark = c.verdict === 'PASS' ? '✓' : c.verdict === 'WARN' ? '!' : '⇄';
+    const delta = (c.verdict === 'OVERRIDE' && c.proposed != null)
+      ? `<div class="remedy">proposed <b>${esc(c.proposed)}</b> → decided
+         <b style="color:var(--accent)">${esc(c.decided)}</b></div>` : '';
+    return `<div class="check ${cls}"><span class="mark">${mark}</span>
+      <div><div class="name">${esc(c.check)}</div>
+        <div class="detail">${esc(c.detail)}</div>${delta}</div></div>`;
+  }).join('');
+
+  $('#sizeResult').style.display = '';
 }
 
 /* ---------------- catalogue ---------------- */

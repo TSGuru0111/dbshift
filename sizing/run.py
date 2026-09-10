@@ -35,6 +35,74 @@ def _latest_run(output_dir: Path) -> Path:
     return runs[-1]
 
 
+def execute(
+    run_dir: Path,
+    output_dir: Path,
+    measured: dict | None = None,
+    use_bedrock: bool = False,
+    model_id: str | None = None,
+    on_event=None,
+) -> dict:
+    """Produce the size and edition decision for one collector run.
+
+    Shared by the CLI and the console so both take the same path. `on_event`
+    receives stage dicts, which drive the live view in the UI.
+    """
+    def emit(stage: str, detail: str) -> None:
+        if on_event:
+            on_event({"event": "stage", "stage": stage, "detail": detail})
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    db_path = output_dir / "sizing.sqlite"
+
+    emit("load", "loading discovery into SQLite")
+    loaded = loader.load_run(run_dir, db_path)
+    emit("loaded", f"{loaded['total_rows']} rows across {len(loaded['tables'])} tables")
+
+    emit("facts", "reading feature usage, segments and utilization")
+    conn = sqlite3.connect(db_path)
+    try:
+        facts = facts_mod.extract(conn, measured=measured)
+    finally:
+        conn.close()
+    emit(
+        "facts_done",
+        f"{facts['segment_gb']} GB, {len(facts['features_detected'])} features in use, "
+        f"utilization {facts['utilization']['basis']}",
+    )
+
+    emit("propose", "proposing edition, instance class and storage")
+    proposal = propose_mod.propose(facts, use_bedrock=use_bedrock, model_id=model_id)
+    emit("proposed", f"{proposal['edition']} / {proposal['instance_class']} ({proposal['source']})")
+
+    emit("validate", "running the rules engine against the proposal")
+    decision = validate_mod.validate(proposal, facts)
+    emit(
+        "validated",
+        f"{decision['override_count']} override(s), {decision['warning_count']} warning(s)",
+    )
+
+    out = {
+        "collector_run_id": loaded["collector_run_id"],
+        "decided_at_utc": datetime.now(timezone.utc).isoformat(),
+        "facts": facts,
+        "proposal": proposal,
+        "decision": decision,
+    }
+    (output_dir / "sizing.json").write_text(
+        json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return out
+
+
+def load_utilization(path: Path) -> dict:
+    """Load a utilization feed, or record why it was refused."""
+    try:
+        return utilization_mod.load(path)
+    except utilization_mod.UtilizationError as exc:
+        return {"path": str(path), "usable_for_sizing": False, "reason": str(exc)}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="DBShift size and edition decision")
     parser.add_argument("--run", type=str, default=None, help="collector_run_id")
@@ -58,47 +126,31 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     run_dir = args.collector_output / args.run if args.run else _latest_run(args.collector_output)
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    db_path = args.output_dir / "sizing.sqlite"
 
     measured = None
     if args.utilization:
-        try:
-            measured = utilization_mod.load(args.utilization)
+        measured = load_utilization(args.utilization)
+        if measured.get("usable_for_sizing"):
             log.info(
-                "utilization loaded source=%s window_days=%d usable=%s",
+                "utilization loaded source=%s window_days=%d",
                 measured["source"],
                 measured["window_days"],
-                measured["usable_for_sizing"],
             )
-        except utilization_mod.UtilizationError as exc:
+        else:
             # Refused, not ignored. Sizing continues on the capacity floor and
             # the validation trail records why the feed was not used.
-            print(f"utilization file rejected: {exc}", file=sys.stderr)
-            measured = {"path": str(args.utilization), "usable_for_sizing": False, "reason": str(exc)}
+            print(f"utilization file rejected: {measured['reason']}", file=sys.stderr)
 
-    loaded = loader.load_run(run_dir, db_path)
-    conn = sqlite3.connect(db_path)
-    try:
-        facts = facts_mod.extract(conn, measured=measured)
-    finally:
-        conn.close()
-
-    proposal = propose_mod.propose(facts, use_bedrock=args.bedrock, model_id=args.model_id)
-    decision = validate_mod.validate(proposal, facts)
-
-    out = {
-        "collector_run_id": loaded["collector_run_id"],
-        "decided_at_utc": datetime.now(timezone.utc).isoformat(),
-        "facts": facts,
-        "proposal": proposal,
-        "decision": decision,
-    }
-    path = args.output_dir / "sizing.json"
-    path.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+    out = execute(
+        run_dir,
+        args.output_dir,
+        measured=measured,
+        use_bedrock=args.bedrock,
+        model_id=args.model_id,
+    )
 
     _report(out)
-    print(f"\nwritten: {path}")
+    print(f"\nwritten: {args.output_dir / 'sizing.json'}")
     return 0
 
 
