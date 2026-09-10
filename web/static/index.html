@@ -663,7 +663,12 @@ function show(id){
 function setStage(id, state, sub){
   stageState[id] = state;
   if (sub !== undefined) stageSub[id] = sub;
+  // Both readers of stageState must redraw, not just the rail. When a run
+  // finished it unlocked the next stage and the rail lit up, but the Next
+  // button kept the disabled attribute it was rendered with while that stage
+  // was still idle -- so the rail said "go" and the button said "no".
   renderRail();
+  renderPageNav();
 }
 
 /* ---------------- connect ---------------- */
