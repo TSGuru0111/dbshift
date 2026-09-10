@@ -1,11 +1,12 @@
 # Phase 5 — Blocker gate
 
-> **Latest update — 2026-09-10.** Phase built. The gate halts the run when any
-> critical finding is open, but it also reports **which downstream phases each
-> blocker actually stands in front of**, because a binary halt sends people to
-> fix the wrong thing. On the current estate it returns **HALT**, with
-> `provision` clear and `migrate_cdc`, `validate` and `cutover` blocked. Waivers
-> exist and require a named approver plus a real reason.
+> **Latest update — 2026-09-10.** Phase built **and added to the console as
+> stage 6**, including granting and revoking waivers from each blocker. The gate
+> halts the run when any critical finding is open, but it also reports **which
+> downstream phases each blocker actually stands in front of**, because a binary
+> halt sends people to fix the wrong thing. On the current estate it returns
+> **HALT**, with `provision` clear and `migrate_cdc`, `validate` and `cutover`
+> blocked. Waivers require a named approver plus a real reason.
 
 ## Purpose
 
@@ -100,7 +101,13 @@ Waiver file shape:
   "reason": "Client accepts a full-outage cutover; the restart ARCHIVELOG needs is not scheduled before the pilot."}]
 ```
 
-Not yet exposed in the console.
+**Console: stage 6.** Waivers are granted and revoked per blocker there, with
+validation shared from `blocker/policy.py` so the two cannot drift on what counts
+as a real waiver.
+
+The gate is fast and deterministic, so the console calls it as a plain request
+rather than streaming a progress ticker. There is nothing to watch, and faking
+progress for a five-millisecond operation would be theatre.
 
 ## Current result on the reference estate
 
@@ -120,6 +127,12 @@ source is changed. That is a source-side database restart, not something the
 pipeline can fix for you.
 
 ## Change log
+
+**2026-09-10 — console stage added.** Stage 6: verdict banner, per-phase table,
+expandable blockers, and waiver grant/revoke. Found and fixed a routing bug while
+testing it — `DELETE /api/waivers/...` returned 404 because an earlier catch-all
+`/api/{kind}/{identifier}` route matched first and answered from the wrong
+handler. Replaced with explicit paths.
 
 **2026-09-10 — built.** Phase created: `blocker/policy.py` (blast radius, waiver
 validation), `blocker/gate.py` (evaluation), `blocker/run.py` (CLI). Verified
