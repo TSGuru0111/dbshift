@@ -63,8 +63,18 @@ def load_run(run_dir: Path, db_path: Path) -> dict:
     """
     if db_path.exists():
         db_path.unlink()
+    # Closed before returning. A leaked handle is invisible in a CLI that exits
+    # straight after, but in a long-running server it keeps the file locked and
+    # the next run's unlink() fails on Windows.
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    try:
+        return _load(conn, run_dir)
+    finally:
+        conn.close()
+
+
+def _load(conn: sqlite3.Connection, run_dir: Path) -> dict:
 
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     loaded: dict[str, int] = {}

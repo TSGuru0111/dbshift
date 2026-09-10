@@ -7,6 +7,9 @@ collector/output/
 assess/output/
 sizing/output/
 
+# Per-machine console preferences: which checks are on, and custom ones
+web/settings.json
+
 # Python
 __pycache__/
 *.py[cod]

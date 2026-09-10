@@ -229,12 +229,27 @@ cross-region inference profile (`apac.*` APAC-scoped, `global.*` global). Use
 `aws bedrock list-inference-profiles` and bind the profile id. `bedrock/models.json`
 already records which tier uses which form.
 
-**Unverified claim to be careful with:** a session transcript reported
-successful invokes of Claude Sonnet 4, Sonnet 4.5 and Claude 3 Haiku on this
-account, and reported `claude-sonnet-5` as the only denial. **That could not be
-reproduced here** — every invoke fails with the Marketplace error above, from
-valid credentials on the same role ARN. Treat those model-by-model results as
-unconfirmed until `bedrock.verify` passes.
+**Resolved — the earlier "unverified claim" was real but transient.** A session
+on 2026-09-09 invoked Claude Sonnet 4 (`apac.*` profile), Sonnet 4.5 (`global.*`
+profile) and Claude 3 Haiku (bare id) successfully — actual response bodies with
+message ids, not a misread. `claude-sonnet-5` denied with a *different* error
+(`is not available for this account`, no Marketplace text) — a real entitlement
+gap, not this bug.
+
+Roughly 10–15 minutes later, in the same session, the identical calls started
+failing with the Marketplace subscription error — reproduced twice, once with a
+freshly pasted session token and once with the separate `dbshift-static` static
+profile already on disk, both resolving to the same role ARN
+(`AROARRQL2XNNOVNVDSGNI`). `python -m bedrock.verify --include-alternates` also
+returned 0/4.
+
+**Working theory:** on a brand-new account, Bedrock's first invoke of a model
+rides through before its self-subscribe attempt is authoritatively evaluated,
+then later calls hit the real (denied) Marketplace state once it settles. Do
+not rely on an early success surviving — re-run `bedrock.verify` immediately
+before depending on it, and treat a pass as good only for that moment. This
+does not change the fix: an admin still needs to do one of the two things
+above.
 
 ## Do these first, before any billable resource
 

@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DBShift Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#F4F6F8; --chrome:#101820; --surface:#FFFFFF; --surface-2:#EDF1F4;
+  --ink:#111A22; --ink-2:#4F626F; --ink-3:#7A8B97;
+  --rule:#DAE1E7; --rule-strong:#BFCAD3;
+  --accent:#0C6E75; --accent-soft:#DCEDEE; --accent-ink:#0A5A60;
+  --ok:#1F7A4C; --ok-soft:#E0F0E7;
+  --warn:#8A6A0D; --warn-soft:#F6EEDA;
+  --bad:#A31D2C; --bad-soft:#F7E3E5;
+  --crit:#A31D2C; --high:#BE5A12; --med:#8A6A0D; --low:#3D6B8E; --info:#6D7883;
+  --ease:cubic-bezier(.2,0,0,1);
+  --shadow:0 1px 2px rgba(17,26,34,.05), 0 10px 30px -20px rgba(17,26,34,.35);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --ground:#0C1116; --chrome:#080C11; --surface:#131C24; --surface-2:#1A242D;
+    --ink:#E4EBF0; --ink-2:#93A2AE; --ink-3:#6E7D89;
+    --rule:#232F39; --rule-strong:#33424D;
+    --accent:#46AEB4; --accent-soft:#10312F; --accent-ink:#7FD0D4;
+    --ok:#5BBE87; --ok-soft:#12271C;
+    --warn:#C9A63E; --warn-soft:#2A2313;
+    --bad:#E4707F; --bad-soft:#2B1418;
+    --crit:#E4707F; --high:#E39A55; --med:#C9A63E; --low:#7BA9C9; --info:#93A0AB;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 10px 30px -20px rgba(0,0,0,.8);
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,sans-serif;font-size:14px;line-height:1.55;
+  -webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:Archivo,system-ui,sans-serif;margin:0;text-wrap:balance}
+p{margin:0}
+button{font:inherit}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+.num{font-variant-numeric:tabular-nums}
+
+/* ---------- chrome + stage rail ---------- */
+header{background:var(--chrome);color:#E8EEF2;padding:14px 24px 0}
+.brand{display:flex;align-items:baseline;gap:12px;max-width:1180px;margin:0 auto}
+.brand h1{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.brand .tag{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.13em;
+  text-transform:uppercase;color:#6F8593}
+.brand .right{margin-left:auto;display:flex;align-items:center;gap:14px}
+.linkbtn{background:none;border:none;color:#8FA5B3;font-size:12px;cursor:pointer;padding:4px 2px;
+  border-bottom:1px solid transparent;transition:color .15s var(--ease)}
+.linkbtn:hover{color:#E8EEF2}
+.linkbtn[aria-pressed="true"]{color:var(--accent-ink);border-bottom-color:var(--accent-ink)}
+
+.rail{max-width:1180px;margin:0 auto;display:flex;gap:0;padding:16px 0 0}
+.stage{flex:1;position:relative;padding:0 0 16px;cursor:default;text-align:left;
+  background:none;border:none;color:inherit}
+.stage:not(:last-child)::after{content:"";position:absolute;top:11px;left:calc(50% + 18px);
+  right:calc(-50% + 18px);height:1px;background:#26333D}
+.stage.done:not(:last-child)::after{background:var(--accent)}
+.stage .dot{width:22px;height:22px;border-radius:50%;border:1.5px solid #33434F;
+  background:var(--chrome);display:grid;place-items:center;position:relative;z-index:1;
+  font-family:"IBM Plex Mono",monospace;font-size:10px;color:#7A8D9B;
+  transition:border-color .3s var(--ease),background .3s var(--ease),color .3s var(--ease)}
+.stage.active .dot{border-color:var(--accent);color:#fff;background:var(--accent)}
+.stage.done .dot{border-color:var(--accent);background:var(--accent);color:#fff}
+.stage .label{font-size:12.5px;font-weight:500;color:#7A8D9B;margin-top:8px;
+  transition:color .3s var(--ease)}
+.stage.active .label,.stage.done .label{color:#E8EEF2}
+.stage .sub{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:#5E7080;
+  margin-top:2px;min-height:14px}
+.stage.active .sub{color:var(--accent-ink)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.stage.busy .dot{animation:pulse 1.4s var(--ease) infinite}
+
+/* ---------- layout ---------- */
+main{max-width:1180px;margin:0 auto;padding:28px 24px 80px}
+.view{display:none}
+.view.on{display:block;animation:rise .32s var(--ease) both}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.head{margin-bottom:20px}
+.head h2{font-size:22px;font-weight:700;letter-spacing:-.02em}
+.head p{color:var(--ink-2);margin-top:6px;max-width:70ch}
+.panel{background:var(--surface);border:1px solid var(--rule);border-radius:4px;box-shadow:var(--shadow)}
+.pad{padding:20px}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:860px){.split{grid-template-columns:1fr}}
+.eyebrow{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:12px}
+
+/* ---------- form ---------- */
+.field{margin-bottom:14px}
+.field label{display:block;font-size:11.5px;font-weight:500;color:var(--ink-2);margin-bottom:5px}
+.field input,.field select,.field textarea{width:100%;padding:9px 11px;border:1px solid var(--rule-strong);
+  border-radius:3px;background:var(--surface);color:var(--ink);
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;transition:border-color .15s var(--ease)}
+.field textarea{font-size:12px;line-height:1.5;resize:vertical;min-height:90px}
+.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-soft)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+.btn{background:var(--accent);color:#fff;border:none;padding:10px 18px;border-radius:3px;
+  font-size:13px;font-weight:500;cursor:pointer;transition:opacity .15s var(--ease)}
+.btn:hover:not(:disabled){opacity:.88}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn.ghost{background:none;border:1px solid var(--rule-strong);color:var(--ink-2)}
+.btn.ghost:hover:not(:disabled){border-color:var(--ink-3);color:var(--ink)}
+.btn.sm{padding:6px 12px;font-size:12px}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ---------- status ---------- */
+.status{display:flex;align-items:center;gap:9px;padding:11px 14px;border-radius:3px;
+  border:1px solid var(--rule);background:var(--surface-2);font-size:13px}
+.status .led{width:9px;height:9px;border-radius:50%;background:var(--ink-3);flex:none}
+.status.ok{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
+.status.ok .led{background:var(--ok)}
+.status.bad{background:var(--bad-soft);border-color:var(--bad);color:var(--bad)}
+.status.bad .led{background:var(--bad)}
+.status.busy .led{background:var(--warn);animation:pulse 1.2s var(--ease) infinite}
+
+.checks{display:flex;flex-direction:column;gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.check{background:var(--surface);padding:11px 14px;display:grid;grid-template-columns:auto 1fr;
+  gap:11px;align-items:start}
+.check .mark{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;
+  font-size:10px;font-weight:700;color:#fff;margin-top:2px;flex:none}
+.check.pass .mark{background:var(--ok)}
+.check.warn .mark{background:var(--warn)}
+.check.fail .mark{background:var(--bad)}
+.check .name{font-size:12.5px;font-weight:600}
+.check .detail{font-size:12px;color:var(--ink-2);margin-top:2px}
+.check .remedy{font-size:12px;color:var(--ink-2);margin-top:6px;padding:8px 10px;
+  background:var(--surface-2);border-left:2px solid var(--rule-strong);border-radius:0 2px 2px 0}
+.check.fail .remedy{border-left-color:var(--bad)}
+.check.warn .remedy{border-left-color:var(--warn)}
+
+.facts{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:3px;overflow:hidden;margin-top:14px}
+.facts div{background:var(--surface);padding:10px 13px}
+.facts .k{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-3)}
+.facts .v{font-family:"IBM Plex Mono",monospace;font-size:12.5px;margin-top:3px;word-break:break-word}
+
+.netreq{display:flex;flex-direction:column;gap:12px}
+.netreq div{padding-left:13px;border-left:2px solid var(--accent)}
+.netreq .t{font-size:12.5px;font-weight:600}
+.netreq .d{font-size:12px;color:var(--ink-2);margin-top:2px}
+
+/* ---------- live probe / rule ticker ---------- */
+.ticker{display:flex;flex-direction:column;gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:3px;overflow:hidden;max-height:340px;overflow-y:auto}
+.tick{background:var(--surface);padding:9px 13px;display:grid;
+  grid-template-columns:18px 1fr auto;gap:11px;align-items:center;font-size:12.5px}
+.tick .st{width:8px;height:8px;border-radius:50%;background:var(--rule-strong);justify-self:center}
+.tick.run .st{background:var(--accent);animation:pulse 1s var(--ease) infinite}
+.tick.done .st{background:var(--ok)}
+.tick.err .st{background:var(--bad)}
+.tick .nm{font-family:"IBM Plex Mono",monospace}
+.tick .meta{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-3)}
+.tick.run .nm{color:var(--accent-ink);font-weight:500}
+
+/* ---------- summary tiles ---------- */
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+@media(max-width:860px){.tiles{grid-template-columns:repeat(2,1fr)}}
+.tile{background:var(--surface);padding:15px 16px}
+.tile .k{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-3)}
+.tile .v{font-family:Archivo,sans-serif;font-size:25px;font-weight:700;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;margin-top:4px}
+.tile .v small{font-size:13px;font-weight:500;color:var(--ink-3);margin-left:2px}
+.tile .h{font-size:11.5px;color:var(--ink-2);margin-top:3px}
+
+/* ---------- accordion ---------- */
+.acc{display:flex;flex-direction:column;gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+details.item{background:var(--surface)}
+details.item>summary{padding:12px 15px;cursor:pointer;display:grid;
+  grid-template-columns:auto 1fr auto;gap:12px;align-items:center;list-style:none}
+details.item>summary::-webkit-details-marker{display:none}
+details.item>summary::before{content:"›";font-family:"IBM Plex Mono",monospace;color:var(--ink-3);
+  transition:transform .25s var(--ease);display:inline-block;font-size:15px}
+details.item[open]>summary::before{transform:rotate(90deg)}
+details.item>summary:hover{background:var(--surface-2)}
+.item .title{font-size:13px;font-weight:500}
+.item .title .sub{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-3);
+  margin-left:8px;font-weight:400}
+.item .count{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-2);
+  background:var(--surface-2);border:1px solid var(--rule);padding:1px 8px;border-radius:2px}
+.item .body{padding:0 15px 15px;border-top:1px solid var(--rule)}
+.item .body p.why{font-size:12.5px;color:var(--ink-2);margin:12px 0}
+
+.tblwrap{overflow-x:auto;border:1px solid var(--rule);border-radius:3px;margin-top:12px}
+table{border-collapse:collapse;width:100%;font-size:12px;min-width:520px}
+th{text-align:left;font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-3);font-weight:500;padding:8px 11px;
+  border-bottom:1px solid var(--rule-strong);white-space:nowrap;background:var(--surface-2)}
+td{padding:7px 11px;border-bottom:1px solid var(--rule);font-family:"IBM Plex Mono",monospace;
+  font-size:11.5px;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis}
+tr:last-child td{border-bottom:none}
+
+.sev{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.05em;font-weight:500;
+  display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.sev::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.sev.CRITICAL{color:var(--crit)}.sev.HIGH{color:var(--high)}.sev.MEDIUM{color:var(--med)}
+.sev.LOW{color:var(--low)}.sev.INFO{color:var(--info)}
+
+.bars{display:flex;flex-direction:column;gap:11px}
+.bar{display:grid;grid-template-columns:132px 1fr 44px;gap:13px;align-items:center;font-size:12.5px}
+.bar .track{height:18px;background:var(--surface-2);border-radius:2px;overflow:hidden}
+.bar .fill{height:100%;background:var(--accent);border-radius:0 2px 2px 0;
+  transition:width .7s var(--ease)}
+.bar .val{font-family:"IBM Plex Mono",monospace;font-weight:500;font-variant-numeric:tabular-nums;
+  text-align:right}
+
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;align-items:center}
+.chip{font-family:"IBM Plex Mono",monospace;font-size:11.5px;padding:5px 11px;
+  border:1px solid var(--rule-strong);background:var(--surface);color:var(--ink-2);
+  border-radius:2px;cursor:pointer;transition:.13s var(--ease)}
+.chip:hover{border-color:var(--ink-3);color:var(--ink)}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+
+.toggle{position:relative;width:34px;height:19px;flex:none}
+.toggle input{opacity:0;width:0;height:0;position:absolute}
+.toggle .slide{position:absolute;inset:0;background:var(--rule-strong);border-radius:19px;
+  cursor:pointer;transition:background .2s var(--ease)}
+.toggle .slide::before{content:"";position:absolute;width:15px;height:15px;left:2px;top:2px;
+  background:#fff;border-radius:50%;transition:transform .2s var(--ease)}
+.toggle input:checked + .slide{background:var(--accent)}
+.toggle input:checked + .slide::before{transform:translateX(15px)}
+.toggle input:focus-visible + .slide{outline:2px solid var(--accent);outline-offset:2px}
+
+.note{padding:11px 14px;border-radius:3px;font-size:12.5px;margin-bottom:14px}
+.note.info{background:var(--accent-soft);color:var(--accent-ink);border-left:2px solid var(--accent)}
+.note.bad{background:var(--bad-soft);color:var(--bad);border-left:2px solid var(--bad)}
+.note.warn{background:var(--warn-soft);color:var(--warn);border-left:2px solid var(--warn)}
+.empty{padding:34px;text-align:center;color:var(--ink-3);font-size:13px}
+.mt{margin-top:20px}.mt-s{margin-top:12px}
+.spread{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>DBShift</h1>
+    <span class="tag">Oracle → RDS migration console</span>
+    <div class="right">
+      <button class="linkbtn" id="navCatalogue" aria-pressed="false">Rules &amp; probes</button>
+    </div>
+  </div>
+  <nav class="rail" id="rail"></nav>
+</header>
+
+<main>
+  <!-- ============ 1. CONNECT ============ -->
+  <section class="view on" id="view-connect">
+    <div class="head">
+      <h2>Connect to the source database</h2>
+      <p>Read-only. The collector issues no DDL and no DML. Your password stays in this
+         process's memory and is never written to disk or sent to the browser.</p>
+    </div>
+    <div class="split">
+      <div class="panel pad">
+        <div class="eyebrow">Connection</div>
+        <div class="field"><label for="dsn">DSN — host:port/service</label>
+          <input id="dsn" value="localhost:1521/XEPDB1" spellcheck="false"></div>
+        <div class="row2">
+          <div class="field"><label for="user">User</label>
+            <input id="user" value="dbmig_collector" spellcheck="false"></div>
+          <div class="field"><label for="schema">Application schema</label>
+            <input id="schema" value="DBMIG_APP" spellcheck="false"></div>
+        </div>
+        <div class="field"><label for="password">Password</label>
+          <input id="password" type="password" placeholder="not stored anywhere"></div>
+        <div class="spread mt-s">
+          <button class="btn" id="btnConnect">Connect</button>
+          <button class="btn ghost sm" id="btnDisconnect" style="display:none">Disconnect</button>
+        </div>
+        <div class="mt-s"><div class="status" id="connStatus">
+          <span class="led"></span><span id="connText">Not connected</span></div></div>
+        <div id="facts"></div>
+      </div>
+      <div class="panel pad">
+        <div class="eyebrow">Preflight</div>
+        <div id="checks"><div class="empty">Connect to run the preflight checks.</div></div>
+      </div>
+    </div>
+    <div class="panel pad mt">
+      <div class="eyebrow">What a client environment needs</div>
+      <p style="color:var(--ink-2);font-size:12.5px;margin-bottom:14px;max-width:78ch">
+        On this laptop the database is local, so nothing is in the way. At a client site these
+        are what to request up front — the first one blocks everything else.</p>
+      <div class="netreq" id="netreq"></div>
+    </div>
+  </section>
+
+  <!-- ============ 2. DISCOVER ============ -->
+  <section class="view" id="view-discover">
+    <div class="head">
+      <h2>Discovery</h2>
+      <p>Each probe reads one area of the data dictionary. They run in order, and every
+         statement is logged with its row count and duration.</p>
+    </div>
+    <div class="spread" style="margin-bottom:16px">
+      <button class="btn" id="btnDiscover">Run discovery</button>
+      <span class="mono" id="discMeta" style="font-size:12px;color:var(--ink-3)"></span>
+    </div>
+    <div id="discLive" style="display:none"><div class="ticker" id="probeTicker"></div></div>
+    <div id="discResult" style="display:none">
+      <div class="eyebrow mt">At a glance</div>
+      <div class="tiles" id="discTiles"></div>
+      <div class="spread mt"><div class="eyebrow" style="margin:0">Everything collected</div>
+        <span class="mono" style="font-size:11.5px;color:var(--ink-3)">click any dataset to open it</span></div>
+      <div class="acc mt-s" id="discAcc"></div>
+      <div class="spread mt" id="toAssess" style="display:none">
+        <span style="font-size:12.5px;color:var(--ink-2)">Discovery complete. The assessment
+          runs its rules against exactly this data.</span>
+        <button class="btn" onclick="show('assess')">Continue to assessment →</button>
+      </div>
+    </div>
+    <div id="discEmpty" class="panel"><div class="empty">Run discovery to inventory the estate.</div></div>
+  </section>
+
+  <!-- ============ 3. ASSESS ============ -->
+  <section class="view" id="view-assess">
+    <div class="head">
+      <h2>Assessment</h2>
+      <p>Every rule is a row in a table with a SQL predicate, a severity and a remediation
+         level. Severity comes from the rule, never decided at runtime — so the same estate
+         always scores the same.</p>
+    </div>
+    <div class="spread" style="margin-bottom:16px">
+      <button class="btn" id="btnAssess">Run assessment</button>
+      <span class="mono" id="assessMeta" style="font-size:12px;color:var(--ink-3)"></span>
+    </div>
+    <div id="assessLive" style="display:none"><div class="ticker" id="ruleTicker"></div></div>
+    <div id="assessResult" style="display:none">
+      <div class="split mt">
+        <div class="panel pad">
+          <div class="eyebrow">Category scores</div>
+          <div class="bars" id="scoreBars"></div>
+        </div>
+        <div class="panel pad">
+          <div class="eyebrow">Headline</div>
+          <div class="tiles" style="border:none;grid-template-columns:repeat(2,1fr)" id="assessTiles"></div>
+        </div>
+      </div>
+      <div class="mt"><div class="eyebrow">Issues</div>
+        <div class="chips" id="sevChips"></div>
+        <div class="acc" id="issueAcc"></div>
+        <div class="mono mt-s" id="issueCount" style="font-size:11.5px;color:var(--ink-3)"></div>
+      </div>
+    </div>
+    <div id="assessEmpty" class="panel"><div class="empty">Run discovery first, then assess.</div></div>
+  </section>
+
+  <!-- ============ CATALOGUE ============ -->
+  <section class="view" id="view-catalogue">
+    <div class="head">
+      <h2>Rules &amp; probes</h2>
+      <p>Switch any check off and it will not run. Built-in checks are never edited — disabling
+         one records the choice separately, so it can always be switched back on.</p>
+    </div>
+    <div class="panel pad">
+      <div class="spread"><div class="eyebrow" style="margin:0">Discovery probes</div>
+        <button class="btn ghost sm" id="btnAddProbe">Add a probe</button></div>
+      <div class="acc mt-s" id="probeList"></div>
+      <form id="probeForm" style="display:none" class="mt">
+        <div class="note info">A custom probe is a <b>SELECT against the data dictionary</b>.
+          Its result becomes a dataset like any other. Read-only is enforced here as well as
+          by the database account.</div>
+        <div class="row2">
+          <div class="field"><label for="pName">Name — lowercase, no spaces</label>
+            <input id="pName" placeholder="tablespace_growth"></div>
+          <div class="field"><label for="pDesc">What it reads</label>
+            <input id="pDesc" placeholder="Tablespace free space over time"></div>
+        </div>
+        <div class="field"><label for="pSql">SQL</label>
+          <textarea id="pSql" spellcheck="false" placeholder="SELECT tablespace_name, bytes FROM dba_data_files"></textarea></div>
+        <div class="spread"><button class="btn sm" type="submit">Add probe</button>
+          <button class="btn ghost sm" type="button" id="pCancel">Cancel</button></div>
+        <div id="pErr"></div>
+      </form>
+    </div>
+
+    <div class="panel pad mt">
+      <div class="spread"><div class="eyebrow" style="margin:0">Assessment rules</div>
+        <button class="btn ghost sm" id="btnAddRule">Add a rule</button></div>
+      <div class="chips mt-s" id="ruleCatChips"></div>
+      <div class="acc" id="ruleList"></div>
+      <form id="ruleForm" style="display:none" class="mt">
+        <div class="note info">The predicate runs against the loaded discovery data in SQLite.
+          Return <b class="mono">owner, object_name, object_type, detail</b> — each row becomes
+          a finding. Query the <b class="mono">v_user_*</b> views to exclude Oracle internals.</div>
+        <div class="row2">
+          <div class="field"><label for="rId">Rule id</label><input id="rId" placeholder="RDS-016"></div>
+          <div class="field"><label for="rTitle">Title</label><input id="rTitle" placeholder="Short statement of the problem"></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label for="rCat">Category</label><select id="rCat">
+            <option value="rds_compatibility">RDS compatibility</option>
+            <option value="data_quality">Data quality</option>
+            <option value="performance">Performance</option>
+            <option value="security">Security</option>
+            <option value="operational_risk">Operational risk</option></select></div>
+          <div class="row2">
+            <div class="field"><label for="rSev">Severity</label><select id="rSev">
+              <option>CRITICAL</option><option>HIGH</option><option selected>MEDIUM</option>
+              <option>LOW</option><option>INFO</option></select></div>
+            <div class="field"><label for="rLvl">Fix level</label><select id="rLvl">
+              <option>L1</option><option selected>L2</option><option>L3</option><option>L4</option></select></div>
+          </div>
+        </div>
+        <div class="field"><label for="rWhy">Why it matters</label>
+          <input id="rWhy" placeholder="What breaks in the migration if this is left alone"></div>
+        <div class="field"><label for="rSql">SQL predicate</label>
+          <textarea id="rSql" spellcheck="false" placeholder="SELECT owner, table_name AS object_name, 'TABLE' AS object_type, '...' AS detail FROM v_user_tables WHERE ..."></textarea></div>
+        <div class="spread"><button class="btn sm" type="submit">Add rule</button>
+          <button class="btn ghost sm" type="button" id="rCancel">Cancel</button></div>
+        <div id="rErr"></div>
+      </form>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = n => (typeof n === 'number' ? n.toLocaleString() : n ?? '—');
+
+const STAGES = [
+  {id:'connect',   label:'Connect',   n:1},
+  {id:'discover',  label:'Discovery', n:2},
+  {id:'assess',    label:'Assessment',n:3},
+];
+let current = 'connect';
+let stageState = {connect:'active', discover:'idle', assess:'idle'};
+let stageSub = {connect:'', discover:'', assess:''};
+let ISSUES = [], sevFilter = new Set(), catFilter = new Set();
+
+function renderRail(){
+  $('#rail').innerHTML = STAGES.map(s => {
+    const st = stageState[s.id];
+    const cls = [st === 'done' ? 'done' : '', st === 'active' || st === 'busy' ? 'active' : '',
+                 st === 'busy' ? 'busy' : ''].filter(Boolean).join(' ');
+    return `<button class="stage ${cls}" data-stage="${s.id}">
+      <div class="dot">${st === 'done' ? '✓' : s.n}</div>
+      <div class="label">${s.label}</div>
+      <div class="sub">${esc(stageSub[s.id])}</div></button>`;
+  }).join('');
+  document.querySelectorAll('.stage').forEach(el => el.onclick = () => {
+    const id = el.dataset.stage;
+    if (stageState[id] !== 'idle') show(id);
+  });
+}
+function show(id){
+  current = id;
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('on'));
+  $('#view-' + id).classList.add('on');
+  $('#navCatalogue').setAttribute('aria-pressed', id === 'catalogue');
+  if (id !== 'catalogue') {
+    for (const s of STAGES) if (stageState[s.id] === 'active' && s.id !== id) stageState[s.id] = 'done';
+    if (stageState[id] !== 'done') stageState[id] = 'active';
+    renderRail();
+  }
+}
+function setStage(id, state, sub){
+  stageState[id] = state;
+  if (sub !== undefined) stageSub[id] = sub;
+  renderRail();
+}
+
+/* ---------------- connect ---------------- */
+async function loadState(){
+  const s = await (await fetch('/api/state')).json();
+  $('#netreq').innerHTML = s.network_requirements.map(r =>
+    `<div><div class="t">${esc(r.title)}</div><div class="d">${esc(r.detail)}</div></div>`).join('');
+  if (s.connected) { applyConnected(s.checks, s.facts); }
+}
+
+function applyConnected(checks, facts){
+  $('#connStatus').className = 'status ok';
+  $('#connText').textContent = 'Connected — ' + (facts.container || '');
+  $('#btnDisconnect').style.display = '';
+  setStage('connect', 'done', facts.version ? facts.version.split(' ').slice(0,4).join(' ') : 'connected');
+  setStage('discover', stageState.discover === 'idle' ? 'active' : stageState.discover);
+  renderChecks(checks);
+  renderFacts(facts);
+  $('#btnDiscover').disabled = false;
+  $('#discEmpty').querySelector('.empty').textContent = 'Run discovery to inventory the estate.';
+}
+
+function renderChecks(checks){
+  $('#checks').innerHTML = `<div class="checks">` + checks.map(c => `
+    <div class="check ${c.status}">
+      <span class="mark">${c.status === 'pass' ? '✓' : c.status === 'warn' ? '!' : '×'}</span>
+      <div><div class="name">${esc(c.name)}</div>
+        <div class="detail">${esc(c.detail)}</div>
+        ${c.remedy ? `<div class="remedy">${esc(c.remedy)}</div>` : ''}</div>
+    </div>`).join('') + `</div>`;
+}
+function renderFacts(f){
+  const rows = [['Version', (f.version||'').replace(/\s+/g,' ').slice(0,46)], ['Container', f.container],
+    ['Log mode', f.log_mode], ['Supplemental log', f.supplemental_logging],
+    ['Segments', f.segments], ['Size', f.size_gb != null ? f.size_gb + ' GB' : null]]
+    .filter(([,v]) => v != null && v !== '');
+  $('#facts').innerHTML = rows.length ? `<div class="facts">` + rows.map(([k,v]) =>
+    `<div><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('') + `</div>` : '';
+}
+
+$('#btnConnect').onclick = async () => {
+  const btn = $('#btnConnect');
+  btn.disabled = true;
+  $('#connStatus').className = 'status busy';
+  $('#connText').textContent = 'Connecting…';
+  setStage('connect', 'busy', 'testing');
+  try {
+    const r = await fetch('/api/connect', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({dsn:$('#dsn').value, user:$('#user').value,
+        password:$('#password').value, schema_name:$('#schema').value})});
+    const d = await r.json();
+    renderChecks(d.checks); renderFacts(d.facts);
+    if (d.ok) {
+      applyConnected(d.checks, d.facts);
+      // Advance to the next stage once the connection is proven, so the run
+      // reads as a sequence rather than one long page.
+      setTimeout(() => show('discover'), 550);
+    }
+    else {
+      $('#connStatus').className = 'status bad';
+      const failed = d.checks.find(c => c.status === 'fail');
+      $('#connText').textContent = failed ? failed.name + ' failed' : 'Not connected';
+      setStage('connect', 'active', 'blocked');
+    }
+  } catch (e) {
+    $('#connStatus').className = 'status bad';
+    $('#connText').textContent = 'Request failed — is the server running?';
+    setStage('connect', 'active', '');
+  }
+  btn.disabled = false;
+};
+
+$('#btnDisconnect').onclick = async () => {
+  await fetch('/api/disconnect', {method:'POST'});
+  $('#connStatus').className = 'status'; $('#connText').textContent = 'Not connected';
+  $('#btnDisconnect').style.display = 'none'; $('#facts').innerHTML = '';
+  $('#checks').innerHTML = '<div class="empty">Connect to run the preflight checks.</div>';
+  $('#btnDiscover').disabled = true;
+  stageState = {connect:'active', discover:'idle', assess:'idle'};
+  stageSub = {connect:'', discover:'', assess:''};
+  renderRail();
+};
+
+/* ---------------- discovery ---------------- */
+$('#btnDiscover').disabled = true;
+$('#btnDiscover').onclick = () => {
+  const btn = $('#btnDiscover');
+  btn.disabled = true;
+  $('#discEmpty').style.display = 'none';
+  $('#discResult').style.display = 'none';
+  $('#discLive').style.display = '';
+  $('#probeTicker').innerHTML = '';
+  setStage('discover', 'busy', 'starting');
+  const rows = {};
+  const es = new EventSource('/api/discover');
+  es.onmessage = async ev => {
+    const d = JSON.parse(ev.data);
+    if (d.event === 'start') {
+      d.probes.forEach(p => {
+        const el = document.createElement('div');
+        el.className = 'tick'; el.id = 'p-' + p;
+        el.innerHTML = `<span class="st"></span><span class="nm">${esc(p)}</span><span class="meta">queued</span>`;
+        $('#probeTicker').appendChild(el); rows[p] = el;
+      });
+    } else if (d.event === 'probe_start') {
+      const el = rows[d.probe]; if (!el) return;
+      el.className = 'tick run';
+      el.querySelector('.meta').textContent = 'reading…';
+      el.scrollIntoView({block:'nearest'});
+      setStage('discover', 'busy', `${d.index} of ${d.total} — ${d.probe}`);
+    } else if (d.event === 'probe_done') {
+      const el = rows[d.probe]; if (!el) return;
+      el.className = 'tick ' + (d.failed && d.failed.length ? 'err' : 'done');
+      el.querySelector('.meta').textContent =
+        `${fmt(d.rows)} rows · ${d.queries} queries · ${d.elapsed_ms} ms`;
+    } else if (d.event === 'complete') {
+      es.close();
+      setStage('discover', 'done', `${d.datasets} datasets · ${fmt(d.total_rows)} rows`);
+      setStage('assess', stageState.assess === 'idle' ? 'active' : stageState.assess);
+      $('#discMeta').textContent =
+        `run ${d.run_id.slice(0,8)} · ${(d.elapsed_ms/1000).toFixed(1)}s` +
+        (d.failed && d.failed.length ? ` · ${d.failed.length} failed queries` : '');
+      $('#btnAssess').disabled = false;
+      await renderDiscovery();
+      btn.disabled = false;
+      $('#toAssess').style.display = '';
+    } else if (d.event === 'error') {
+      es.close();
+      setStage('discover', 'active', 'failed');
+      $('#discLive').insertAdjacentHTML('beforeend',
+        `<div class="note bad mt-s">${esc(d.message)}</div>`);
+      btn.disabled = false;
+    }
+  };
+  es.onerror = () => { es.close(); btn.disabled = false; setStage('discover','active','connection lost'); };
+};
+
+async function renderDiscovery(){
+  const d = await (await fetch('/api/discovery')).json();
+  $('#discTiles').innerHTML = d.summary.map(t => `<div class="tile">
+    <div class="k">${esc(t.label)}</div>
+    <div class="v">${fmt(t.value)}${t.unit ? `<small>${esc(t.unit)}</small>` : ''}</div>
+    <div class="h">${esc(t.hint)}</div></div>`).join('');
+
+  $('#discAcc').innerHTML = d.datasets.map(ds => `
+    <details class="item"><summary>
+      <span class="title">${esc(ds.name)}<span class="sub">${esc(ds.probe || '')}</span></span>
+      <span></span><span class="count">${fmt(ds.row_count)}</span></summary>
+      <div class="body">
+        ${ds.rows.length ? `<div class="tblwrap"><table>
+          <thead><tr>${ds.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+          <tbody>${ds.rows.slice(0,60).map(r => `<tr>${ds.columns.map(c =>
+            `<td title="${esc(r[c])}">${esc(r[c] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody>
+          </table></div>
+          ${ds.row_count > 60 ? `<p class="why">Showing 60 of ${fmt(ds.row_count)} rows.</p>` : ''}`
+        : `<p class="why">No rows. Either this estate has none, or the probe was switched off.</p>`}
+      </div></details>`).join('');
+  $('#discResult').style.display = '';
+}
+
+/* ---------------- assessment ---------------- */
+$('#btnAssess').disabled = true;
+$('#btnAssess').onclick = () => {
+  const btn = $('#btnAssess');
+  btn.disabled = true;
+  $('#assessEmpty').style.display = 'none';
+  $('#assessResult').style.display = 'none';
+  $('#assessLive').style.display = '';
+  $('#ruleTicker').innerHTML = '';
+  setStage('assess', 'busy', 'starting');
+  const es = new EventSource('/api/assess');
+  let last = null;
+  es.onmessage = async ev => {
+    const d = JSON.parse(ev.data);
+    if (d.event === 'stage') {
+      $('#ruleTicker').insertAdjacentHTML('beforeend',
+        `<div class="tick done"><span class="st"></span><span class="nm">${esc(d.stage)}</span>
+         <span class="meta">${esc(d.detail)}</span></div>`);
+    } else if (d.event === 'rule') {
+      if (last) { last.className = 'tick done'; }
+      const el = document.createElement('div');
+      el.className = 'tick run';
+      el.innerHTML = `<span class="st"></span><span class="nm">${esc(d.rule_id)}</span>
+        <span class="meta">${esc(d.title.slice(0,54))}</span>`;
+      $('#ruleTicker').appendChild(el); el.scrollIntoView({block:'nearest'}); last = el;
+      setStage('assess', 'busy', `rule ${d.index} of ${d.total}`);
+    } else if (d.event === 'rule_hits' && last) {
+      last.querySelector('.meta').textContent = `${d.count} finding${d.count === 1 ? '' : 's'}`;
+    } else if (d.event === 'rule_error' && last) {
+      last.className = 'tick err';
+      last.querySelector('.meta').textContent = d.error.slice(0,60);
+    } else if (d.event === 'complete') {
+      es.close();
+      if (last) last.className = 'tick done';
+      setStage('assess', 'done', `${d.issues} issues · score ${d.overall}`);
+      $('#assessMeta').textContent =
+        `${d.findings} findings across ${d.issues} issues · recall ${Math.round(d.recall*100)}%`;
+      await renderAssessment();
+      btn.disabled = false;
+    } else if (d.event === 'error') {
+      es.close(); setStage('assess','active','failed');
+      $('#assessLive').insertAdjacentHTML('beforeend', `<div class="note bad mt-s">${esc(d.message)}</div>`);
+      btn.disabled = false;
+    }
+  };
+  es.onerror = () => { es.close(); btn.disabled = false; setStage('assess','active','connection lost'); };
+};
+
+const CATLABEL = {rds_compatibility:'RDS compatibility', data_quality:'Data quality',
+  performance:'Performance', security:'Security', operational_risk:'Operational risk'};
+
+async function renderAssessment(){
+  const a = await (await fetch('/api/assessment')).json();
+  const s = a.scores, k = a.answer_key;
+  $('#scoreBars').innerHTML = Object.entries(s.by_category).map(([c, v]) => `
+    <div class="bar"><span>${esc(CATLABEL[c] || c)}</span>
+      <div class="track"><div class="fill" style="width:${v.score}%"></div></div>
+      <span class="val">${v.score}</span></div>`).join('');
+
+  $('#assessTiles').innerHTML = [
+    ['Overall', s.overall_score, s.capped_by_critical ? 'capped by a critical finding' : 'category mean'],
+    ['Critical', s.critical_findings, 'block the migration'],
+    ['Recall', Math.round(k.recall*100) + '%', `${k.detected} of ${k.detectable} seeded defects`],
+    ['Issues', a.issues.length, `${s.total_findings} occurrences`],
+  ].map(([kk,v,h]) => `<div class="tile"><div class="k">${esc(kk)}</div>
+      <div class="v">${fmt(v)}</div><div class="h">${esc(h)}</div></div>`).join('');
+
+  ISSUES = a.issues;
+  const sevs = ['CRITICAL','HIGH','MEDIUM','LOW','INFO'];
+  $('#sevChips').innerHTML = sevs.map(sv =>
+    `<button class="chip" data-sev="${sv}" aria-pressed="false">${sv[0]+sv.slice(1).toLowerCase()}</button>`).join('');
+  document.querySelectorAll('#sevChips .chip').forEach(c => c.onclick = () => {
+    const v = c.dataset.sev;
+    sevFilter.has(v) ? sevFilter.delete(v) : sevFilter.add(v);
+    c.setAttribute('aria-pressed', sevFilter.has(v));
+    renderIssues();
+  });
+  renderIssues();
+  $('#assessResult').style.display = '';
+}
+
+function renderIssues(){
+  const list = ISSUES.filter(i => sevFilter.size === 0 || sevFilter.has(i.severity));
+  $('#issueAcc').innerHTML = list.map(i => `
+    <details class="item"><summary>
+      <span class="title"><span class="sev ${i.severity}">${i.severity}</span>
+        &nbsp;${esc(i.title)}<span class="sub">${esc(i.rule_id)} · ${esc(i.remediation_level)}</span></span>
+      <span></span>
+      <span class="count">${i.occurrences > 1 ? '×' + i.occurrences : '1'}</span></summary>
+      <div class="body">
+        <p class="why"><b>${esc(i.sample_detail || '')}</b></p>
+        <p class="why">${esc(i.rationale)}</p>
+        ${i.objects && i.objects.length ? `<div class="tblwrap"><table>
+          <thead><tr><th>Affected object</th></tr></thead><tbody>
+          ${i.objects.slice(0,60).map(o => `<tr><td>${esc(o)}</td></tr>`).join('')}
+          </tbody></table></div>` : ''}
+      </div></details>`).join('') || '<div class="empty">No issues match these filters.</div>';
+  const occ = list.reduce((n,i) => n + i.occurrences, 0);
+  $('#issueCount').textContent = `Showing ${list.length} of ${ISSUES.length} issues (${occ} occurrences)`;
+}
+
+/* ---------------- catalogue ---------------- */
+$('#navCatalogue').onclick = async () => { await renderCatalogue(); show('catalogue'); };
+
+async function renderCatalogue(){
+  const c = await (await fetch('/api/catalogue')).json();
+
+  $('#probeList').innerHTML = c.probes.map(p => `
+    <details class="item"><summary>
+      <span class="title">${esc(p.name)}${p.custom ? '<span class="sub">custom</span>' : ''}</span>
+      <span></span>
+      <span style="display:flex;gap:10px;align-items:center" onclick="event.preventDefault()">
+        ${p.custom ? `<button class="btn ghost sm" onclick="delCustom('probes','${esc(p.name)}')">Delete</button>` : ''}
+        <label class="toggle"><input type="checkbox" ${p.enabled ? 'checked' : ''}
+          onchange="toggle('probe','${esc(p.name)}',this.checked)"><span class="slide"></span></label>
+      </span></summary>
+      <div class="body"><p class="why">${esc(p.description)}</p>
+        ${p.sql ? `<div class="tblwrap"><table><tbody><tr><td style="white-space:pre-wrap;max-width:none">${esc(p.sql)}</td></tr></tbody></table></div>` : ''}
+      </div></details>`).join('');
+
+  const cats = [...new Set(c.rules.map(r => r.category))];
+  $('#ruleCatChips').innerHTML = cats.map(cat =>
+    `<button class="chip" data-cat="${cat}" aria-pressed="${catFilter.has(cat)}">${esc(CATLABEL[cat]||cat)}</button>`).join('');
+  document.querySelectorAll('#ruleCatChips .chip').forEach(el => el.onclick = () => {
+    const v = el.dataset.cat;
+    catFilter.has(v) ? catFilter.delete(v) : catFilter.add(v);
+    renderCatalogue();
+  });
+
+  const rules = c.rules.filter(r => catFilter.size === 0 || catFilter.has(r.category));
+  $('#ruleList').innerHTML = rules.map(r => `
+    <details class="item"><summary>
+      <span class="title"><span class="sev ${r.severity}">${r.severity}</span>
+        &nbsp;${esc(r.title)}<span class="sub">${esc(r.rule_id)}${r.custom ? ' · custom' : ''}</span></span>
+      <span></span>
+      <span style="display:flex;gap:10px;align-items:center" onclick="event.preventDefault()">
+        ${r.custom ? `<button class="btn ghost sm" onclick="delCustom('rules','${esc(r.rule_id)}')">Delete</button>` : ''}
+        <label class="toggle"><input type="checkbox" ${r.enabled ? 'checked' : ''}
+          onchange="toggle('rule','${esc(r.rule_id)}',this.checked)"><span class="slide"></span></label>
+      </span></summary>
+      <div class="body"><p class="why">${esc(r.rationale)}</p>
+        <div class="tblwrap"><table><tbody><tr>
+          <td style="white-space:pre-wrap;max-width:none">${esc(r.sql)}</td></tr></tbody></table></div>
+      </div></details>`).join('');
+}
+
+async function toggle(kind, id, enabled){
+  await fetch('/api/toggle', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({kind, id, enabled})});
+}
+async function delCustom(kind, id){
+  await fetch(`/api/${kind}/${encodeURIComponent(id)}`, {method:'DELETE'});
+  renderCatalogue();
+}
+
+$('#btnAddProbe').onclick = () => { $('#probeForm').style.display = ''; $('#pName').focus(); };
+$('#pCancel').onclick = () => { $('#probeForm').style.display = 'none'; $('#pErr').innerHTML = ''; };
+$('#probeForm').onsubmit = async e => {
+  e.preventDefault();
+  const r = await fetch('/api/probes', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name:$('#pName').value, description:$('#pDesc').value, sql:$('#pSql').value})});
+  const d = await r.json();
+  if (!r.ok) { $('#pErr').innerHTML = `<div class="note bad mt-s">${esc(d.detail)}</div>`; return; }
+  $('#probeForm').style.display = 'none'; $('#pErr').innerHTML = '';
+  $('#pName').value = $('#pDesc').value = $('#pSql').value = '';
+  renderCatalogue();
+};
+
+$('#btnAddRule').onclick = () => { $('#ruleForm').style.display = ''; $('#rId').focus(); };
+$('#rCancel').onclick = () => { $('#ruleForm').style.display = 'none'; $('#rErr').innerHTML = ''; };
+$('#ruleForm').onsubmit = async e => {
+  e.preventDefault();
+  const r = await fetch('/api/rules', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({rule_id:$('#rId').value, category:$('#rCat').value, severity:$('#rSev').value,
+      remediation_level:$('#rLvl').value, title:$('#rTitle').value, rationale:$('#rWhy').value,
+      sql:$('#rSql').value})});
+  const d = await r.json();
+  if (!r.ok) { $('#rErr').innerHTML = `<div class="note bad mt-s">${esc(d.detail)}</div>`; return; }
+  $('#ruleForm').style.display = 'none'; $('#rErr').innerHTML = '';
+  ['#rId','#rTitle','#rWhy','#rSql'].forEach(s => $(s).value = '');
+  renderCatalogue();
+};
+
+renderRail();
+loadState();
+</script>
+</body>
+</html>

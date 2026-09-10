@@ -39,6 +39,31 @@ $env:DBSHIFT_COLLECTOR_PASSWORD='...'      # read-only dbmig_collector
 .\.venv\Scripts\python.exe -m sizing.run          # size+edition -> sizing/output/sizing.json
 ```
 
+## The console
+
+```
+.\.venv\Scripts\python.exe -m web.server          # http://127.0.0.1:8765
+```
+
+Three stages, gated in order: **Connect → Discovery → Assessment**, with a stage
+rail across the top that advances as each finishes. The browser never talks to
+Oracle — the server does, calling the same `collector` and `assess` modules the
+CLI uses, so the UI cannot show a result the CLI would not.
+
+- **Connect** runs a six-check preflight (reachability, auth, container,
+  catalogue access, row-data access, CDC readiness) and states what a client
+  network would need. The password lives in process memory only.
+- **Discovery** streams probe-by-probe progress over SSE, then shows a summary
+  and every dataset in an expandable list.
+- **Assessment** streams rule-by-rule progress, then scores and grouped issues.
+- **Rules &amp; probes** switches any check off, or adds a custom one. Custom
+  probes are a `SELECT` against the data dictionary; custom rules are a `SELECT`
+  against the loaded discovery data. Read-only is enforced in `web/settings.py`
+  as well as by the database account.
+
+Toggles and custom checks live in `web/settings.json` (gitignored, per-machine).
+**The CLI deliberately ignores them** and always runs the shipped catalogue.
+
 Both output directories are gitignored. **No AWS is required for Discover or
 Assess** — SQLite stands in for Aurora and the rules are plain SQL, so they port
 to the metadata repository later with a dialect change. Bedrock does not enter

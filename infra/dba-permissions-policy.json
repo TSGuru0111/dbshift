@@ -36,6 +36,15 @@
       "Resource": "*"
     },
     {
+      "Sid": "BedrockMarketplaceSubscription",
+      "Effect": "Allow",
+      "Action": [
+        "aws-marketplace:ViewSubscriptions",
+        "aws-marketplace:Subscribe"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "NetworkingReadAndSecurityGroups",
       "Effect": "Allow",
       "Action": [

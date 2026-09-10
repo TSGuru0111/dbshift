@@ -1,2 +1,4 @@
 oracledb>=4.0.2
 boto3>=1.43.0
+fastapi>=0.141
+uvicorn>=0.52

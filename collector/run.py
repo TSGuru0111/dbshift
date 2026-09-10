@@ -85,23 +85,22 @@ def _externalize(probe, produced: dict[str, list[dict]], run_dir: Path) -> None:
         log.info("externalized dataset=%s rows=%d dir=%s", dataset, len(rows), target.name)
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="DBShift discovery collector")
-    parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--quiet", action="store_true")
-    args = parser.parse_args(argv)
+def execute(
+    cfg,
+    on_event=None,
+    enabled_probes: list[str] | None = None,
+    extra_probes: list | None = None,
+) -> dict:
+    """Run the probes and write the run directory, returning the manifest.
 
-    logging.basicConfig(
-        level=logging.WARNING if args.quiet else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s %(message)s",
-    )
+    Shared by the CLI and the web app so there is one orchestration path rather
+    than two that drift. `on_event` receives probe_start / probe_done dicts,
+    which is what drives the live stage view in the UI.
 
-    try:
-        cfg = config.load(args.output_dir)
-    except config.ConfigError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-
+    `enabled_probes` selects a subset by name. Skipping a probe is recorded in
+    the manifest -- a dataset absent because it was switched off must not look
+    the same as one that came back empty.
+    """
     run_id = str(uuid.uuid4())
     started = time.perf_counter()
     started_at = datetime.now(timezone.utc).isoformat()
@@ -126,9 +125,21 @@ def main(argv: list[str] | None = None) -> int:
         source = identity_rows[0] if identity_rows else {}
         source["dsn"] = cfg.dsn
 
+        available = list(PROBES) + list(extra_probes or [])
+        selected = [p for p in available if enabled_probes is None or p.NAME in enabled_probes]
+        skipped = [p.NAME for p in available if p not in selected]
+
         datasets: list[dict] = []
         probe_report: list[dict] = []
-        for probe in PROBES:
+        total_probes = len(selected)
+        for index, probe in enumerate(selected, start=1):
+            if on_event:
+                on_event({
+                    "event": "probe_start",
+                    "probe": probe.NAME,
+                    "index": index,
+                    "total": total_probes,
+                })
             mark = len(session.query_log)
             probe_started = time.perf_counter()
             produced = probe.collect(session, owners)
@@ -157,6 +168,19 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
             log.info("probe=%s datasets=%d elapsed_ms=%d", probe.NAME, len(produced), elapsed_ms)
+            if on_event:
+                rows_returned = sum(q.row_count for q in session.query_log[mark:])
+                on_event({
+                    "event": "probe_done",
+                    "probe": probe.NAME,
+                    "index": index,
+                    "total": total_probes,
+                    "elapsed_ms": elapsed_ms,
+                    "datasets": len(produced),
+                    "queries": len(labels),
+                    "rows": rows_returned,
+                    "failed": [q.label for q in session.query_log[mark:] if q.error],
+                })
     finally:
         connection.close()
 
@@ -176,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
         "source": source,
         "schemas": schema_report,
         "probes": probe_report,
+        "probes_skipped": skipped,
         "datasets": datasets,
         "total_rows": sum(d["row_count"] for d in datasets),
         "failed_queries": failed,
@@ -203,6 +228,34 @@ def main(argv: list[str] | None = None) -> int:
             "failed_queries": len(failed),
         },
     )
+
+    manifest["run_dir"] = str(run_dir)
+    return manifest
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="DBShift discovery collector")
+    parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--quiet", action="store_true")
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.WARNING if args.quiet else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s %(message)s",
+    )
+
+    try:
+        cfg = config.load(args.output_dir)
+    except config.ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    manifest = execute(cfg)
+    run_id = manifest["collector_run_id"]
+    run_dir = manifest["run_dir"]
+    datasets = manifest["datasets"]
+    elapsed_ms = manifest["elapsed_ms"]
+    failed = manifest["failed_queries"]
 
     print(f"collector_run_id : {run_id}")
     print(f"output           : {run_dir}")
