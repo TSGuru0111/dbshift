@@ -29,3 +29,6 @@ credentials*
 *.credentials
 aws_session*
 *.tfvars
+
+# Phase 4 planner output
+remediate/output/
