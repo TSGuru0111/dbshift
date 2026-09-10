@@ -17,3 +17,4 @@ these are the files it should be pointed at for specific work.
 | `09-conventions.md` | Writing code or SQL in this repo. |
 | `10-glossary.md` | Unfamiliar term or acronym. |
 | `11-checks-catalogue.md` | **What exactly runs.** Every collector statement and all 50 assessment rules. |
+| `phases/` | **One file per phase.** Read before changing a phase; update after. |

@@ -32,3 +32,6 @@ aws_session*
 
 # Phase 4 planner output
 remediate/output/
+
+# Phase 5 gate output
+blocker/output/

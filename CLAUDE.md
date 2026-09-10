@@ -84,6 +84,22 @@ until Phase 4 remediation.
 - `collector/` — Python discovery collector (to be built)
 - `infra/` — CDK / CloudFormation (later)
 
+## Phase documentation — read before changing, update after
+
+`docs/phases/` holds one file per phase explaining **what actually happens** when
+it runs, plus the decisions behind it and a dated change log.
+
+**Before changing a phase, read its file. After changing a phase, update the
+`Latest update` block and add a `Change log` entry — and if behaviour changed,
+`What actually happens` too.**
+
+This is not bookkeeping. Several decisions in this codebase look arbitrary until
+you know what went wrong the first time: the silently-failing seed script, the
+leaked SQLite handle that only bites a long-running process, the hardcoded schema
+list that made the console collect nothing on anyone else's database. Re-deriving
+those costs more than reading. A file one change out of date is worse than none,
+because it will be trusted.
+
 ## Working agreements
 
 - **Read `docs/04-defects.md` before touching assessment logic.** It is the
