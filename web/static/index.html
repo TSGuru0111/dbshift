@@ -426,6 +426,60 @@ tr:last-child td{border-bottom:none}
     <div id="sizeEmpty" class="panel"><div class="empty">Run discovery first, then decide the target.</div></div>
   </section>
 
+  <!-- ============ 5. REMEDIATE ============ -->
+  <section class="view" id="view-remediate">
+    <div class="head">
+      <h2>Remediation plan</h2>
+      <p>This phase <b>plans fixes and applies nothing</b>. Every proposed statement carries
+         rollback SQL or it is rejected at generation time, and passes five gates before it could
+         reach any database. Two of those gates need infrastructure that does not exist yet —
+         they report blocked rather than passing quietly.</p>
+    </div>
+
+    <div class="split" style="margin-bottom:16px">
+      <div class="panel pad">
+        <div class="eyebrow">Fix generation</div>
+        <div class="status" id="genStatus"><span class="led"></span>
+          <span>Templates only — model generation unavailable</span></div>
+        <p style="font-size:12.5px;color:var(--ink-2);margin-top:10px">
+          Findings with exactly one correct remedy are templated, where a model would add cost and
+          risk but no information. The rest need a model, and Bedrock <b>InvokeModel</b> is blocked
+          on this account. They are routed to a human meanwhile.</p>
+      </div>
+      <div class="panel pad">
+        <div class="eyebrow">Rehearsal database</div>
+        <div class="field" style="margin-bottom:8px">
+          <input id="rehearsalDsn" placeholder="host:1521/SERVICE — a restored copy of the estate"
+                 spellcheck="false"></div>
+        <div class="spread">
+          <button class="btn ghost sm" id="btnRehearsal">Register</button>
+          <span class="mono" id="rehearsalState" style="font-size:11.5px;color:var(--ink-3)">not configured</span>
+        </div>
+        <p style="font-size:12.5px;color:var(--ink-2);margin-top:10px">
+          Every fix is applied and rolled back here before production. Without it no fix can be
+          proven safe, so none may be applied. Restore <span class="mono">data/dbmig_golden.dmp</span>
+          into a separate instance.</p>
+      </div>
+    </div>
+
+    <div class="spread" style="margin-bottom:16px">
+      <button class="btn" id="btnRemediate">Plan remediations</button>
+      <span class="mono" id="remMeta" style="font-size:12px;color:var(--ink-3)"></span>
+    </div>
+    <div id="remLive" style="display:none"><div class="ticker" id="remTicker"></div></div>
+    <div id="remResult" style="display:none">
+      <div class="tiles mt" id="remTiles"></div>
+      <div id="remBlockers" class="mt-s"></div>
+      <div class="mt"><div class="eyebrow">Proposed fixes</div>
+        <div class="acc" id="fixList"></div></div>
+      <div class="mt"><div class="eyebrow">Routed elsewhere</div>
+        <div class="chips" id="remChips"></div>
+        <div class="acc" id="routedList"></div>
+        <div class="mono mt-s" id="routedCount" style="font-size:11.5px;color:var(--ink-3)"></div></div>
+    </div>
+    <div id="remEmpty" class="panel"><div class="empty">Run the assessment first, then plan remediations.</div></div>
+  </section>
+
   <!-- ============ CATALOGUE ============ -->
   <section class="view" id="view-catalogue">
     <div class="head">
@@ -505,10 +559,11 @@ const STAGES = [
   {id:'discover',  label:'Discovery', n:2},
   {id:'assess',    label:'Assessment',n:3},
   {id:'target',    label:'Target',    n:4},
+  {id:'remediate', label:'Remediate', n:5},
 ];
 let current = 'connect';
-let stageState = {connect:'active', discover:'idle', assess:'idle', target:'idle'};
-let stageSub = {connect:'', discover:'', assess:'', target:''};
+let stageState = {connect:'active', discover:'idle', assess:'idle', target:'idle', remediate:'idle'};
+let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:''};
 let ISSUES = [], sevFilter = new Set(), catFilter = new Set();
 
 function renderRail(){
@@ -619,8 +674,8 @@ $('#btnDisconnect').onclick = async () => {
   $('#btnDisconnect').style.display = 'none'; $('#facts').innerHTML = '';
   $('#checks').innerHTML = '<div class="empty">Connect to run the preflight checks.</div>';
   $('#btnDiscover').disabled = true;
-  stageState = {connect:'active', discover:'idle', assess:'idle', target:'idle'};
-  stageSub = {connect:'', discover:'', assess:'', target:''};
+  stageState = {connect:'active', discover:'idle', assess:'idle', target:'idle', remediate:'idle'};
+  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:''};
   renderRail();
 };
 
@@ -738,6 +793,8 @@ $('#btnAssess').onclick = () => {
       if (last) last.className = 'tick done';
       setStage('assess', 'done', `${d.issues} issues · score ${d.overall}`);
       setStage('target', stageState.target === 'idle' ? 'active' : stageState.target);
+      $('#btnRemediate').disabled = false;
+      $('#remEmpty').querySelector('.empty').textContent = 'Plan remediations for these findings.';
       $('#assessMeta').textContent =
         `${d.findings} findings across ${d.issues} issues · recall ${Math.round(d.recall*100)}%`;
       await renderAssessment();
@@ -943,6 +1000,150 @@ async function renderSizing(){
   }).join('');
 
   $('#sizeResult').style.display = '';
+}
+
+/* ---------------- remediation ---------------- */
+$('#btnRemediate').disabled = true;
+let PLAN = null, remFilter = new Set();
+
+const STATUS_LABEL = {
+  AUTO_APPLY:'Auto-apply', READY_TO_APPLY:'Ready', BLOCKED:'Blocked',
+  REJECTED:'Rejected', MANUAL_ACTION_REQUIRED:'Needs a human', NOT_A_FIX:'Not a fix',
+};
+
+$('#btnRehearsal').onclick = async () => {
+  const dsn = $('#rehearsalDsn').value.trim();
+  const r = await fetch('/api/rehearsal', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({dsn})});
+  const d = await r.json();
+  $('#rehearsalState').textContent = d.rehearsal_dsn ? 'registered: ' + d.rehearsal_dsn : 'not configured';
+};
+
+$('#btnRemediate').onclick = () => {
+  const btn = $('#btnRemediate');
+  btn.disabled = true;
+  $('#remEmpty').style.display = 'none';
+  $('#remResult').style.display = 'none';
+  $('#remLive').style.display = '';
+  $('#remTicker').innerHTML = '';
+  setStage('remediate', 'busy', 'starting');
+  const es = new EventSource('/api/remediate');
+  const rows = {};
+  es.onmessage = async ev => {
+    const d = JSON.parse(ev.data);
+    if (d.event === 'planning') {
+      const el = document.createElement('div');
+      el.className = 'tick run';
+      el.innerHTML = `<span class="st"></span>
+        <span class="nm">${esc(d.rule_id)}</span>
+        <span class="meta">${esc((d.object_name || '').slice(0,44))}</span>`;
+      $('#remTicker').appendChild(el); el.scrollIntoView({block:'nearest'});
+      rows[d.index] = el;
+      setStage('remediate', 'busy', `${d.index} of ${d.total}`);
+    } else if (d.event === 'planned') {
+      const el = rows[d.index]; if (!el) return;
+      const good = d.status === 'AUTO_APPLY' || d.status === 'READY_TO_APPLY';
+      el.className = 'tick ' + (d.status === 'REJECTED' ? 'err' : 'done');
+      el.querySelector('.meta').textContent = STATUS_LABEL[d.status] || d.status;
+      if (good) el.querySelector('.nm').style.color = 'var(--accent)';
+    } else if (d.event === 'complete') {
+      es.close();
+      const planned = Object.values(d.totals).reduce((a,b) => a+b, 0);
+      setStage('remediate', 'done', `${d.fixes_with_sql} fix${d.fixes_with_sql === 1 ? '' : 'es'} drafted`);
+      $('#remMeta').textContent =
+        `${planned} findings planned · ${d.fixes_with_sql} with SQL · nothing applied`;
+      await renderRemediation();
+      btn.disabled = false;
+    } else if (d.event === 'error') {
+      es.close(); setStage('remediate','active','failed');
+      $('#remLive').insertAdjacentHTML('beforeend', `<div class="note bad mt-s">${esc(d.message)}</div>`);
+      btn.disabled = false;
+    }
+  };
+  es.onerror = () => { es.close(); btn.disabled = false; setStage('remediate','active','connection lost'); };
+};
+
+function gateRow(g){
+  const cls = g.status === 'pass' ? 'pass' : g.status === 'blocked' ? 'warn' : 'fail';
+  const mark = g.status === 'pass' ? '✓' : g.status === 'blocked' ? '⏸' : '×';
+  return `<div class="check ${cls}"><span class="mark">${mark}</span>
+    <div><div class="name">${esc(g.gate)}</div><div class="detail">${esc(g.detail)}</div>
+    ${g.remedy ? `<div class="remedy">${esc(g.remedy)}</div>` : ''}</div></div>`;
+}
+
+async function renderRemediation(){
+  const p = await (await fetch('/api/remediation')).json();
+  PLAN = p;
+
+  const order = ['AUTO_APPLY','READY_TO_APPLY','BLOCKED','REJECTED','MANUAL_ACTION_REQUIRED','NOT_A_FIX'];
+  $('#remTiles').innerHTML = order.filter(s => p.totals[s]).map(s => `
+    <div class="tile"><div class="k">${esc(STATUS_LABEL[s])}</div>
+      <div class="v">${p.totals[s]}</div>
+      <div class="h">${esc({
+        AUTO_APPLY:'L1, applies without a prompt',
+        READY_TO_APPLY:'gates clear, approval held',
+        BLOCKED:'a gate needs something missing',
+        REJECTED:'policy refused the statement',
+        MANUAL_ACTION_REQUIRED:'a person must author it',
+        NOT_A_FIX:'a decision, not a statement'}[s] || '')}</div></div>`).join('');
+
+  $('#remBlockers').innerHTML = (p.what_is_in_the_way || []).map(b =>
+    `<div class="note warn">${esc(b)}</div>`).join('');
+
+  const withSql = p.entries.filter(e => e.sql);
+  $('#fixList').innerHTML = withSql.map(e => `
+    <details class="item"><summary>
+      <span class="title">${esc(e.title)}<span class="sub">${esc(e.rule_id)} · ${esc(e.owner || '')}.${esc(e.object_name)} · ${esc(e.remediation_level)} · ${esc(e.source)}</span></span>
+      <span></span><span class="count">${esc(STATUS_LABEL[e.status] || e.status)}</span></summary>
+      <div class="body">
+        ${e.explain ? `<p class="why">${esc(e.explain)}</p>` : ''}
+        <div class="eyebrow" style="margin:14px 0 6px">Fix</div>
+        <div class="tblwrap"><table><tbody><tr>
+          <td style="white-space:pre-wrap;max-width:none">${esc(e.sql)}</td></tr></tbody></table></div>
+        <div class="eyebrow" style="margin:14px 0 6px">Rollback</div>
+        <div class="tblwrap"><table><tbody><tr>
+          <td style="white-space:pre-wrap;max-width:none">${esc(e.rollback_sql)}</td></tr></tbody></table></div>
+        ${e.caveat ? `<p class="why"><b>Caveat.</b> ${esc(e.caveat)}</p>` : ''}
+        <div class="eyebrow" style="margin:14px 0 6px">Gates</div>
+        <div class="checks">${e.gates.map(gateRow).join('')}</div>
+      </div></details>`).join('')
+    || '<div class="empty">No fix could be drafted. Every finding needs a model or a human.</div>';
+
+  const routed = p.entries.filter(e => !e.sql);
+  const statuses = [...new Set(routed.map(e => e.status))];
+  $('#remChips').innerHTML = statuses.map(s =>
+    `<button class="chip" data-st="${s}" aria-pressed="${remFilter.has(s)}">${esc(STATUS_LABEL[s] || s)}</button>`).join('');
+  document.querySelectorAll('#remChips .chip').forEach(c => c.onclick = () => {
+    const v = c.dataset.st;
+    remFilter.has(v) ? remFilter.delete(v) : remFilter.add(v);
+    c.setAttribute('aria-pressed', remFilter.has(v));
+    renderRouted();
+  });
+  renderRouted();
+  $('#remResult').style.display = '';
+}
+
+function renderRouted(){
+  const routed = PLAN.entries.filter(e => !e.sql)
+    .filter(e => remFilter.size === 0 || remFilter.has(e.status));
+  // Group by rule: 61 rows one per finding is a list nobody reads.
+  const byRule = {};
+  for (const e of routed) (byRule[e.rule_id] ||= []).push(e);
+
+  $('#routedList').innerHTML = Object.entries(byRule).map(([rid, items]) => {
+    const first = items[0];
+    return `<details class="item"><summary>
+      <span class="title">${esc(first.title)}<span class="sub">${esc(rid)} · ${esc(first.remediation_level)} · ${esc(STATUS_LABEL[first.status] || first.status)}</span></span>
+      <span></span><span class="count">${items.length > 1 ? '×' + items.length : '1'}</span></summary>
+      <div class="body">
+        <p class="why">${esc(first.reason || '')}</p>
+        <div class="objs">${items.slice(0,40).map(i =>
+          `<span>${esc(i.object_name || '—')}</span>`).join('')}</div>
+      </div></details>`;
+  }).join('') || '<div class="empty">Nothing routed elsewhere.</div>';
+
+  $('#routedCount').textContent =
+    `${routed.length} findings across ${Object.keys(byRule).length} rules need a model or a human`;
 }
 
 /* ---------------- catalogue ---------------- */

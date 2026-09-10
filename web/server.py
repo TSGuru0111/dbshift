@@ -34,6 +34,7 @@ from assess import loader as assess_loader
 from assess import scoring as assess_scoring
 from collector import config as collector_config
 from collector import run as collector_run
+from remediate import plan as remediate_plan
 from sizing import run as sizing_run
 from sizing import utilization as sizing_utilization
 from collector.db import in_binds  # noqa: F401  (kept for custom probe authors)
@@ -65,6 +66,8 @@ class State:
     assessment: dict | None = None
     sizing: dict | None = None
     utilization: dict | None = None
+    remediation: dict | None = None
+    rehearsal_dsn: str | None = None
 
 
 STATE = State()
@@ -205,7 +208,9 @@ def get_state():
         "has_discovery": STATE.manifest is not None,
         "has_assessment": STATE.assessment is not None,
         "has_sizing": STATE.sizing is not None,
+        "has_remediation": STATE.remediation is not None,
         "utilization": STATE.utilization,
+        "rehearsal_dsn": STATE.rehearsal_dsn,
         "run_id": STATE.run_id,
         "network_requirements": preflight.NETWORK_REQUIREMENTS,
     }
@@ -589,6 +594,54 @@ def sizing():
     if not STATE.sizing:
         raise HTTPException(409, "no sizing run yet")
     return STATE.sizing
+
+
+class RehearsalRequest(BaseModel):
+    dsn: str = ""
+
+
+@app.post("/api/rehearsal")
+def set_rehearsal(req: RehearsalRequest):
+    """Register a rehearsal database. Not validated here -- the dry-run harness
+    is the thing that must prove it works, and it is not built yet."""
+    STATE.rehearsal_dsn = req.dsn.strip() or None
+    return {"ok": True, "rehearsal_dsn": STATE.rehearsal_dsn}
+
+
+@app.get("/api/remediate")
+def remediate():
+    if not STATE.assessment:
+        raise HTTPException(409, "no assessment run yet")
+
+    def work(emit):
+        result = remediate_plan.build(
+            STATE.assessment,
+            allow_model=False,          # Bedrock invoke is blocked; never claim otherwise
+            rehearsal_dsn=STATE.rehearsal_dsn,
+            on_event=emit,
+        )
+        STATE.remediation = result
+        out_dir = Path(__file__).resolve().parent.parent / "remediate" / "output"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "remediation_plan.json").write_text(
+            json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        emit({
+            "event": "complete",
+            "totals": result["totals"],
+            "fixes_with_sql": result["fixes_with_sql"],
+            "blockers": result["what_is_in_the_way"],
+            "rehearsal": result["rehearsal_dsn_configured"],
+        })
+
+    return _stream(work)
+
+
+@app.get("/api/remediation")
+def remediation():
+    if not STATE.remediation:
+        raise HTTPException(409, "no remediation plan yet")
+    return STATE.remediation
 
 
 def main() -> int:
