@@ -127,7 +127,7 @@ PROBE_READS = {
     "dataprofile": "Bounded aggregates over application tables &mdash; counts only",
 }
 
-TEMPLATE = """<title>DBMIG_APP Migration Readiness</title>
+TEMPLATE = """<title>__ESTATE_NAME__ Migration Readiness</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -427,7 +427,7 @@ footer { margin-top:60px; padding-top:20px; border-top:1px solid var(--rule);
 <div class="page">
   <header class="masthead">
     <div class="eyebrow">DBShift AI &nbsp;/&nbsp; Phase 1&ndash;2 &nbsp;/&nbsp; Discover &amp; Assess</div>
-    <h1>DBMIG_APP Migration Readiness</h1>
+    <h1>__ESTATE_NAME__ Migration Readiness</h1>
     <p class="dek">An automated assessment of an on-premises Oracle estate against Amazon RDS for
     Oracle. Every figure below was produced by deterministic rules over a read-only catalogue scan.
     No language model contributed to any verdict on this page.</p>
@@ -668,6 +668,35 @@ def _sizing_section(sizing: dict | None) -> str:
     return html
 
 
+def _describe_estate(assessment: dict, manifest: dict) -> str:
+    """The masthead estate line, derived rather than assumed."""
+    source = assessment.get("source") or {}
+    owners = sorted({f["owner"] for f in assessment.get("findings", []) if f.get("owner")})
+    parts = []
+    if source.get("db_name"):
+        parts.append(str(source["db_name"]))
+    if owners:
+        parts.append(", ".join(owners[:3]) + ("…" if len(owners) > 3 else ""))
+    parts.append(f"{_dataset_rows(manifest, 'objects')} objects")
+    return " / ".join(parts)
+
+
+def _dataset_rows(manifest: dict, name: str) -> int:
+    for entry in manifest.get("datasets", []):
+        if entry["dataset"].split(".")[-1] == name:
+            return entry["row_count"]
+    return 0
+
+
+def _source_stage(assessment: dict, manifest: dict) -> tuple[str, str, str]:
+    """First box of the pipeline diagram, read from the run rather than assumed."""
+    source = assessment.get("source") or {}
+    name = source.get("db_name") or "Source database"
+    container = source.get("con_name") or source.get("dsn") or ""
+    objects = _dataset_rows(manifest, "objects")
+    return (name, container, f"{objects} objects")
+
+
 def _pipeline_svg(manifest: dict, assessment: dict) -> str:
     """One figure, one claim: where every number on the page comes from."""
     ql = manifest["query_log"]
@@ -680,7 +709,7 @@ def _pipeline_svg(manifest: dict, assessment: dict) -> str:
     nfind = len(assessment["findings"])
 
     stages = [
-        ("Oracle 21c XE", "XEPDB1 &middot; 1.03 GB", "90 objects"),
+        _source_stage(assessment, manifest),
         ("Collector", "12 probes &middot; local", "oracledb thin"),
         ("JSON envelope", f"{datasets} datasets", f"{kb} KB on disk"),
         ("SQLite", "47 tables + 3 views", "Aurora slots here"),
@@ -908,13 +937,21 @@ def build(assessment: dict, manifest: dict, estate: str, datasets: int, sizing: 
 
     html = TEMPLATE.replace("__PIPELINE_SECTION__", PIPELINE_SECTION)
     html = html.replace("__SIZING_SECTION__", _sizing_section(sizing))
+    # Every label comes from the run, so the report describes whichever estate
+    # was actually scanned rather than the one this was written against.
+    owners = sorted({f["owner"] for f in findings if f.get("owner")})
+    estate_name = owners[0] if owners else (
+        (assessment.get("source") or {}).get("db_name") or "Source database"
+    )
+
     subs = {
+        "__ESTATE_NAME__": estate_name,
         "__PIPELINE__": _pipeline_svg(manifest, assessment),
         "__PROBEROWS__": _probe_rows(manifest),
-        "__SOURCE__": f"{assessment['source'].get('dsn','?')}",
+        "__SOURCE__": (assessment.get("source") or {}).get("dsn", "?"),
         "__ESTATE__": estate,
         "__RUNID__": assessment["collector_run_id"][:8],
-        "__WHEN__": assessment["assessed_at_utc"][:16].replace("T", " ") + " UTC",
+        "__WHEN__": (assessment.get("assessed_at_utc") or "")[:16].replace("T", " ") + " UTC",
         "__NRULES__": str(assessment["rules_evaluated"]),
         "__NDATASETS__": str(datasets),
         "__NCRIT__": str(s["critical_findings"]),
@@ -963,7 +1000,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Render the assessment report")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_ASSESS_OUTPUT)
     parser.add_argument("--collector-output", type=Path, default=DEFAULT_COLLECTOR_OUTPUT)
-    parser.add_argument("--estate", type=str, default="Oracle 21c XE / DBMIG_APP / 1.03 GB / 90 objects")
+    parser.add_argument("--estate", type=str, default=None,
+                        help="override the estate line; derived from the run when omitted")
     parser.add_argument("--sizing", type=Path, default=None, help="path to sizing.json")
     args = parser.parse_args(argv)
 
@@ -986,7 +1024,8 @@ def main(argv: list[str] | None = None) -> int:
                 "Re-run 'python -m sizing.run' against this run to include it."
             )
 
-    html = build(assessment, manifest, args.estate, len(manifest["datasets"]), sizing)
+    estate = args.estate or _describe_estate(assessment, manifest)
+    html = build(assessment, manifest, estate, len(manifest["datasets"]), sizing)
     out = args.output_dir / "report.html"
     out.write_text(html, encoding="utf-8")
     print(f"written: {out}  ({len(html):,} bytes)")

@@ -45,10 +45,17 @@ def parse_dsn(dsn: str) -> tuple[str, int]:
     return hostport, 1521
 
 
-def run(dsn: str, user: str, password: str, schema: str = "DBMIG_APP") -> dict:
+def run(dsn: str, user: str, password: str, schema: str = "") -> dict:
+    """`schema` may be blank, one name, or a comma-separated list.
+
+    Blank means "work it out" -- the schemas actually present are discovered from
+    the database rather than assumed, so this runs against any estate and not
+    just the one it was written against.
+    """
     checks: list[dict] = []
     facts: dict = {}
     host, port = parse_dsn(dsn)
+    requested = [s.strip().upper() for s in (schema or "").split(",") if s.strip()]
 
     # 1 -- TCP reachability. Distinguishes "wrong password" from "cannot get there
     # at all", which at a client site is the difference between a DBA ticket and a
@@ -131,8 +138,66 @@ def run(dsn: str, user: str, password: str, schema: str = "DBMIG_APP") -> dict:
                 )
             )
 
+        # 4b -- Which schemas are actually here. Oracle flags its own with
+        # ORACLE_MAINTAINED='Y', so anything else that owns objects is an
+        # application schema. Discovering this is what makes the tool portable.
+        discovered: list[dict] = []
+        try:
+            cur.execute(
+                """SELECT u.username, COUNT(o.object_name)
+                   FROM dba_users u
+                   LEFT JOIN dba_objects o ON o.owner = u.username
+                   WHERE u.oracle_maintained = 'N'
+                   GROUP BY u.username
+                   ORDER BY COUNT(o.object_name) DESC, u.username"""
+            )
+            discovered = [{"schema": r[0], "objects": r[1]} for r in cur.fetchall()]
+        except oracledb.Error:
+            discovered = []
+
+        owning = [d for d in discovered if d["objects"] > 0]
+        facts["schemas_discovered"] = discovered
+        selected = requested or [d["schema"] for d in owning]
+        facts["schemas_selected"] = selected
+
+        if not selected:
+            checks.append(
+                _check(
+                    "Application schemas",
+                    "fail",
+                    "no non-Oracle schema owns any object in this database",
+                    "Name the schema to inspect explicitly, or confirm you are connected "
+                    "to the right database — an empty estate has nothing to migrate.",
+                )
+            )
+        else:
+            missing = [s for s in requested if s not in {d["schema"] for d in discovered}]
+            summary = ", ".join(
+                f"{d['schema']} ({d['objects']})" for d in owning[:6]
+            ) or ", ".join(selected)
+            if missing:
+                checks.append(
+                    _check(
+                        "Application schemas",
+                        "warn",
+                        f"requested {', '.join(missing)} — not present. Found: {summary}",
+                        "Check the spelling, or leave the schema field blank to use every "
+                        "application schema found.",
+                    )
+                )
+            else:
+                checks.append(
+                    _check(
+                        "Application schemas",
+                        "pass",
+                        f"{len(selected)} selected — {summary}"
+                        + ("" if requested else "  (auto-discovered)"),
+                    )
+                )
+
         # 5 -- Row-level read. Metadata access does not imply data access; this is
         # the exact gap that made data-quality profiling silently impossible.
+        schema = selected[0] if selected else (requested[0] if requested else "")
         data_ok, sample, data_error = False, None, None
         try:
             cur.execute(DATA_PROBE_OWNER, {"o": schema})
@@ -190,16 +255,20 @@ def run(dsn: str, user: str, password: str, schema: str = "DBMIG_APP") -> dict:
             checks.append(_check("CDC readiness", "warn", "v$database not readable", None))
 
         # 7 -- Estate size, so the operator knows what they are about to scan.
-        try:
-            cur.execute(
-                "SELECT COUNT(*), ROUND(NVL(SUM(bytes),0)/1073741824, 2) FROM dba_segments "
-                "WHERE owner = :o",
-                {"o": schema},
-            )
-            segs, gb = cur.fetchone()
-            facts.update({"segments": segs, "size_gb": float(gb or 0)})
-        except oracledb.Error:
-            pass
+        # Across every selected schema, not just the first.
+        if selected:
+            binds = {f"s{i}": s for i, s in enumerate(selected)}
+            placeholders = ", ".join(f":{k}" for k in binds)
+            try:
+                cur.execute(
+                    "SELECT COUNT(*), ROUND(NVL(SUM(bytes),0)/1073741824, 2) "
+                    f"FROM dba_segments WHERE owner IN ({placeholders})",
+                    binds,
+                )
+                segs, gb = cur.fetchone()
+                facts.update({"segments": segs, "size_gb": float(gb or 0)})
+            except oracledb.Error:
+                pass
 
         cur.close()
     finally:

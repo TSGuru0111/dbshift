@@ -52,7 +52,8 @@ class State:
     dsn: str | None = None
     user: str | None = None
     password: str | None = None
-    schema: str = "DBMIG_APP"
+    schema: str = ""
+    schemas: tuple = ()
     connected: bool = False
     facts: dict = field(default_factory=dict)
     checks: list = field(default_factory=list)
@@ -154,7 +155,8 @@ class ConnectRequest(BaseModel):
     dsn: str = "localhost:1521/XEPDB1"
     user: str = "dbmig_collector"
     password: str
-    schema_name: str = "DBMIG_APP"
+    # Blank means discover the application schemas from the database.
+    schema_name: str = ""
 
 
 class ToggleRequest(BaseModel):
@@ -208,6 +210,9 @@ def connect(req: ConnectRequest):
     result = preflight.run(req.dsn, req.user, req.password, req.schema_name)
     STATE.dsn, STATE.user, STATE.schema = req.dsn, req.user, req.schema_name
     STATE.checks, STATE.facts = result["checks"], result["facts"]
+    # Whatever preflight resolved -- the schemas typed, or the ones discovered
+    # when the field was left blank. Discovery must use these, never a default.
+    STATE.schemas = tuple(result["facts"].get("schemas_selected", ()))
     STATE.connected = result["ok"]
     STATE.password = req.password if result["ok"] else None
     return {"ok": result["ok"], "checks": result["checks"], "facts": result["facts"]}
@@ -314,7 +319,7 @@ def discover():
             user=STATE.user,
             password=STATE.password,
             dsn=STATE.dsn,
-            schemas=collector_config.DEFAULT_SCHEMAS,
+            schemas=STATE.schemas or collector_config.DEFAULT_SCHEMAS,
             output_dir=Path(__file__).resolve().parent.parent / "collector" / "output",
         )
         emit({"event": "start", "total": len(enabled), "probes": enabled})
@@ -460,11 +465,18 @@ def assess():
 
         findings.sort(key=lambda f: (f["rule_id"], f["owner"] or "", f["object_name"] or ""))
         scores = assess_scoring.score_findings(findings)
-        recall = assess_scoring.score_against_answer_key(findings)
+        owners = {f["owner"] for f in findings if f["owner"]}
+        recall = assess_scoring.score_against_answer_key(findings, owners=owners)
         issues = assess_engine.group_findings(findings)
 
         STATE.assessment = {
             "collector_run_id": STATE.run_id,
+            # The report generator reads this; omitting it made assess.report
+            # fail on a web-produced assessment.json.
+            "source": (STATE.manifest or {}).get("source", {}),
+            "assessed_at_utc": __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ).isoformat(),
             "rules_evaluated": len(rules),
             "rule_errors": errors,
             "scores": scores,

@@ -272,8 +272,8 @@ tr:last-child td{border-bottom:none}
         <div class="row2">
           <div class="field"><label for="user">User</label>
             <input id="user" value="dbmig_collector" spellcheck="false"></div>
-          <div class="field"><label for="schema">Application schema</label>
-            <input id="schema" value="DBMIG_APP" spellcheck="false"></div>
+          <div class="field"><label for="schema">Schemas — blank to auto-discover</label>
+            <input id="schema" value="" placeholder="leave blank, or HR,SALES" spellcheck="false"></div>
         </div>
         <div class="field"><label for="password">Password</label>
           <input id="password" type="password" placeholder="not stored anywhere"></div>
@@ -350,6 +350,7 @@ tr:last-child td{border-bottom:none}
           <div class="tiles" style="border:none;grid-template-columns:repeat(2,1fr)" id="assessTiles"></div>
         </div>
       </div>
+      <div id="recallNote" class="mt-s"></div>
       <div class="mt"><div class="eyebrow">Issues</div>
         <div class="chips" id="sevChips"></div>
         <div class="acc" id="issueAcc"></div>
@@ -692,13 +693,22 @@ async function renderAssessment(){
       <div class="track"><div class="fill" style="width:${v.score}%"></div></div>
       <span class="val">${v.score}</span></div>`).join('');
 
+  // Recall only means something against the reference estate the defects were
+  // seeded into. Elsewhere, show that plainly rather than a misleading 0%.
+  const recallTile = k.applicable === false
+    ? ['Recall', 'n/a', 'no seeded-defect estate here']
+    : ['Recall', Math.round(k.recall*100) + '%', `${k.detected} of ${k.detectable} seeded defects`];
+
   $('#assessTiles').innerHTML = [
     ['Overall', s.overall_score, s.capped_by_critical ? 'capped by a critical finding' : 'category mean'],
     ['Critical', s.critical_findings, 'block the migration'],
-    ['Recall', Math.round(k.recall*100) + '%', `${k.detected} of ${k.detectable} seeded defects`],
+    recallTile,
     ['Issues', a.issues.length, `${s.total_findings} occurrences`],
   ].map(([kk,v,h]) => `<div class="tile"><div class="k">${esc(kk)}</div>
       <div class="v">${fmt(v)}</div><div class="h">${esc(h)}</div></div>`).join('');
+
+  $('#recallNote').innerHTML = k.applicable === false
+    ? `<div class="note info">${esc(k.reason)}</div>` : '';
 
   ISSUES = a.issues;
   const sevs = ['CRITICAL','HIGH','MEDIUM','LOW','INFO'];

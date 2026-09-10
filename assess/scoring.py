@@ -7,6 +7,9 @@ from pathlib import Path
 
 ANSWER_KEY_PATH = Path(__file__).resolve().parent / "answer_key.json"
 
+# The estate the seeded defects live in. Recall is only meaningful against it.
+REFERENCE_SCHEMA = "DBMIG_APP"
+
 CATEGORIES = (
     "rds_compatibility",
     "data_quality",
@@ -81,7 +84,11 @@ def score_findings(findings: list[dict]) -> dict:
     }
 
 
-def score_against_answer_key(findings: list[dict], path: Path = ANSWER_KEY_PATH) -> dict:
+def score_against_answer_key(
+    findings: list[dict],
+    path: Path = ANSWER_KEY_PATH,
+    owners: set[str] | None = None,
+) -> dict:
     """Measure recall against the seeded defects in docs/04-defects.md.
 
     Findings that match no seeded defect are reported as `additional`, not as
@@ -90,6 +97,31 @@ def score_against_answer_key(findings: list[dict], path: Path = ANSWER_KEY_PATH)
     false-positive count needs human triage, so it is reported as pending.
     """
     key = json.loads(path.read_text(encoding="utf-8"))
+
+    # The answer key describes defects seeded into one specific reference estate.
+    # Against any other database it measures nothing, and reporting 0% recall
+    # there would read as a broken engine rather than an inapplicable metric.
+    if owners is not None and REFERENCE_SCHEMA not in owners:
+        return {
+            "applicable": False,
+            "reason": (
+                f"The seeded-defect answer key applies to the {REFERENCE_SCHEMA} reference "
+                "estate, which is not present in this database. Recall is not measured here — "
+                "the findings above are still real."
+            ),
+            "total_seeded": len(key),
+            "detectable": 0,
+            "detected": 0,
+            "missed": 0,
+            "severity_exact": 0,
+            "recall": None,
+            "not_present_in_source": 0,
+            "additional_findings": len(findings),
+            "false_positives_confirmed": 0,
+            "triage_pending": len(findings),
+            "defects": [],
+        }
+
     matched_ids: set[str] = set()
     results = []
 
@@ -127,6 +159,7 @@ def score_against_answer_key(findings: list[dict], path: Path = ANSWER_KEY_PATH)
     detectable = len(key) - len(absent)
 
     return {
+        "applicable": True,
         "total_seeded": len(key),
         "not_present_in_source": len(absent),
         "detectable": detectable,

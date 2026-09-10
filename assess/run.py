@@ -62,7 +62,8 @@ def main(argv: list[str] | None = None) -> int:
         conn.close()
 
     scores = scoring.score_findings(findings)
-    recall = scoring.score_against_answer_key(findings)
+    owners = {f["owner"] for f in findings if f["owner"]}
+    recall = scoring.score_against_answer_key(findings, owners=owners)
     groups = engine.group_findings(findings)
 
     assessment = {

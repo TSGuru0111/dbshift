@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -16,7 +17,11 @@ from .db import Session, connect
 # rather than trusted. A mismatch is reported as drift, not silently accepted.
 DOCUMENTED_OBJECTS = 90
 DOCUMENTED_CONSTRAINTS = 51  # post-defect-seeding; "ORDER" adds an inline PK
-PRIMARY_SCHEMA = "DBMIG_APP"
+
+# The reference estate this ships against. Override for any other database --
+# the counts above are ground truth for that estate only, so they are reported
+# as drift rather than treated as universal expectations.
+PRIMARY_SCHEMA = os.environ.get("DBSHIFT_PRIMARY_SCHEMA", "DBMIG_APP")
 
 
 def _load(run_dir: Path, name: str) -> dict:
