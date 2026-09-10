@@ -87,6 +87,8 @@ main{max-width:1180px;margin:0 auto;padding:28px 24px 80px}
 .panel{background:var(--surface);border:1px solid var(--rule);border-radius:4px;box-shadow:var(--shadow)}
 .pad{padding:20px}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.split2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.split2 .field{margin-bottom:0}
 @media(max-width:860px){.split{grid-template-columns:1fr}}
 .eyebrow{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.12em;
   text-transform:uppercase;color:var(--ink-3);margin-bottom:12px}
@@ -439,8 +441,8 @@ tr:last-child td{border-bottom:none}
       <h2>Remediation plan</h2>
       <p>This phase <b>plans fixes and applies nothing</b>. Every proposed statement carries
          rollback SQL or it is rejected at generation time, and passes five gates before it could
-         reach any database. Two of those gates need infrastructure that does not exist yet —
-         they report blocked rather than passing quietly.</p>
+         reach any database. A gate whose infrastructure is missing reports blocked rather than
+         passing quietly — register a rehearsal copy below and the dry run becomes real.</p>
     </div>
 
     <div class="split" style="margin-bottom:16px">
@@ -455,17 +457,27 @@ tr:last-child td{border-bottom:none}
       </div>
       <div class="panel pad">
         <div class="eyebrow">Rehearsal database</div>
-        <div class="field" style="margin-bottom:8px">
+        <div class="field" style="margin-bottom:6px">
           <input id="rehearsalDsn" placeholder="host:1521/SERVICE — a restored copy of the estate"
+                 spellcheck="false"></div>
+        <div class="split2" style="margin-bottom:6px">
+          <div class="field"><input id="rehearsalUser" placeholder="user" value="dbmig_rehearsal"
+                 spellcheck="false" autocomplete="off"></div>
+          <div class="field"><input id="rehearsalPassword" type="password" placeholder="password"
+                 autocomplete="off"></div>
+        </div>
+        <div class="field" style="margin-bottom:8px">
+          <input id="rehearsalSchema" placeholder="schema holding the copy" value="DBMIG_REHEARSAL"
                  spellcheck="false"></div>
         <div class="spread">
           <button class="btn ghost sm" id="btnRehearsal">Register</button>
           <span class="mono" id="rehearsalState" style="font-size:11.5px;color:var(--ink-3)">not configured</span>
         </div>
         <p style="font-size:12.5px;color:var(--ink-2);margin-top:10px">
-          Every fix is applied and rolled back here before production. Without it no fix can be
-          proven safe, so none may be applied. Restore <span class="mono">data/dbmig_golden.dmp</span>
-          into a separate instance.</p>
+          Every fix is applied <b>and rolled back</b> here before production. Without it no fix can be
+          proven safe, so none may be applied. Build it with
+          <span class="mono">scripts/oracle-source/06_create_rehearsal.sql</span>. The password is held
+          in server memory only, never written to disk.</p>
       </div>
     </div>
 
@@ -1146,11 +1158,29 @@ const STATUS_LABEL = {
 };
 
 $('#btnRehearsal').onclick = async () => {
+  const el = $('#rehearsalState');
   const dsn = $('#rehearsalDsn').value.trim();
+  const body = {
+    dsn,
+    user: $('#rehearsalUser').value.trim(),
+    password: $('#rehearsalPassword').value,
+    schema_name: $('#rehearsalSchema').value.trim(),
+  };
+  el.style.color = 'var(--ink-3)';
+  el.textContent = dsn ? 'checking…' : '';
   const r = await fetch('/api/rehearsal', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({dsn})});
+    body: JSON.stringify(body)});
   const d = await r.json();
-  $('#rehearsalState').textContent = d.rehearsal_dsn ? 'registered: ' + d.rehearsal_dsn : 'not configured';
+  // The server refuses a target it cannot reach, and says why. Reporting only
+  // "not configured" here threw that reason away and left you guessing at a
+  // wrong password, a wrong service name and an un-imported schema alike.
+  if (!r.ok) {
+    el.style.color = 'var(--bad)';
+    el.textContent = d.detail || 'registration failed';
+    return;
+  }
+  el.style.color = d.rehearsal_dsn ? 'var(--ok)' : 'var(--ink-3)';
+  el.textContent = d.rehearsal_dsn ? (d.detail || 'registered') : 'not configured';
 };
 
 $('#btnRemediate').onclick = () => {
