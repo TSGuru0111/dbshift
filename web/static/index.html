@@ -246,8 +246,10 @@ tr:last-child td{border-bottom:none}
 .note.bad{background:var(--bad-soft);color:var(--bad);border-left:2px solid var(--bad)}
 .note.warn{background:var(--warn-soft);color:var(--warn);border-left:2px solid var(--warn)}
 .empty{padding:34px;text-align:center;color:var(--ink-3);font-size:13px}
+/* Sits above the content: a long findings list should not require scrolling to
+   the bottom to move on. */
 .pagenav{display:flex;justify-content:space-between;align-items:center;gap:14px;
-  margin-top:36px;padding-top:18px;border-top:1px solid var(--rule)}
+  margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid var(--rule)}
 .pagenav:empty{display:none}
 .mt{margin-top:20px}.mt-s{margin-top:12px}
 .spread{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
@@ -268,6 +270,8 @@ tr:last-child td{border-bottom:none}
 </header>
 
 <main>
+  <div class="pagenav" id="pagenav"></div>
+
   <!-- ============ 1. CONNECT ============ -->
   <section class="view on" id="view-connect">
     <div class="head">
@@ -513,8 +517,6 @@ tr:last-child td{border-bottom:none}
     </div>
     <div id="gateEmpty" class="panel"><div class="empty">Run the assessment first, then evaluate the gate.</div></div>
   </section>
-
-  <div class="pagenav" id="pagenav"></div>
 
   <!-- ============ CATALOGUE ============ -->
   <section class="view" id="view-catalogue">
