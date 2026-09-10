@@ -641,12 +641,17 @@ function renderPageNav(){
            : '<span class="mono" style="font-size:11.5px;color:var(--ink-3)">Phase 6 onward is not built</span>'}`;
 }
 function show(id){
+  const previous = current;
   current = id;
   document.querySelectorAll('.view').forEach(v => v.classList.remove('on'));
   $('#view-' + id).classList.add('on');
   $('#navCatalogue').setAttribute('aria-pressed', id === 'catalogue');
   if (id !== 'catalogue') {
-    for (const s of STAGES) if (stageState[s.id] === 'active' && s.id !== id) stageState[s.id] = 'done';
+    // Only the stage being left is marked done, never every active one -- that
+    // marked phases complete that had not run, purely because you navigated past.
+    if (previous && previous !== id && stageState[previous] === 'active') {
+      stageState[previous] = 'done';
+    }
     if (stageState[id] !== 'done') stageState[id] = 'active';
     renderRail();
   }
@@ -664,7 +669,66 @@ async function loadState(){
   const s = await (await fetch('/api/state')).json();
   $('#netreq').innerHTML = s.network_requirements.map(r =>
     `<div><div class="t">${esc(r.title)}</div><div class="d">${esc(r.detail)}</div></div>`).join('');
-  if (s.connected) { applyConnected(s.checks, s.facts); }
+  if (!s.connected) return;
+  applyConnected(s.checks, s.facts);
+
+  // The server holds the run; the browser does not. Without this a page reload
+  // mid-demo leaves every completed phase looking un-run and the Next button
+  // disabled, even though the results are sitting there.
+  //
+  // Stage state is set first and synchronously, so the rail and the Next button
+  // are right immediately. Re-rendering the results fetches every dataset back
+  // and takes seconds -- long enough to look broken if the rail waited on it.
+  if (s.has_discovery) {
+    setStage('discover', 'done', 'restored');
+    $('#btnAssess').disabled = false;
+    $('#btnSize').disabled = false;
+  }
+  if (s.has_assessment) {
+    setStage('assess', 'done', 'restored');
+    // Everything that only needs an assessment is unlocked, not just the next
+    // one along. Target needs the collector run; Remediate and Gate need the
+    // assessment. All three are satisfied here.
+    for (const id of ['target', 'remediate', 'gate']) {
+      if (stageState[id] === 'idle') setStage(id, 'active');
+    }
+    $('#btnRemediate').disabled = false;
+    $('#btnGate').disabled = false;
+  }
+  if (s.has_sizing) setStage('target', 'done', 'restored');
+  if (s.has_remediation) setStage('remediate', 'done', 'restored');
+  show(current);
+
+  if (s.has_discovery) {
+    $('#discEmpty').style.display = 'none';
+    await renderDiscovery();
+    $('#toAssess').style.display = '';
+  }
+  if (s.has_assessment) {
+    $('#assessEmpty').style.display = 'none';
+    await renderAssessment();
+  }
+  if (s.has_sizing) {
+    $('#sizeEmpty').style.display = 'none';
+    await renderSizing();
+  }
+  if (s.has_remediation) {
+    $('#remEmpty').style.display = 'none';
+    await renderRemediation();
+  }
+  if (s.has_gate) await renderGate();
+  if (s.rehearsal_dsn) {
+    $('#rehearsalDsn').value = s.rehearsal_dsn;
+    $('#rehearsalState').textContent = 'registered: ' + s.rehearsal_dsn;
+  }
+  if ((s.utilization || {}).usable_for_sizing) {
+    const u = s.utilization;
+    $('#utilStatus').innerHTML = `<div class="note info">
+      <b>${esc(u.filename || 'feed')}</b> accepted — ${u.window_days} day window from
+      <span class="mono">${esc(u.source)}</span>. Sizing will be load-derived.
+      <button class="btn ghost sm" style="margin-left:10px" onclick="clearUtil()">Remove</button></div>`;
+  }
+  show(current);
 }
 
 function applyConnected(checks, facts){
