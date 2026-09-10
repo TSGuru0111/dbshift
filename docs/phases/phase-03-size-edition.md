@@ -1,8 +1,8 @@
 # Phase 3 — Size & Edition decision
 
 > **Latest update — 2026-09-10.** `sizing.run.main` split into `execute()`,
-> shared with the console, which now carries this as stage 4 including the
-> utilization upload. Earlier: measured utilization can be supplied as a CSV,
+> shared with the console, which now carries this as **Phase 3 - Size & Edition**
+> including the utilization upload. Earlier: measured utilization can be supplied as a CSV,
 > turning the capacity floor into a load-derived recommendation.
 
 ## Purpose
