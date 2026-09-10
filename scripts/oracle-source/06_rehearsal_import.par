@@ -1,0 +1,42 @@
+# Data Pump parameter file for the rehearsal import.
+#
+# RUN AS (from a Command Prompt, not SQL*Plus; copy this file somewhere with no
+# spaces in the path first -- impdp cannot parse parfile= with a quoted path):
+#   copy 06_rehearsal_import.par C:\oracle\ext_data\
+#   impdp system/<password>@localhost:1521/XEPDB1 parfile=C:\oracle\ext_data\06_rehearsal_import.par
+#
+# WHY A PARFILE AND NOT A COMMAND LINE
+# The EXCLUDE clauses contain double quotes. On Windows those need escaping that
+# differs between cmd.exe and PowerShell and gets silently mangled either way.
+# A parfile is read by impdp itself, so the quotes arrive intact.
+
+directory=DBMIG_EXT_DIR
+dumpfile=DBMIG_GOLDEN.DMP
+logfile=rehearsal_import.log
+remap_schema=DBMIG_APP:DBMIG_REHEARSAL
+
+# --- The three same-instance conflicts -------------------------------------
+# The rehearsal copy lives in the SAME database as the source. Three kinds of
+# object cannot simply be duplicated there, because their identity is global to
+# the instance rather than scoped to a schema. Each is handled, not ignored.
+
+# 1. Object types carry a 32-hex OID that is unique database-wide. Importing
+#    them verbatim collides with DBMIG_APP's copies (ORA-02304). This tells
+#    Data Pump to mint fresh OIDs. The type structure is identical; only the
+#    internal identifier differs, which nothing in remediation depends on.
+transform=oid:n
+
+# 2. An XML schema is registered against its URL in XDB, and that registry is
+#    per-database. DBMIG_APP already owns
+#    http://dbmig.example.com/loan_notice.xsd, so re-registering it violates
+#    XDB.SYS_C006588 -- and there is no remap for a schema URL. LOAN_NOTICE_XML
+#    depends on it, so both come out together.
+#    CONSEQUENCE: XML-typed findings cannot be rehearsed on a same-instance
+#    copy. They stay BLOCKED at the dry-run gate, which is honest.
+exclude=xmlschema
+exclude=table:"IN ('LOAN_NOTICE_XML')"
+
+# 3. The loopback database link needs CREATE DATABASE LINK, which the rehearsal
+#    user is deliberately not given -- a sandbox that can open connections to
+#    other databases is not a sandbox. Nothing being remediated uses it.
+exclude=db_link

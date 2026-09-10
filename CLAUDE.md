@@ -25,7 +25,8 @@ See `docs/02-architecture.md` for why, and do not re-add them.
 | Size & Edition decision | ✅ `sizing/`, EE BYOL verdict, rules overrode the proposal |
 | AWS account | ✅ Granted 2026-09-09, SSO + `DBA_permissions`. See `docs/05-aws-services.md` |
 | Bedrock access | ⛔ **Blocked** — listing works, every invoke fails on a Marketplace subscription gap. `docs/05-aws-services.md` has the two fixes |
-| Detect & Remediate | ⬜ Blocked on the above — Bedrock invoke must work first |
+| Rehearsal copy | ✅ `DBMIG_REHEARSAL`, 85/90 objects, same XE instance. `scripts/oracle-source/06_*` |
+| Detect & Remediate | 🟡 `remediate/`, all 5 gates live. 2 fixes proven apply+rollback on the copy; the other 61 need Bedrock |
 | Everything AWS-side | ⬜ Nothing provisioned yet. Set budget alerts before the first resource |
 
 ## Running it

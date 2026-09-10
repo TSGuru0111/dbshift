@@ -1,11 +1,15 @@
 # Phase 4 — Detect & Remediate
 
-> **Latest update — 2026-09-10.** Structure built and added to the console.
-> **This phase plans fixes and applies nothing.** Two of the five gates
-> report `BLOCKED` because the infrastructure they need does not exist, and model
-> generation is unavailable because Bedrock `InvokeModel` is blocked on this
-> account. On the reference estate: 66 findings planned, 2 with SQL, 61 routed to
-> a human, 3 that are decisions rather than statements.
+> **Latest update — 2026-09-10 (rehearsal live).** The dry-run gate now runs
+> against a real restored copy, `DBMIG_REHEARSAL` (85 objects, 1,079 MB). Both
+> drafted fixes moved `BLOCKED → AUTO_APPLY` with all five gates green:
+> `DQ-007` applied in **5,704 ms** and rolled back in **1,254 ms**; `PERF-001`
+> applied in **65 ms** and rolled back in **110 ms**. Verified afterwards that
+> `DBMIG_APP` still holds 90 objects and its `PAYMENT_HIST` statistics still date
+> from 2026-09-08 — the source was not touched. On the reference estate: 66
+> findings planned, 2 with SQL, 61 routed to a human, 3 that are decisions rather
+> than statements. **The phase still applies nothing to production**; it now
+> proves what it would apply.
 
 ## Purpose
 
@@ -37,8 +41,47 @@ production database is not.
 | **static** | Single statement, names its target, carries a rollback |
 | **policy** | The prohibitions. Never drops a production object, deletes rows, alters privileges or rewrites business logic — whatever level it carries |
 | **syntax** | **Offline only.** Oracle executes DDL at parse time, so `DBMS_SQL.PARSE` on a `CREATE INDEX` would create the index. Real parsing belongs on the rehearsal copy |
-| **dry run** | Apply and roll back on a restored copy. **BLOCKED** — no rehearsal database exists |
+| **dry run** | Apply and roll back on a restored copy. **Live** — see below |
 | **approval** | L1 carries its own by policy; everything else needs a named human |
+
+### The dry-run gate
+
+`remediate/rehearsal.py`. Every fix is **remapped** off the source schema, then
+applied and rolled back on the copy. Both must succeed.
+
+The remap rewrites quoted identifiers (`"DBMIG_APP"."X"`) and quoted string
+owners (`ownname => 'DBMIG_APP'`), then **re-checks that the source schema name
+is gone entirely** and refuses if it is not. A half-remapped statement would run
+against production, so a partial rewrite is an error rather than a best effort.
+It also refuses outright when the rehearsal schema and source schema are the
+same name.
+
+A failed rollback after a successful apply returns `dirty: true` and fails the
+fix — that is the case the gate exists to catch, and it also means the copy needs
+re-importing before the next run.
+
+### Building the rehearsal copy
+
+`scripts/oracle-source/06_create_rehearsal.sql` (as `SYSTEM`), then
+`06_rehearsal_import.par` via `impdp`. Both carry the reasoning inline.
+
+**The copy lives in the same XE instance as the source.** That is a deliberate
+compromise — a separate instance or an RDS target would isolate it properly, but
+RDS Oracle is ~$343/month against a $100 credit. Same-instance is adequate for
+schema-scoped DDL, which is what L1/L2 fixes are, and the policy gate already
+forbids anything wider.
+
+Three object kinds have **database-wide identity** and therefore cannot be
+duplicated into a second schema in the same instance:
+
+| Object | Why | Handling |
+|---|---|---|
+| Object types | 32-hex OID is unique per database (`ORA-02304`) | `transform=oid:n` mints fresh OIDs; structure is identical |
+| XML schema | registered per-database against its URL; no remap exists (`ORA-00001` on `XDB.SYS_C006588`) | excluded, and `LOAN_NOTICE_XML` with it |
+| Database link | needs `CREATE DATABASE LINK`, deliberately withheld | excluded — a sandbox that can reach other databases is not a sandbox |
+
+Net: **85 of 90 objects**, all 4.5 M rows. The gap is exactly the link, the XML
+table, and their dependent index/LOB.
 
 ### The templates
 
@@ -59,7 +102,8 @@ A template declining is a routing decision, not a failure.
 | | |
 |---|---|
 | Input | `assess/output/assessment.json` |
-| Input | `DBSHIFT_REHEARSAL_DSN` (optional, not yet used for anything) |
+| Input | `DBSHIFT_REHEARSAL_DSN` + `DBSHIFT_REHEARSAL_PASSWORD` — both required, or the gate reports `BLOCKED` |
+| Input | `DBSHIFT_REHEARSAL_USER` / `_SCHEMA` / `DBSHIFT_PRIMARY_SCHEMA` (optional overrides) |
 | Output | `remediate/output/remediation_plan.json` |
 
 ## Design decisions
@@ -82,7 +126,12 @@ console cannot claim a model produced a fix while invoke is blocked.
 
 ## Known limits
 
-- **Nothing can be applied.** No rehearsal database, so no fix can be proven safe.
+- **Proving is not applying.** Both fixes are now proven on a copy, but there is
+  still no apply step against production, deliberately. That is Phase 5's gate
+  and a human decision, not a function call.
+- **XML-typed findings cannot be rehearsed** on a same-instance copy, because an
+  XML schema URL is unique per database. They stay `BLOCKED`, which is honest —
+  a separate instance would lift this.
 - **61 of 66 findings need a human**, because model generation is unavailable.
   That number falls when Bedrock is wired; it is not a defect in the router.
 - **No retry loop yet.** `policy.MAX_ATTEMPTS` is 3 and recorded, but a failed
@@ -94,21 +143,45 @@ console cannot claim a model produced a fix while invoke is blocked.
 
 ```bash
 python -m remediate.run
-python -m remediate.run --rehearsal-dsn host:1521/SERVICE
+```
+
+With the dry-run gate live:
+
+```bash
+$env:DBSHIFT_REHEARSAL_DSN='localhost:1521/XEPDB1'; $env:DBSHIFT_REHEARSAL_PASSWORD='...'; python -m remediate.run
 ```
 
 Console: **Phase 4 - Remediate**.
 
 ## What unblocks it
 
-1. **A rehearsal database** — restore `data/dbmig_golden.dmp` into a second
-   instance and set `DBSHIFT_REHEARSAL_DSN`. Needs no Bedrock, and moves the two
-   drafted fixes from `BLOCKED` to applyable.
+1. ~~A rehearsal database~~ — **done 2026-09-10.**
 2. **Bedrock Marketplace access** — moves the 61 toward drafted fixes.
 
-These are independent; neither waits on the other.
-
 ## Change log
+
+**2026-09-10 (rehearsal live)** — Dry-run gate wired to a real copy; both fixes
+proven end to end with the timings in `Latest update`.
+
+Four things went wrong building the copy, all worth keeping:
+
+- **There is no `CREATE INDEX` system privilege** in Oracle — only
+  `CREATE ANY INDEX`, which the rehearsal user must *not* have. An owner can
+  already index its own tables, so nothing was needed.
+- **A trailing `-- comment` after a `GRANT`'s semicolon** makes SQL\*Plus fold it
+  into the statement and fail with `ORA-00990`, which reads exactly like an
+  invalid privilege name and sends you the wrong way.
+- **That same bug silently swallowed the next line**, the `ALTER USER … QUOTA
+  UNLIMITED` — so the script printed a healthy `OPEN` account, and the 602 MB
+  import then failed with `ORA-01950` on every single table, 39 errors deep. The
+  script's verify block now raises if the quota is missing, because a check that
+  only reports what is easy to report is how this happens.
+- **`impdp` is an OS program, not a SQL command** (`SP2-0734` if run at `SQL>`),
+  and its `EXCLUDE` clauses need a parfile — Windows quoting mangles them on the
+  command line either way.
+
+After the fixes: 39 errors → 1, and that one is `SP_BROKEN_DEMO` compiling with
+warnings, which is a **seeded defect faithfully reproduced**, not a failure.
 
 **2026-09-10** — Console stage added. Policy statement-counting fixed: it counted
 semicolons, so a PL/SQL block (`BEGIN …; END;`) was rejected as "more than one
