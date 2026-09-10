@@ -34,6 +34,8 @@ from assess import loader as assess_loader
 from assess import scoring as assess_scoring
 from collector import config as collector_config
 from collector import run as collector_run
+from blocker import gate as blocker_gate
+from blocker import policy as blocker_policy
 from remediate import plan as remediate_plan
 from sizing import run as sizing_run
 from sizing import utilization as sizing_utilization
@@ -68,6 +70,8 @@ class State:
     utilization: dict | None = None
     remediation: dict | None = None
     rehearsal_dsn: str | None = None
+    gate: dict | None = None
+    waivers: list = field(default_factory=list)
 
 
 STATE = State()
@@ -209,6 +213,8 @@ def get_state():
         "has_assessment": STATE.assessment is not None,
         "has_sizing": STATE.sizing is not None,
         "has_remediation": STATE.remediation is not None,
+        "has_gate": STATE.gate is not None,
+        "waivers": STATE.waivers,
         "utilization": STATE.utilization,
         "rehearsal_dsn": STATE.rehearsal_dsn,
         "run_id": STATE.run_id,
@@ -303,16 +309,24 @@ def add_rule(req: CustomRuleRequest):
         raise HTTPException(400, str(exc)) from exc
 
 
-@app.delete("/api/{kind}/{identifier}")
-def delete_custom(kind: str, identifier: str):
-    singular = {"probes": "probe", "rules": "rule"}.get(kind)
-    if not singular:
-        raise HTTPException(404, "unknown collection")
+# Explicit paths, not /api/{kind}/{identifier}. A catch-all here silently
+# swallowed DELETE /api/waivers/... and answered 404 from the wrong handler.
+def _delete_custom(kind: str, identifier: str):
     try:
-        settings.delete_custom(singular, identifier)
+        settings.delete_custom(kind, identifier)
     except settings.SettingsError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True}
+
+
+@app.delete("/api/probes/{name}")
+def delete_probe(name: str):
+    return _delete_custom("probe", name)
+
+
+@app.delete("/api/rules/{rule_id}")
+def delete_rule(rule_id: str):
+    return _delete_custom("rule", rule_id)
 
 
 @app.get("/api/discover")
@@ -642,6 +656,50 @@ def remediation():
     if not STATE.remediation:
         raise HTTPException(409, "no remediation plan yet")
     return STATE.remediation
+
+
+class WaiverRequest(BaseModel):
+    rule_id: str
+    approved_by: str
+    reason: str
+
+
+@app.post("/api/waivers")
+def add_waiver(req: WaiverRequest):
+    """Accept a blocker, on the record.
+
+    Validation lives in blocker.policy so the console and the CLI cannot drift
+    on what counts as a real waiver. A waiver may never be anonymous.
+    """
+    waiver = req.model_dump()
+    problems = blocker_policy.validate_waiver(waiver)
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+    STATE.waivers = [w for w in STATE.waivers if w["rule_id"] != waiver["rule_id"]]
+    STATE.waivers.append(waiver)
+    return {"ok": True, "waivers": STATE.waivers}
+
+
+@app.delete("/api/waivers/{rule_id}")
+def remove_waiver(rule_id: str):
+    STATE.waivers = [w for w in STATE.waivers if w["rule_id"] != rule_id]
+    return {"ok": True, "waivers": STATE.waivers}
+
+
+@app.get("/api/gate")
+def gate():
+    """Phase 5. Fast and deterministic -- no stream, nothing to watch."""
+    if not STATE.assessment:
+        raise HTTPException(409, "no assessment run yet")
+    decision = blocker_gate.evaluate(STATE.assessment, STATE.remediation, STATE.waivers)
+    STATE.gate = decision
+
+    out_dir = Path(__file__).resolve().parent.parent / "blocker" / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "gate_decision.json").write_text(
+        json.dumps(decision, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return decision
 
 
 def main() -> int:

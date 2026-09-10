@@ -480,6 +480,37 @@ tr:last-child td{border-bottom:none}
     <div id="remEmpty" class="panel"><div class="empty">Run the assessment first, then plan remediations.</div></div>
   </section>
 
+  <!-- ============ 6. GATE ============ -->
+  <section class="view" id="view-gate">
+    <div class="head">
+      <h2>Blocker gate</h2>
+      <p>The last deterministic step before anything costs money or touches a target.
+         <b>Nothing downstream runs while a critical finding is open.</b> A blocker can be
+         accepted, but never anonymously — a waiver needs a named approver and a real reason,
+         and both are recorded.</p>
+    </div>
+
+    <div class="spread" style="margin-bottom:16px">
+      <button class="btn" id="btnGate">Evaluate gate</button>
+      <span class="mono" id="gateMeta" style="font-size:12px;color:var(--ink-3)"></span>
+    </div>
+
+    <div id="gateResult" style="display:none">
+      <div class="panel pad" id="gateVerdict"></div>
+
+      <div class="mt"><div class="eyebrow">Downstream phases</div>
+        <div class="checks" id="phaseList"></div></div>
+
+      <div class="mt"><div class="eyebrow">Open blockers</div>
+        <div class="acc" id="blockerList"></div></div>
+
+      <div class="mt" id="waivedWrap" style="display:none">
+        <div class="eyebrow">Waived</div>
+        <div class="acc" id="waivedList"></div></div>
+    </div>
+    <div id="gateEmpty" class="panel"><div class="empty">Run the assessment first, then evaluate the gate.</div></div>
+  </section>
+
   <!-- ============ CATALOGUE ============ -->
   <section class="view" id="view-catalogue">
     <div class="head">
@@ -560,10 +591,13 @@ const STAGES = [
   {id:'assess',    label:'Assessment',n:3},
   {id:'target',    label:'Target',    n:4},
   {id:'remediate', label:'Remediate', n:5},
+  {id:'gate',      label:'Gate',      n:6},
 ];
+const IDLE_STAGES = {connect:'active', discover:'idle', assess:'idle',
+                     target:'idle', remediate:'idle', gate:'idle'};
 let current = 'connect';
-let stageState = {connect:'active', discover:'idle', assess:'idle', target:'idle', remediate:'idle'};
-let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:''};
+let stageState = {...IDLE_STAGES};
+let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:''};
 let ISSUES = [], sevFilter = new Set(), catFilter = new Set();
 
 function renderRail(){
@@ -674,8 +708,8 @@ $('#btnDisconnect').onclick = async () => {
   $('#btnDisconnect').style.display = 'none'; $('#facts').innerHTML = '';
   $('#checks').innerHTML = '<div class="empty">Connect to run the preflight checks.</div>';
   $('#btnDiscover').disabled = true;
-  stageState = {connect:'active', discover:'idle', assess:'idle', target:'idle', remediate:'idle'};
-  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:''};
+  stageState = {...IDLE_STAGES};
+  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:''};
   renderRail();
 };
 
@@ -794,7 +828,9 @@ $('#btnAssess').onclick = () => {
       setStage('assess', 'done', `${d.issues} issues · score ${d.overall}`);
       setStage('target', stageState.target === 'idle' ? 'active' : stageState.target);
       $('#btnRemediate').disabled = false;
+      $('#btnGate').disabled = false;
       $('#remEmpty').querySelector('.empty').textContent = 'Plan remediations for these findings.';
+      $('#gateEmpty').querySelector('.empty').textContent = 'Evaluate the gate for these findings.';
       $('#assessMeta').textContent =
         `${d.findings} findings across ${d.issues} issues · recall ${Math.round(d.recall*100)}%`;
       await renderAssessment();
@@ -1144,6 +1180,116 @@ function renderRouted(){
 
   $('#routedCount').textContent =
     `${routed.length} findings across ${Object.keys(byRule).length} rules need a model or a human`;
+}
+
+/* ---------------- blocker gate ---------------- */
+$('#btnGate').disabled = true;
+
+const VERDICT_STYLE = {
+  PROCEED:               {cls:'ok',   led:'', word:'Proceed'},
+  PROCEED_WITH_WAIVERS:  {cls:'busy', led:'', word:'Proceed with waivers'},
+  HALT:                  {cls:'bad',  led:'', word:'Halt'},
+};
+
+$('#btnGate').onclick = async () => {
+  const btn = $('#btnGate');
+  btn.disabled = true;
+  setStage('gate', 'busy', 'evaluating');
+  try {
+    await renderGate();
+  } catch (e) {
+    $('#gateMeta').textContent = 'failed — ' + e;
+    setStage('gate', 'active', 'failed');
+  }
+  btn.disabled = false;
+};
+
+async function renderGate(){
+  const r = await fetch('/api/gate');
+  if (!r.ok) throw new Error((await r.json()).detail);
+  const g = await r.json();
+
+  $('#gateEmpty').style.display = 'none';
+  const style = VERDICT_STYLE[g.verdict] || VERDICT_STYLE.HALT;
+  setStage('gate', g.verdict === 'HALT' ? 'active' : 'done',
+    g.verdict === 'HALT' ? `${g.blockers.length} blocking` : style.word.toLowerCase());
+  $('#gateMeta').textContent =
+    `${g.critical_findings} critical findings · ${g.blockers.length} open · ${g.waived.length} waived`;
+
+  $('#gateVerdict').innerHTML = `
+    <div class="status ${style.cls}" style="font-size:15px;font-weight:600">
+      <span class="led"></span><span>${esc(style.word)}</span></div>
+    <p style="font-size:13px;color:var(--ink-2);margin-top:12px;max-width:82ch">${esc(g.summary)}</p>`;
+
+  // Which downstream phases this actually stands in front of. A binary halt
+  // sends people to fix the wrong thing.
+  $('#phaseList').innerHTML = Object.entries(g.by_phase).map(([phase, v]) => {
+    const clear = v.status === 'clear';
+    return `<div class="check ${clear ? 'pass' : 'fail'}">
+      <span class="mark">${clear ? '✓' : '×'}</span>
+      <div><div class="name">${esc(phase.replace(/_/g,' '))}</div>
+        <div class="detail">${clear ? 'clear' : 'blocked by ' + esc(v.blocked_by.join(', '))}</div>
+      </div></div>`;
+  }).join('');
+
+  $('#blockerList').innerHTML = g.blockers.map(b => `
+    <details class="item"><summary>
+      <span class="title"><span class="sev CRITICAL">CRITICAL</span>&nbsp;${esc(b.title)}
+        <span class="sub">${esc(b.rule_id)}${b.known_blast_radius ? '' : ' · blast radius unknown'}</span></span>
+      <span></span>
+      <span class="count">${b.occurrences > 1 ? '×' + b.occurrences : '1'}</span></summary>
+      <div class="body">
+        <p class="why"><b>Blocks:</b> ${esc(b.blocks.join(', ').replace(/_/g,' ')) || 'everything'}</p>
+        <p class="why">${esc(b.why)}</p>
+        <p class="why"><b>Clears when.</b> ${esc(b.clears_when)}</p>
+        ${b.fix_drafted ? '<p class="why"><b>A fix is already drafted</b> for this rule in the remediation plan.</p>' : ''}
+        ${b.objects.length ? `<div class="objs">${b.objects.slice(0,30).map(o => `<span>${esc(o)}</span>`).join('')}</div>` : ''}
+        <div class="note warn" style="margin-top:14px">Accepting this blocker is recorded against
+          your name. Say why in a way that would still make sense to someone reading it in six
+          months.</div>
+        <div class="row2">
+          <div class="field"><label>Approved by</label>
+            <input id="wa-${esc(b.rule_id)}" placeholder="you@company.com"></div>
+          <div class="field"><label>Reason</label>
+            <input id="wr-${esc(b.rule_id)}" placeholder="why this is acceptable"></div>
+        </div>
+        <button class="btn ghost sm" onclick="waive('${esc(b.rule_id)}')">Waive this blocker</button>
+        <div id="we-${esc(b.rule_id)}"></div>
+      </div></details>`).join('')
+    || '<div class="empty">No open blockers.</div>';
+
+  $('#waivedWrap').style.display = g.waived.length ? '' : 'none';
+  $('#waivedList').innerHTML = g.waived.map(w => `
+    <details class="item"><summary>
+      <span class="title">${esc(w.title)}<span class="sub">${esc(w.rule_id)} · waived</span></span>
+      <span></span>
+      <span style="display:flex;gap:10px;align-items:center" onclick="event.preventDefault()">
+        <button class="btn ghost sm" onclick="unwaive('${esc(w.rule_id)}')">Revoke</button></span></summary>
+      <div class="body">
+        <p class="why"><b>Accepted by</b> ${esc(w.waiver.approved_by)}</p>
+        <p class="why">${esc(w.waiver.reason)}</p>
+        <p class="why" style="color:var(--ink-3)">Still blocks, on paper: ${esc(w.blocks.join(', ').replace(/_/g,' '))}</p>
+      </div></details>`).join('');
+
+  $('#gateResult').style.display = '';
+}
+
+async function waive(ruleId){
+  const approved_by = $(`#wa-${ruleId}`).value.trim();
+  const reason = $(`#wr-${ruleId}`).value.trim();
+  const r = await fetch('/api/waivers', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({rule_id: ruleId, approved_by, reason})});
+  if (!r.ok) {
+    const d = await r.json();
+    $(`#we-${ruleId}`).innerHTML = `<div class="note bad mt-s">${esc(d.detail)}</div>`;
+    return;
+  }
+  await renderGate();
+}
+
+async function unwaive(ruleId){
+  await fetch('/api/waivers/' + encodeURIComponent(ruleId), {method:'DELETE'});
+  await renderGate();
 }
 
 /* ---------------- catalogue ---------------- */
