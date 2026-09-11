@@ -864,9 +864,10 @@ def provision_status():
                 raise
             out.update(exists=False, status="NOT_DEPLOYED", events=[], outputs={})
             return out
-        events = cfn.describe_stack_events(StackName=stack)["StackEvents"][:40]
+        events = cfn.describe_stack_events(StackName=stack)["StackEvents"][:60]
         out.update(
             exists=True, status=s["StackStatus"], created=str(s["CreationTime"]),
+            stack_id=s["StackId"], region=provision_policy.REGION,
             outputs={o["OutputKey"]: o["OutputValue"] for o in s.get("Outputs", [])},
             events=[{"at": str(e["Timestamp"]), "resource": e["LogicalResourceId"],
                      "status": e["ResourceStatus"], "reason": e.get("ResourceStatusReason") or ""}
@@ -875,6 +876,22 @@ def provision_status():
     except Exception as exc:  # noqa: BLE001 -- expired credentials, most often
         out["aws_error"] = str(exc).splitlines()[0]
     return out
+
+
+@app.get("/api/provision/template")
+def provision_template():
+    """The template CloudFormation actually ran -- read back from the live stack,
+    not the local render, which may have been re-rendered since. Read-only."""
+    plan = _provision_plan()
+    if not plan or not plan.get("stack_name"):
+        raise HTTPException(409, "not rendered yet")
+    cfn = _aws_session().client("cloudformation", region_name=provision_policy.REGION)
+    try:
+        body = cfn.get_template(StackName=plan["stack_name"], TemplateStage="Original")["TemplateBody"]
+    except ClientError as exc:
+        raise HTTPException(409, str(exc).splitlines()[0])
+    return {"stack_name": plan["stack_name"],
+            "template": body if isinstance(body, dict) else json.loads(body)}
 
 
 @app.post("/api/provision/verify")

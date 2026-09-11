@@ -253,6 +253,16 @@ the stack, because a stack cannot delete a bucket that holds objects.
 
 ## Change log
 
+**2026-09-11 — showing the CloudFormation work in a demo.** The target panel now
+shows the stack's *whole* creation, oldest first, timed from the first event
+(`+0:00` … `+23:05` — every supporting resource inside the first minute, the
+database instance the other 22), a link that opens the stack in the AWS console,
+and **the template CloudFormation actually ran**, read back from the live stack
+with `GetTemplate` rather than from the local render, which may since have been
+re-rendered. All read-only. Also corrects an earlier figure: the instance's
+create timestamp was ≈16 min after the stack started, but CloudFormation marked
+it complete at +23:03 — 23 minutes end to end is the number to quote.
+
 **2026-09-11 — first real deploy, and a self-test that wrote to the real record.**
 Deployed as above. Reading `deployments.jsonl` afterwards showed four fake
 deploys under account `111122223333`: `provision.selftest` called `deploy()`

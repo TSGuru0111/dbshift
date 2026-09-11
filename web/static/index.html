@@ -581,7 +581,10 @@ tr:last-child td{border-bottom:none}
         <div class="spread"><div class="eyebrow" style="margin:0">Target — live from CloudFormation</div>
           <button class="btn ghost sm" id="btnStatus">Refresh</button></div>
         <div id="statusBody" class="mt-s"></div>
-        <div class="ticker mt-s" id="statusEvents"></div>
+        <div class="eyebrow mt" style="margin-bottom:6px">What CloudFormation built, in order</div>
+        <div class="ticker" id="statusEvents"></div>
+        <details class="steplog" id="cfnTemplate"><summary>The template CloudFormation ran — read back
+          from the live stack</summary><pre></pre></details>
         <div class="spread mt"><button class="btn ghost sm" id="btnVerify" disabled>Verify the database</button><span></span></div>
         <div class="checks mt-s" id="verifyChecks"></div>
       </div>
@@ -1668,11 +1671,21 @@ async function refreshStatus(){
       dbshift-static profile.</div>` : ''}
     ${s.console_error ? `<div class="note bad mt-s">${esc(s.console_error)}</div>` : ''}
     ${s.outputs && s.outputs.Endpoint ? `<p class="mono mt-s" style="font-size:12.5px">${esc(s.outputs.Endpoint)}:${esc(s.outputs.Port)}</p>` : ''}
+    ${s.stack_id ? `<p class="mt-s" style="font-size:13px"><a target="_blank" rel="noopener"
+      href="https://${esc(s.region)}.console.aws.amazon.com/cloudformation/home?region=${esc(s.region)}#/stacks/stackinfo?stackId=${encodeURIComponent(s.stack_id)}">Open
+      this stack in the AWS console ↗</a></p>` : ''}
     ${ack && s.exists ? `<p class="why mt-s"><b>Provisioned under HALT</b> — acknowledged by ${esc(ack.approved_by)}
       for provisioning only: “${esc(ack.reason)}”. Still open: ${esc(ack.blockers_left_open.join(', '))}.</p>` : ''}`;
-  $('#statusEvents').innerHTML = (s.events || []).slice(-14).map(e => `
+  // The whole creation, oldest first, timed from the first event -- so "the
+  // database took sixteen minutes, everything else under one" is visible.
+  const evs = s.events || [];
+  const t0 = evs.length ? Date.parse(evs[0].at) : 0;
+  const since = at => { const secs = Math.max(0, Math.round((Date.parse(at) - t0) / 1000));
+    return `+${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`; };
+  $('#statusEvents').innerHTML = evs.map(e => `
     <div class="tick ${/FAILED/.test(e.status) ? 'err' : /COMPLETE$/.test(e.status) ? 'done' : 'run'}"><span class="st"></span>
-      <span class="nm">${esc(e.resource)}</span><span class="meta">${esc(e.status)}${e.reason ? ' · ' + esc(e.reason) : ''}</span></div>`).join('');
+      <span class="nm">${esc(since(e.at))}  ${esc(e.resource)}</span><span class="meta">${esc(e.status)}${e.reason ? ' · ' + esc(e.reason) : ''}</span></div>`).join('');
+  $('#cfnTemplate').style.display = s.exists ? '' : 'none';
   $('#btnVerify').disabled = s.status !== 'CREATE_COMPLETE';
   $('#deployForm').style.display = s.exists ? 'none' : '';
   if (s.status === 'CREATE_COMPLETE') {
@@ -1684,6 +1697,16 @@ async function refreshStatus(){
   if (moving || s.console_deploy_running) statusTimer = setTimeout(refreshStatus, 15000);
 }
 $('#btnStatus').onclick = refreshStatus;
+
+// Fetched when opened, from the live stack: what actually ran, not a re-render.
+$('#cfnTemplate').addEventListener('toggle', async (ev) => {
+  const pre = $('#cfnTemplate pre');
+  if (!ev.target.open || pre.textContent) return;
+  pre.textContent = 'reading the template from CloudFormation…';
+  const r = await fetch('/api/provision/template');
+  const d = await r.json();
+  pre.textContent = r.ok ? JSON.stringify(d.template, null, 2) : d.detail;
+});
 
 $('#btnDeploy').onclick = async () => {
   const btn = $('#btnDeploy');
