@@ -38,6 +38,8 @@ from blocker import gate as blocker_gate
 from blocker import policy as blocker_policy
 from botocore.exceptions import ClientError
 from killswitch import run as killswitch_run
+from migrate import run as migrate_run
+from migrate import steps as migrate_steps
 from provision import deploy as provision_deploy
 from provision import policy as provision_policy
 from provision import run as provision_run
@@ -80,6 +82,7 @@ class State:
     gate: dict | None = None
     waivers: list = field(default_factory=list)
     provision: dict | None = None
+    migrate_owner_password: str | None = None   # memory only, for a fresh export
 
 
 STATE = State()
@@ -920,6 +923,47 @@ def killswitch_act(req: KillRequest):
                                       regions=[provision_policy.REGION])
     except PermissionError as exc:
         raise HTTPException(400, str(exc))
+
+
+# --------------------------------------------------------------------------- phase 7
+
+
+class MigrateCredentials(BaseModel):
+    source_owner_password: str = ""
+
+
+@app.post("/api/migrate/credentials")
+def migrate_credentials(req: MigrateCredentials):
+    """Held in process memory only, like every password in this console, and never
+    put in a URL -- the stream below is a GET, so it cannot carry one."""
+    STATE.migrate_owner_password = req.source_owner_password or None
+    return {"ok": True, "held": bool(STATE.migrate_owner_password)}
+
+
+@app.get("/api/migrate/plan")
+def migrate_plan():
+    return {"steps": migrate_run.plan(), "last_run": migrate_run.last_run()}
+
+
+@app.get("/api/migrate")
+def migrate(resolve_external: bool = False, fresh_export: bool = False):
+    """Phase 7. Streams every step's start, backend log lines and result."""
+    import os
+
+    opts = migrate_steps.Options(
+        source_owner_password=STATE.migrate_owner_password or os.environ.get("DBSHIFT_SOURCE_OWNER_PASSWORD"),
+        collector_password=(STATE.password if STATE.connected else None)
+        or os.environ.get("DBSHIFT_COLLECTOR_PASSWORD"),
+        collector_user=STATE.user or "dbmig_collector",
+        source_dsn=STATE.dsn or collector_config.DEFAULT_DSN,
+        resolve_external_via_s3=resolve_external, fresh_export=fresh_export)
+
+    def work(emit):
+        rec = migrate_run.execute(_aws_session(), opts, on_event=emit)
+        emit({"event": "complete", "status": rec["status"], "stopped_at": rec.get("stopped_at"),
+              "reason": rec.get("reason")})
+
+    return _stream(work)
 
 
 def main() -> int:

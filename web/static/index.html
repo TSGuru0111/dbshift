@@ -116,6 +116,19 @@ main{max-width:1180px;margin:0 auto;padding:28px 24px 80px}
 .btn.sm{padding:6px 12px;font-size:12px}
 /* Reserved for the two actions that bill or destroy: Deploy and Destroy. */
 .btn.danger{background:var(--bad);color:var(--on-bad)}
+/* Phase 7 step timeline: who decided each step, and its live backend log. */
+.who{font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:400;padding:1px 7px;margin-left:8px;
+  border:1px solid var(--rule-strong);border-radius:3px;color:var(--ink-2);white-space:nowrap}
+.who.phase4_advice{border-color:var(--warn);color:var(--warn)}
+.who.approval{border-color:var(--accent);color:var(--accent-ink)}
+.who.gate{border-color:var(--bad);color:var(--bad)}
+.check.pending .mark{background:var(--rule-strong)}
+.check.run .mark{background:var(--accent);animation:pulse 1s var(--ease) infinite}
+.steplog{margin-top:8px}
+.steplog summary{cursor:pointer;font-size:12px;color:var(--ink-2)}
+.steplog pre{max-height:260px;overflow:auto;background:var(--surface-2);padding:10px 12px;font-size:12px;
+  line-height:1.5;margin:6px 0 0;white-space:pre-wrap;word-break:break-word}
+.chk{display:flex;gap:8px;align-items:flex-start;font-size:13px;margin-bottom:12px;max-width:82ch}
 .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 /* ---------- status ---------- */
@@ -609,6 +622,37 @@ tr:last-child td{border-bottom:none}
     </div>
   </section>
 
+  <!-- ============ 8. MIGRATE ============ -->
+  <section class="view" id="view-migrate">
+    <div class="head">
+      <h2>Migrate</h2>
+      <p>Each step below is what the backend is about to do, in order. As it runs you see the exact
+         command or SQL it executes, its output, and the evidence it ends on — passwords masked.
+         Every step also says <b>who decided it</b>: a rule, the gate, Phase 4's advice, or you.
+         The path is Data Pump, which loads tables, then rows, then indexes and constraints, then code.</p>
+    </div>
+
+    <div class="panel pad" id="migDecide">
+      <div class="eyebrow">Before it runs</div>
+      <label class="chk"><input type="checkbox" id="mResolve">
+        <span><b>Resolve RDS-004 in this phase.</b> The external table's file moves to S3 and into an RDS
+        directory of the same name, so the table works on the target. Recorded against your AWS login.
+        Without this, the gate stops the load.</span></label>
+      <label class="chk"><input type="checkbox" id="mFresh">
+        <span>Export again, even though a VERSION=19 dump already exists.</span></label>
+      <div class="row2">
+        <div class="field"><label for="mOwnerPw">Schema owner password — only for a fresh export</label>
+          <input id="mOwnerPw" type="password" autocomplete="off" placeholder="held in memory only"></div>
+        <span></span></div>
+      <div class="spread"><button class="btn" id="btnMigrate">Run the migration</button>
+        <span class="mono" id="migMeta" style="font-size:12px;color:var(--ink-3)"></span></div>
+    </div>
+
+    <div class="checks mt" id="migSteps"></div>
+    <div id="migEmpty" class="panel mt"><div class="empty">Provision the target first. Migration opens when
+      it is CREATE_COMPLETE.</div></div>
+  </section>
+
   <!-- ============ CATALOGUE ============ -->
   <section class="view" id="view-catalogue">
     <div class="head">
@@ -694,12 +738,13 @@ const STAGES = [
   {id:'remediate', label:'Remediate',      n:4},
   {id:'gate',      label:'Blocker gate',   n:5},
   {id:'provision', label:'Provision',      n:6},
+  {id:'migrate',   label:'Migrate',        n:7},
 ];
 const IDLE_STAGES = {connect:'active', discover:'idle', assess:'idle',
-                     target:'idle', remediate:'idle', gate:'idle', provision:'idle'};
+                     target:'idle', remediate:'idle', gate:'idle', provision:'idle', migrate:'idle'};
 let current = 'connect';
 let stageState = {...IDLE_STAGES};
-let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:''};
+let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:'', migrate:''};
 let ISSUES = [], sevFilter = new Set(), catFilter = new Set();
 
 function renderRail(){
@@ -732,7 +777,7 @@ function renderPageNav(){
     ${next ? `<button class="btn sm" ${nextLocked ? 'disabled' : ''}
                 onclick="show('${next.id}')"
                 title="${nextLocked ? 'Finish this stage first' : ''}">${esc(nextLabel)} &rarr;</button>`
-           : '<span class="mono" style="font-size:11.5px;color:var(--ink-3)">Phase 7 onward is not built</span>'}`;
+           : '<span class="mono" style="font-size:11.5px;color:var(--ink-3)">Phase 8 onward is not built</span>'}`;
 }
 function show(id){
   const previous = current;
@@ -900,7 +945,7 @@ $('#btnDisconnect').onclick = async () => {
   $('#checks').innerHTML = '<div class="empty">Connect to run the preflight checks.</div>';
   $('#btnDiscover').disabled = true;
   stageState = {...IDLE_STAGES};
-  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:''};
+  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:'', migrate:''};
   renderRail();
 };
 
@@ -1629,7 +1674,11 @@ async function refreshStatus(){
       <span class="nm">${esc(e.resource)}</span><span class="meta">${esc(e.status)}${e.reason ? ' · ' + esc(e.reason) : ''}</span></div>`).join('');
   $('#btnVerify').disabled = s.status !== 'CREATE_COMPLETE';
   $('#deployForm').style.display = s.exists ? 'none' : '';
-  if (s.status === 'CREATE_COMPLETE') setStage('provision', 'done', 'running · billing');
+  if (s.status === 'CREATE_COMPLETE') {
+    setStage('provision', 'done', 'running · billing');
+    // Migration opens once there is a target to migrate into.
+    if (stageState.migrate === 'idle') { setStage('migrate', 'active'); renderMigratePlan(); }
+  }
   else if (moving) setStage('provision', 'busy', (s.status || '').replace(/_/g, ' ').toLowerCase());
   if (moving || s.console_deploy_running) statusTimer = setTimeout(refreshStatus, 15000);
 }
@@ -1696,6 +1745,92 @@ $('#btnDestroy').onclick = async () => {
   if (!r.ok) { $('#killMsg').innerHTML = `<div class="note bad mt-s"><b>Refused.</b> ${esc(d.detail)}</div>`; return; }
   renderKill(d);
   await refreshStatus();
+};
+
+/* ---------------- migrate (Phase 7) ---------------- */
+const WHO = {rule:'rule', gate:'Phase 5 gate', phase4_advice:'Phase 4 advice · static fixture, not model output',
+             approval:'your approval', orchestrator:'orchestrator'};
+const STEP_CLASS = {pass:'pass', warn:'warn', fail:'fail', stop:'fail', skip:'pending'};
+
+function stepCard(s, i){
+  return `<div class="check pending" id="ms-${s.id}"><span class="mark">${i + 1}</span>
+    <div style="min-width:0;flex:1">
+      <div class="name">${esc(s.title)}<span class="who ${esc(s.decided_by)}">${esc(WHO[s.decided_by] || s.decided_by)}</span></div>
+      <div class="detail">${esc(s.why)}</div>
+      <div class="detail" style="color:var(--ink-3)">Changes: ${esc(s.touches)} · Undo: ${esc(s.reversible)}${s.conditional ? ' · only when chosen' : ''}</div>
+      <div class="detail" id="msd-${s.id}"></div>
+      <details class="steplog" id="msl-${s.id}"><summary>Backend log</summary><pre></pre></details>
+    </div></div>`;
+}
+
+function markStep(d){
+  const card = $(`#ms-${d.id}`); if (!card) return;
+  card.className = 'check ' + (STEP_CLASS[d.status] || 'pending');
+  const secs = d.elapsed_ms != null ? ` · ${(d.elapsed_ms / 1000).toFixed(1)} s` : '';
+  $(`#msd-${d.id}`).innerHTML = `<b>${esc((d.status || '').toUpperCase())}</b> — ${esc(d.detail || '')}${secs}`
+    + (d.evidence && d.evidence.remedy ? `<div class="remedy">${esc(d.evidence.remedy)}</div>` : '');
+  const ev = Object.assign({}, d.evidence || {}); delete ev.remedy;
+  if (Object.keys(ev).length) {
+    $(`#msl-${d.id} pre`).textContent += `\n— evidence —\n${JSON.stringify(ev, null, 2)}\n`;
+  }
+}
+
+async function renderMigratePlan(){
+  const r = await fetch('/api/migrate/plan');
+  if (!r.ok) return;
+  const p = await r.json();
+  $('#migEmpty').style.display = 'none';
+  $('#migSteps').innerHTML = p.steps.map(stepCard).join('');
+  const last = p.last_run;
+  if (last) {
+    for (const s of last.steps) markStep(s);
+    for (const l of last.log || []) { const pre = $(`#msl-${l.id} pre`); if (pre) pre.textContent += l.line + '\n'; }
+    $('#migMeta').textContent = `last run ${String(last.started_at_utc || '').slice(0, 16).replace('T', ' ')} UTC · ${last.status}`
+      + (last.stopped_at ? ` at ${last.stopped_at}` : '');
+  }
+}
+
+$('#btnMigrate').onclick = async () => {
+  const btn = $('#btnMigrate');
+  btn.disabled = true;
+  const pw = $('#mOwnerPw').value;
+  if (pw) {
+    await fetch('/api/migrate/credentials', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({source_owner_password: pw})});
+    $('#mOwnerPw').value = '';
+  }
+  const plan = await (await fetch('/api/migrate/plan')).json();
+  $('#migSteps').innerHTML = plan.steps.map(stepCard).join('');
+  $('#migEmpty').style.display = 'none';
+  setStage('migrate', 'busy', 'running');
+  const qs = `?resolve_external=${$('#mResolve').checked}&fresh_export=${$('#mFresh').checked}`;
+  const es = new EventSource('/api/migrate' + qs);
+  es.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (d.event === 'step_start') {
+      $(`#ms-${d.id}`).className = 'check run';
+      $(`#msd-${d.id}`).innerHTML = '<b>RUNNING</b>';
+      $(`#msl-${d.id}`).open = true;
+      $(`#ms-${d.id}`).scrollIntoView({block:'nearest'});
+      setStage('migrate', 'busy', d.title.toLowerCase());
+    } else if (d.event === 'step_log') {
+      const pre = $(`#msl-${d.id} pre`);
+      if (pre) { pre.textContent += d.line + '\n'; pre.scrollTop = pre.scrollHeight; }
+    } else if (d.event === 'step_done') {
+      markStep(d);
+    } else if (d.event === 'complete') {
+      es.close();
+      btn.disabled = false;
+      $('#migMeta').textContent = d.status + (d.stopped_at ? ` at ${d.stopped_at}` : '');
+      setStage('migrate', d.status.startsWith('completed') ? 'done' : 'active',
+        d.status.startsWith('completed') ? d.status.replace(/_/g, ' ') : `stopped at ${d.stopped_at}`);
+    } else if (d.event === 'error') {
+      es.close(); btn.disabled = false;
+      $('#migMeta').textContent = 'error — ' + d.message;
+      setStage('migrate', 'active', 'error');
+    }
+  };
+  es.onerror = () => { es.close(); btn.disabled = false; setStage('migrate', 'active', 'connection lost'); };
 };
 
 /* ---------------- catalogue ---------------- */

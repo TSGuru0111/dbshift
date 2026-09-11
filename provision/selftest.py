@@ -111,6 +111,11 @@ def _expect_create(sess, halt_tag=True):
 
 
 def main() -> int:
+    # Write to a throwaway folder. The first version wrote its fake deploys into
+    # the real provision/output/deployments.jsonl and deployed.json, mixing test
+    # entries into the audit record of a real, billing deploy.
+    import tempfile
+    d.OUTPUT = Path(tempfile.mkdtemp(prefix="dbshift-selftest-"))
     failures = []
 
     def check(label, ok, detail=""):

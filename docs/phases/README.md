@@ -44,8 +44,8 @@ When you make a change:
 | 3 | Size & Edition | ✅ built | [phase-03-size-edition.md](phase-03-size-edition.md) |
 | 4 | Detect & Remediate | ◐ plans only | [phase-04-remediate.md](phase-04-remediate.md) |
 | 5 | Blocker gate | ✅ built | [phase-05-blocker-gate.md](phase-05-blocker-gate.md) |
-| 6 | Provision | ◐ renders + read-only preflight; deploy not built | [phase-06-provision.md](phase-06-provision.md) |
-| 7 | Migrate | ⬜ not started | — |
+| 6 | Provision | ✅ built, deployed and verified 2026-09-11 | [phase-06-provision.md](phase-06-provision.md) |
+| 7 | Migrate | ◐ built; first run stopped at the gate on RDS-004 | [phase-07-migrate.md](phase-07-migrate.md) |
 | 8 | Validate | ⬜ not started | — |
 | 9 | Cutover | ⬜ not started | — |
 | 10 | Report | ◐ partial — the HTML report covers 1–3 | — |

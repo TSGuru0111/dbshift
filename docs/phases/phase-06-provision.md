@@ -1,6 +1,20 @@
 # Phase 6 — Provision
 
-> **Latest update — 2026-09-11 (deploy step built, not run).**
+> **Latest update — 2026-09-11 (deployed and verified).** The approved deploy ran:
+> stack `dbshift-target-dbmig-app` `CREATE_COMPLETE`, instance available at
+> 07:53 UTC (≈16 min after the stack started) — **billing from then at
+> $0.098/hour**. `verify` passed every check: S3_INTEGRATION role `ACTIVE`, class,
+> engine version and licence as rendered, login as `dbshiftadm`, version
+> **19.32**, AL32UTF8 / AL16UTF16. It also settled both open questions:
+> **Oracle Text (`CONTEXT`) is installed and VALID** on RDS 19c without an option,
+> and the instance is **non-CDB** (`v$database.cdb = NO`). The latter contradicts
+> the reason Phase 3 gives for dismissing Multitenant ("RDS runs a container
+> database by default") — the verdict stands, the stated reason does not; see
+> `phase-03-size-edition.md`. The deploy's PowerShell host crashed writing output
+> after the stack completed (exit 5); CloudFormation and the audit record were
+> unaffected.
+>
+> **Previous — 2026-09-11 (deploy step built, not run).**
 > `python -m provision.deploy` re-runs render and preflight, then refuses — before
 > anything is created — unless the account matches `--confirm`, the operator
 > types back the computed hourly rate with `--accept-hourly`, and, while the gate
@@ -238,6 +252,16 @@ To remove anything this project created: `python -m killswitch --destroy --confi
 the stack, because a stack cannot delete a bucket that holds objects.
 
 ## Change log
+
+**2026-09-11 — first real deploy, and a self-test that wrote to the real record.**
+Deployed as above. Reading `deployments.jsonl` afterwards showed four fake
+deploys under account `111122223333`: `provision.selftest` called `deploy()`
+with the module's real `OUTPUT`, so every self-test run appended to the genuine
+audit record and overwrote `deployed.json` (which held the real stack only
+because the real deploy happened to finish last). The self-test now writes to a
+temporary folder, and the fake entries were removed from the record — the two
+real ones (requested 07:37:39 UTC, created `CREATE_COMPLETE`, acknowledged by
+`guru.ts@ganitinc.com`) are intact.
 
 **2026-09-11 — console stage.** Phase 6 added to the rail and a Provision screen
 built (`/api/provision`, `/plan`, `/deploy`, `/status`, `/verify`,
