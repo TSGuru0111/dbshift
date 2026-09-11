@@ -1,6 +1,19 @@
 # Phase 6 — Provision
 
-> **Latest update — 2026-09-11. Built: render + read-only preflight. Nothing is
+> **Latest update — 2026-09-11 (deploy step built, not run).**
+> `python -m provision.deploy` re-runs render and preflight, then refuses — before
+> anything is created — unless the account matches `--confirm`, the operator
+> types back the computed hourly rate with `--accept-hourly`, and, while the gate
+> says HALT, an acknowledgement is given. The acknowledgement is **provision-only**,
+> needs a reason, waives no blocker, and records the approver from the
+> credentials themselves. Decision recorded 2026-09-11: the approver chose this
+> route over waiving the four blockers. Create uses `OnFailure=DELETE`, so a
+> failed deploy removes itself. `python -m provision.verify` then logs in and
+> compares the live database with the render. Self-test 14/14; the real
+> no-acknowledgement run was refused and the kill switch confirmed nothing was
+> created. **No deploy has been run.**
+>
+> **Previous — 2026-09-11. Built: render + read-only preflight. Nothing is
 > deployed.** `python -m provision.run` reads the Phase 2–5 records, refuses them
 > unless they all come from one collector run, renders the RDS target as a
 > CloudFormation template with a provenance line for every estate-derived value,
@@ -51,6 +64,36 @@ checking are free and happen every run; deploying is a separate, deliberate act.
 11. **Price** — `provision/pricing.py`, from AWS's public offer file, if one is
     supplied with `--price-file`.
 12. **Write** `provision/output/<stack>.template.json` and `provision_plan.json`.
+
+### Deploy — `provision/deploy.py :: deploy()`
+
+1. **Re-run steps 1–12.** Nothing is trusted from an earlier plan.
+2. **Refuse, before anything is created**, when: preflight is not clean;
+   `--confirm` ≠ the account the credentials resolve to; `--accept-hourly` ≠ the
+   rate just computed from the price list (no price → no deploy); or the gate
+   says HALT and `--acknowledge-halt` is missing or under 15 characters.
+3. **Record the request** in `provision/output/deployments.jsonl` — before the
+   first billable call, so an interrupted deploy still leaves a trace.
+4. **Password** — `ensure_password()` creates a random SecureString in SSM once
+   (letters, digits, `_#`; starts with a letter) or reuses an existing one. The
+   value is never returned, logged, or written.
+5. **Create the stack** with `CAPABILITY_NAMED_IAM`, `OnFailure=DELETE`, a
+   90-minute timeout, and stack tags `dbshift-requested-by` and (under HALT)
+   `dbshift-halt-acknowledged-by`. Their keys differ from the template's resource
+   tags so nothing collides when CloudFormation propagates them.
+6. **Follow it** — `wait()` streams every stack event once and keeps every
+   `*_FAILED` reason. It stops when the stack stops moving, or at the timeout
+   (reported as `still_creating`, never auto-deleted).
+7. **Result** — `created`, `failed_and_removed`, `failed` or `still_creating`,
+   appended to `deployments.jsonl`; `deployed.json` on success.
+
+### Verify — `provision/verify.py`
+
+Logs in as the master user (password read from SSM into memory only) and checks,
+against the render's provenance: S3_INTEGRATION role `ACTIVE`, class, engine
+version, licence model, both character sets. It also settles the two questions
+the render left open — `v$database.cdb`, and whether the `CONTEXT` (Oracle Text)
+component is installed, which `IX_COMM_NOTES_TEXT` needs.
 
 ### What the template contains
 
@@ -131,7 +174,14 @@ public endpoint locked to one `/32`, and an `expires-at` tag 8 hours out.
 
 ## Known limits
 
-- **Deploy is not built.** Rendering and checking only.
+- **The deploy has never been run.** Self-tested against a stubbed account, and
+  its refusal path run once against the real one. `verify.py` is untested until
+  a real instance exists.
+- **Acknowledgements live in `provision/output/deployments.jsonl`**, which is
+  local and gitignored, and on the stack's tags. Durable, shared audit belongs in
+  the metadata repository once it exists.
+- **The SSM password parameter survives a teardown.** Standard-tier parameters
+  are free, but the kill switch does not yet delete it.
 - **`{{resolve:ssm-secure:…}}` on `MasterUserPassword` is unverified** until the
   first change set. `ValidateTemplate` does not resolve dynamic references.
 - **Oracle Text on RDS 19c is unverified** — whether it needs an option. Checked
@@ -151,6 +201,12 @@ public endpoint locked to one `/32`, and an `expires-at` tag 8 hours out.
 python -m provision.run                      # render + read-only checks
 python -m provision.run --price-file <path>  # ...and price it
 python -m provision.run --no-aws             # render nothing AWS-dependent; offline checks only
+python -m provision.selftest                  # deploy refusals and happy path, stubbed, no AWS
+
+# The one that bills. Every flag is required by design:
+python -m provision.deploy --confirm <account-id> --accept-hourly <rate-from-provision.run> `
+    --price-file <path> --acknowledge-halt "<why provisioning is acceptable while blockers are open>"
+python -m provision.verify                   # after a successful create
 ```
 
 To remove anything this project created: `python -m killswitch --destroy --confirm <account-id>`
@@ -158,6 +214,15 @@ To remove anything this project created: `python -m killswitch --destroy --confi
 the stack, because a stack cannot delete a bucket that holds objects.
 
 ## Change log
+
+**2026-09-11 — deploy and verify built, not run.** `provision/deploy.py`,
+`provision/verify.py`, `provision/selftest.py`. The route past HALT was a
+decision by the approver: a provision-only acknowledgement rather than waiving
+`DQ-001`, `OPS-001`, `OPS-002` and `RDS-004`, because those findings stand in
+front of CDC, cutover and one table's load — not in front of standing up the
+target — and waiving them would have recorded those migration risks as
+accepted. Self-test 14/14. Real refusal run (correct rate, no acknowledgement):
+refused at HALT; kill switch and SSM confirmed nothing was created.
 
 **2026-09-11 — built (render + preflight).** `provision/` created: `policy.py`,
 `records.py`, `render.py`, `preflight.py`, `pricing.py`, `run.py`. First run on

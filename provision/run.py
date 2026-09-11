@@ -87,6 +87,9 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
         "estate": estate,
         "collector_run_id": run_id,
         "source": facts,
+        # The deploy step decides on HALT from this, not from a file it re-reads
+        # later -- the plan and the decision must describe the same moment.
+        "gate": {k: recs["gate"][k] for k in ("verdict", "by_phase", "blockers", "collector_run_id")},
         "checks": checks,
         "ready": bool(rendered) and not any(c["status"] in (preflight.FAIL, preflight.BLOCKED)
                                             for c in checks),
