@@ -643,7 +643,8 @@ tr:last-child td{border-bottom:none}
       <div class="row2">
         <div class="field"><label for="mOwnerPw">Schema owner password — only for a fresh export</label>
           <input id="mOwnerPw" type="password" autocomplete="off" placeholder="held in memory only"></div>
-        <span></span></div>
+        <div class="field"><label for="mFrom">Start from</label>
+          <select id="mFrom"><option value="">the beginning</option></select></div></div>
       <div class="spread"><button class="btn" id="btnMigrate">Run the migration</button>
         <span class="mono" id="migMeta" style="font-size:12px;color:var(--ink-3)"></span></div>
     </div>
@@ -1781,6 +1782,12 @@ async function renderMigratePlan(){
   const p = await r.json();
   $('#migEmpty').style.display = 'none';
   $('#migSteps').innerHTML = p.steps.map(stepCard).join('');
+  // Resuming skips finished work, never the checks, so the first three are not offered.
+  const keep = $('#mFrom').value;
+  $('#mFrom').innerHTML = '<option value="">the beginning</option>' + p.steps
+    .filter(s => !['records', 'target', 'gate'].includes(s.id))
+    .map(s => `<option value="${esc(s.id)}">${esc(s.title)}</option>`).join('');
+  $('#mFrom').value = keep;
   const last = p.last_run;
   if (last) {
     for (const s of last.steps) markStep(s);
@@ -1803,7 +1810,8 @@ $('#btnMigrate').onclick = async () => {
   $('#migSteps').innerHTML = plan.steps.map(stepCard).join('');
   $('#migEmpty').style.display = 'none';
   setStage('migrate', 'busy', 'running');
-  const qs = `?resolve_external=${$('#mResolve').checked}&fresh_export=${$('#mFresh').checked}`;
+  const qs = `?resolve_external=${$('#mResolve').checked}&fresh_export=${$('#mFresh').checked}`
+    + `&from_step=${encodeURIComponent($('#mFrom').value)}`;
   const es = new EventSource('/api/migrate' + qs);
   es.onmessage = (m) => {
     const d = JSON.parse(m.data);

@@ -1,6 +1,20 @@
 # Phase 7 — Migrate
 
-> **Latest update — 2026-09-11. Built; first run stopped at the gate, as designed.**
+> **Latest update — 2026-09-11 (migrated).** With `RDS-004` resolved in-phase on the
+> approver's decision (`guru.ts@ganitinc.com`), the full pipeline ran into the RDS
+> target: dump uploaded (575 MB, 53 s), staged into `DATA_PUMP_DIR` (602,812,416
+> bytes, identical to the export), schema owner created from discovery, the
+> external file moved, Data Pump import in 1 m 56 s — *completed with 17 errors*.
+> A new step, **Triage the import log and repair**, classified all 17 plus 3
+> invalid objects by rule: **6 repaired** (the missing custom role and its 3
+> grants; the Oracle Text index, whose 21c import call 19c rejects, rebuilt
+> natively from the source DDL in 26 s; 2 synonyms recompiled), **13 expected and
+> explained** (12 grants to the source-only discovery account, the seeded broken
+> procedure), **0 left for a person**. Phase 4's two runbook steps applied. First
+> count: 80 objects plus 7 Oracle Text internals; **11 of 11 comparable tables
+> match exactly on rows**; nothing that was valid on the source is invalid.
+>
+> **Previous — 2026-09-11. Built; first run stopped at the gate, as designed.**
 > `python -m migrate.run` and the console's **Phase 7 · Migrate** screen run eleven
 > steps in order and show each one live: what it does, who decided it, what it
 > changes, whether it can be undone, every command or SQL statement as it runs
@@ -33,6 +47,7 @@ at the first step that returns `fail` or `stop`.
 | 7 | **Create the schema owner** — the user with the privileges and roles discovery recorded; custom roles created; the flagged profile *not* copied | rule | target: user, grants, role |
 | 8 | **Resolve RDS-004** *(only when chosen)* — the external file to S3, its directory recreated on RDS under the same name | approval | S3 object, one directory |
 | 9 | **Import schema and data** — `DBMS_DATAPUMP` on the target, log followed line by line | orchestrator | the whole schema |
+| 10 | **Triage the import log and repair** — every failure classified: *repaired* where the fix is certain, *expected* where failing is correct, *for a person* otherwise; invalid objects compiled as their owner | rule | grants, a rebuilt index, recompiled objects |
 | 10 | **Apply Phase 4's target steps** — disable the scheduler job, first complete refresh of the materialized view | phase4_advice | one job, one MV |
 | 11 | **First count** — objects by type and exact row counts, source against target | rule | nothing |
 
@@ -93,18 +108,37 @@ Without it, the run stops at step 3 and says how to proceed.
 `DBMS_MVIEW` calls may run from Phase 4 artefacts, in rule order, so the job is
 disabled before the materialized view is refreshed.
 
+**"Completed with 17 errors" is not an outcome.** Data Pump reports a failure and
+carries on, so the repair step reads the import log and classifies every entry
+by rule. What it repairs, it repairs only when the fix is certain: a grant whose
+grantee is a custom role from discovery; a CONTEXT index whose source DDL matches
+a plain `CREATE INDEX … INDEXTYPE IS CTXSYS.CONTEXT`, rebuilt as its owner; an
+object that was valid on the source, compiled as its owner. Grants to the
+discovery account are expected — that account has no business on the target.
+Anything unrecognised goes to a person with its full error text. This is the
+step where a reasoning model will add the most in the final version: classifying
+what these rules do not recognise, and drafting a fix for a person to approve.
+
+**Resuming skips work, never checks.** `--from <step>` (console: *Start from*)
+skips completed steps, but records, target and gate run every time — what they
+check can change between runs.
+
+**Row counts compare numbers only.** A source count the read-only account could
+not take is *not comparable*. The first version compared error strings too, so a
+table missing on both sides "matched"; the honest figure fell from 18/21 to 11/11.
+
 **Nothing is hidden in the log.** Every statement is logged before it runs;
 passwords are replaced with `********`; polling queries are the only ones left
 out, because they would bury the log.
 
 ## Known limits
 
-- **Steps 4–11 have not yet run against the target.** The first run stopped at the
-  gate. The RDS-side calls (`download_from_s3`, `DBMS_DATAPUMP`, `create_directory`)
-  are written to AWS's documented interfaces and are unproven here until they run.
-- **Expected import errors are reported, not hidden:** the database link
-  (`RDS-005` — it points at the source host), and possibly the Advanced Queuing
-  queue (`RDS-007`). Each `ORA-` line is kept in the step's evidence.
+- **The database link imported, but points at the source host** (`RDS-005`). It
+  exists on the target and will fail when used; recreating it needs a network path.
+- **Oracle Text internals differ by version** — 21c has `$B`, `$C`, `$Q` tables that
+  19c does not. They are counted separately (source 10, target 7), never as data.
+- **The repair rules cover what this estate produced.** A different estate will
+  produce failures they do not recognise; those go to a person, which is correct.
 - **The scheduler job is created enabled by the import** and disabled one step
   later. The window is seconds; the job's schedule makes a run inside it unlikely,
   not impossible.
@@ -125,6 +159,18 @@ python -m migrate.run --fresh-export             # export again first
 **Console: Phase 7 · Migrate** — opens once the target is `CREATE_COMPLETE`.
 
 ## Change log
+
+**2026-09-11 — first full migration, and a repair step.** Run with `RDS-004`
+resolved in-phase (approval recorded). Steps 1–9 and 11–12 passed; the import
+completed with 17 errors. Two were real gaps in this code: `DBMIG_READ_ROLE`
+was never created, because step 7 only created custom roles *granted to* the
+owner, not those *receiving* grants from its objects (fixed in step 7, and
+repaired on the target); and `IX_COMM_NOTES_TEXT` failed because the dump
+carries 21c's internal `ctxsys.driimp.create_index` call, which 19c rejects with
+`PLS-00306` — the downgrade risk Phase 6 warned about, now seen for real. Added
+the repair step, `--from` / *Start from*, and honest row comparison. Re-ran from
+`repair`: 6 repaired, 13 expected, 0 for a person; 11 of 11 comparable tables
+match on rows.
 
 **2026-09-11 — built.** `migrate/steps.py`, `migrate/run.py`, console stage with a
 live step timeline. Source re-exported with `VERSION=19` as `DBMIG_APP`

@@ -946,7 +946,7 @@ def migrate_plan():
 
 
 @app.get("/api/migrate")
-def migrate(resolve_external: bool = False, fresh_export: bool = False):
+def migrate(resolve_external: bool = False, fresh_export: bool = False, from_step: str = ""):
     """Phase 7. Streams every step's start, backend log lines and result."""
     import os
 
@@ -956,7 +956,8 @@ def migrate(resolve_external: bool = False, fresh_export: bool = False):
         or os.environ.get("DBSHIFT_COLLECTOR_PASSWORD"),
         collector_user=STATE.user or "dbmig_collector",
         source_dsn=STATE.dsn or collector_config.DEFAULT_DSN,
-        resolve_external_via_s3=resolve_external, fresh_export=fresh_export)
+        resolve_external_via_s3=resolve_external, fresh_export=fresh_export,
+        resume_from=from_step or None)
 
     def work(emit):
         rec = migrate_run.execute(_aws_session(), opts, on_event=emit)

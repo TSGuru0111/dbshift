@@ -64,9 +64,23 @@ def execute(session, opts: S.Options, on_event=None) -> dict:
     ctx = S.Ctx(session=session, opts=opts, records=records.load(),
                 plan=json.loads(prov_plan_path.read_text(encoding="utf-8")), emit=emit)
     record["collector_run_id"] = ctx.run_id
+    # Resuming skips the work already done, never the checks: records, target and
+    # gate run every time, because what they check can have changed since.
+    always = {"records", "target", "gate"}
+    resuming = opts.resume_from
+    record["options"]["resume_from"] = opts.resume_from
     try:
         for step in S.STEPS:
             meta = {"id": step.id, "title": step.title, "decided_by": step.decided_by}
+            if resuming and step.id not in always:
+                if step.id == resuming:
+                    resuming = None
+                else:
+                    done = {**meta, "status": S.SKIP, "elapsed_ms": 0,
+                            "detail": f"skipped -- this run resumes from '{opts.resume_from}'"}
+                    emit({"event": "step_done", **done})
+                    record["steps"].append(done)
+                    continue
             if step.when is not None and not step.when(ctx):
                 done = {**meta, "status": S.SKIP, "detail": "not chosen for this run", "elapsed_ms": 0}
                 emit({"event": "step_done", **done})
@@ -106,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="DBShift Phase 7 -- migrate")
     ap.add_argument("--resolve-external-via-s3", action="store_true")
     ap.add_argument("--fresh-export", action="store_true")
+    ap.add_argument("--from", dest="resume_from", default=None,
+                    help="resume from this step id; records, target and gate still run first")
     ap.add_argument("--profile", default=provision_run.DEFAULT_PROFILE)
     args = ap.parse_args(argv)
 
@@ -114,7 +130,8 @@ def main(argv: list[str] | None = None) -> int:
                      collector_password=os.environ.get("DBSHIFT_COLLECTOR_PASSWORD"),
                      collector_user=os.environ.get("DBSHIFT_COLLECTOR_USER", "dbmig_collector"),
                      source_dsn=os.environ.get("DBSHIFT_DSN", "localhost:1521/XEPDB1"),
-                     resolve_external_via_s3=args.resolve_external_via_s3, fresh_export=args.fresh_export)
+                     resolve_external_via_s3=args.resolve_external_via_s3, fresh_export=args.fresh_export,
+                     resume_from=args.resume_from)
 
     def show(e):
         if e["event"] == "step_start":

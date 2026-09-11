@@ -60,6 +60,7 @@ class Options:
     source_dsn: str = "localhost:1521/XEPDB1"
     resolve_external_via_s3: bool = False      # the RDS-004 route, recorded as an approval
     fresh_export: bool = False
+    resume_from: str | None = None             # re-run from a step; the checks always run
 
 
 @dataclass
@@ -74,6 +75,7 @@ class Ctx:
     approvals: list = field(default_factory=list)
     _target: object = None
     _source: object = None
+    _owner: object = None
 
     @property
     def run_id(self) -> str:
@@ -109,6 +111,22 @@ class Ctx:
                                             password=self.opts.collector_password, dsn=self.opts.source_dsn)
         return self._source
 
+    def owner_conn(self):
+        """The schema owner on the target, for work an owner should do itself --
+        building its own text index, compiling its own objects."""
+        if self._owner is None:
+            import oracledb
+            name = f"/dbshift/{self.plan['stack_name']}/{self.estate.lower()}-password"
+            pw = self.client("ssm").get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+            out = self.state["outputs"]
+            self._owner = oracledb.connect(user=self.estate, password=pw,
+                                           dsn=f"{out['Endpoint']}:{out['Port']}/{prov_policy.DB_NAME}")
+        return self._owner
+
+    def owner_sql(self, statement: str) -> None:
+        self.log(f"SQL ({self.estate})> " + " ".join(statement.split())[:500])
+        self.owner_conn().cursor().execute(statement)
+
     def sql(self, statement: str, binds: dict | None = None, *, show: str | None = None,
             fetch: bool = False, quiet: bool = False):
         """Run on the target. Logs the statement unless quiet; `show` replaces the
@@ -124,7 +142,7 @@ class Ctx:
         return rows[0][0] if rows else None
 
     def close(self) -> None:
-        for conn in (self._target, self._source):
+        for conn in (self._target, self._source, self._owner):
             if conn is not None:
                 try:
                     conn.close()
@@ -365,6 +383,20 @@ def prepare_schema(ctx: Ctx) -> dict:
         except Exception as exc:  # noqa: BLE001
             failures.append(f"GRANT {r}: {str(exc).splitlines()[0]}")
 
+    # Custom roles that are not granted TO the owner but receive grants FROM its
+    # objects. They are not in role_privileges, so the first run missed one --
+    # DBMIG_READ_ROLE -- and all three of its SELECT grants failed on import with
+    # ORA-01917. Create them before the import so the object grants land.
+    custom = {(r.get("role") or r.get("role_name")) for r in ctx.data("roles") if r.get("oracle_maintained") == "N"}
+    receiving = sorted({g["grantee"] for g in ctx.data("table_privileges")
+                        if g.get("owner") == owner and g["grantee"] in custom} - set(roles))
+    for role in receiving:
+        r = q(role)
+        if not ctx.one("SELECT COUNT(*) FROM dba_roles WHERE role = :r", {"r": r}, quiet=True):
+            ctx.sql(f"CREATE ROLE {r}")
+            notes.append(f"created role {r} -- not granted to {owner}, but it receives grants on "
+                         f"{owner}'s objects, which fail on import without it")
+
     for p in privs:
         if not re.match(r"^[A-Z ]+$", p):
             failures.append(f"skipped unexpected privilege text {p!r}")
@@ -463,6 +495,149 @@ END;""")
     return result(status, final, errors=errors[:40], error_count=len(errors), job=job)
 
 
+GRANT_SQL = re.compile(r'^GRANT ([A-Z ,]+) ON "([A-Z0-9_$#]+)"\."([A-Z0-9_$#]+)" TO "([A-Z0-9_$#]+)"$')
+TEXT_INDEX_DDL = re.compile(
+    r'^CREATE INDEX "?[A-Z0-9_$#]+"?\."?[A-Z0-9_$#]+"? ON "?[A-Z0-9_$#]+"?\."?[A-Z0-9_$#]+"? '
+    r'\("?[A-Z0-9_$#]+"?\) INDEXTYPE IS "?CTXSYS"?\."?CONTEXT"?( PARAMETERS \(.*\))?( PARALLEL \d+)?$',
+    re.IGNORECASE)
+COMPILE_SQL = {"SYNONYM": "ALTER SYNONYM {o}.{n} COMPILE", "VIEW": "ALTER VIEW {o}.{n} COMPILE",
+               "PROCEDURE": "ALTER PROCEDURE {o}.{n} COMPILE", "FUNCTION": "ALTER FUNCTION {o}.{n} COMPILE",
+               "PACKAGE": "ALTER PACKAGE {o}.{n} COMPILE", "PACKAGE BODY": "ALTER PACKAGE {o}.{n} COMPILE BODY",
+               "TRIGGER": "ALTER TRIGGER {o}.{n} COMPILE", "TYPE": "ALTER TYPE {o}.{n} COMPILE",
+               "MATERIALIZED VIEW": "ALTER MATERIALIZED VIEW {o}.{n} COMPILE"}
+
+
+def _import_issues(lines: list[str]) -> list[dict]:
+    """Every object a Data Pump log reports as failed or compiled with warnings:
+    its type and name, the errors, and the SQL Data Pump tried to run."""
+    issues, i = [], 0
+    while i < len(lines):
+        ln = lines[i]
+        m = re.match(r'ORA-39083: Object type ([A-Z_]+)(?::"([^"]+)"\."([^"]+)")? failed to create', ln)
+        if m:
+            errors, sql, j = [], [], i + 1
+            while j < len(lines) and not lines[j].startswith("Failing sql is:"):
+                if lines[j].strip():
+                    errors.append(lines[j].strip())
+                j += 1
+            j += 1
+            while j < len(lines) and lines[j].strip() and not lines[j].startswith(("ORA-", "Processing", "Job ")):
+                sql.append(lines[j].strip())
+                j += 1
+            issues.append({"kind": m.group(1), "owner": m.group(2), "name": m.group(3),
+                           "errors": errors, "sql": " ".join(sql)})
+            i = j
+            continue
+        m = re.match(r'ORA-39082: Object type ([A-Z_ ]+):"([^"]+)"\."([^"]+)" created with compilation warnings', ln)
+        if m:
+            issues.append({"kind": m.group(1), "owner": m.group(2), "name": m.group(3),
+                           "errors": [ln], "sql": "", "warning": True})
+        i += 1
+    return issues
+
+
+def _source_ddl(ctx: Ctx, kind: str, name: str, owner: str) -> str:
+    cur = ctx.source().cursor()
+    cur.execute("SELECT DBMS_METADATA.GET_DDL(:k, :n, :o) FROM dual", {"k": kind, "n": name, "o": owner})
+    val = cur.fetchone()[0]
+    return " ".join((val.read() if hasattr(val, "read") else val).split()).rstrip(";").strip()
+
+
+def repair(ctx: Ctx) -> dict:
+    """Triage the import log. Data Pump reports a failure and carries on, and a
+    'completed with 17 errors' says nothing about which of them matter. Each is
+    classified by rule: repaired where the fix is certain, explained where the
+    failure is correct, and left for a person otherwise."""
+    owner = q(ctx.estate)
+    logname = f"{owner.lower()}_import.log"
+    lines = [r[0] or "" for r in ctx.sql(
+        "SELECT text FROM TABLE(rdsadmin.rds_file_util.read_text_file('DATA_PUMP_DIR', :f))",
+        {"f": logname}, fetch=True, quiet=True)]
+    issues = _import_issues(lines)
+    ctx.log(f"{len(issues)} object(s) reported in {logname}")
+    source_invalid = {(o.get("object_type"), o.get("object_name")) for o in ctx.data("invalid_objects")
+                      if o.get("owner") == owner}
+    custom = {(r.get("role") or r.get("role_name")) for r in ctx.data("roles") if r.get("oracle_maintained") == "N"}
+    collector = (ctx.opts.collector_user or "").upper()
+    repaired, expected, left = [], [], []
+
+    for it in issues:
+        label = f"{it['kind']} {it['name'] or ''}".strip()
+        errors = " ".join(it["errors"])
+        if it.get("warning"):
+            if (it["kind"], it["name"]) in source_invalid:
+                expected.append(f"{label}: invalid on the source too -- reproduced, not introduced")
+            else:
+                left.append(f"{label}: compiled with warnings, but was valid on the source")
+            continue
+
+        if it["kind"] == "OBJECT_GRANT" and "ORA-01917" in errors:
+            m = GRANT_SQL.match(it["sql"])
+            if not m:
+                left.append(f"unrecognised grant: {it['sql'][:100]}")
+                continue
+            grantee = m.group(4)
+            if grantee == collector:
+                expected.append(f"{it['sql']} -- the read-only discovery account exists only on the source")
+                continue
+            exists = (ctx.one("SELECT COUNT(*) FROM dba_roles WHERE role = :r", {"r": grantee}, quiet=True)
+                      or ctx.one("SELECT COUNT(*) FROM dba_users WHERE username = :u", {"u": grantee}, quiet=True))
+            if not exists:
+                if grantee not in custom:
+                    left.append(f"{it['sql']} -- {grantee} is not on the target and is not a custom role")
+                    continue
+                ctx.sql(f"CREATE ROLE {q(grantee)}")
+            ctx.sql(it["sql"])
+            repaired.append(f"{it['sql']} -- re-applied once {grantee} existed")
+            continue
+
+        if it["kind"] == "INDEX" and "PLS-00306" in errors and "ctxsys.driimp.create_index" in it["sql"].lower():
+            ddl = _source_ddl(ctx, "INDEX", it["name"], it["owner"])
+            if not TEXT_INDEX_DDL.match(ddl):
+                left.append(f"{label}: source DDL is not a plain CONTEXT index -- {ddl[:120]}")
+                continue
+            ctx.log(f"{label}: the dump carries 21c's internal rebuild call, which 19c's CTXSYS rejects "
+                    "(PLS-00306). Rebuilding natively from the source's own DDL, as the owner.")
+            started = time.monotonic()
+            ctx.owner_sql(ddl)
+            repaired.append(f"{label}: rebuilt natively on 19c from the source DDL in "
+                            f"{time.monotonic() - started:.0f} s (the 21c import call was rejected)")
+            continue
+
+        left.append(f"{label}: {errors[:180]}")
+
+    # Objects invalid on the target but valid on the source: compile them as their owner.
+    invalid = [tuple(r) for r in ctx.sql("SELECT object_type, object_name FROM dba_objects WHERE owner = :o "
+                                         "AND status <> 'VALID'", {"o": owner}, fetch=True, quiet=True)]
+    for kind, name in invalid:
+        if (kind, name) in source_invalid or kind not in COMPILE_SQL or not IDENT.match(name):
+            continue
+        try:
+            ctx.owner_sql(COMPILE_SQL[kind].format(o=owner, n=name))
+        except Exception as exc:  # noqa: BLE001 -- the recheck below reports it
+            ctx.log(f"compile {kind} {name}: {str(exc).splitlines()[0]}")
+    still = {tuple(r) for r in ctx.sql("SELECT object_type, object_name FROM dba_objects WHERE owner = :o "
+                                       "AND status <> 'VALID'", {"o": owner}, fetch=True, quiet=True)}
+    for kind, name in invalid:
+        if (kind, name) in source_invalid:
+            continue
+        if (kind, name) in still:
+            left.append(f"{kind} {name}: still invalid after compiling")
+        else:
+            repaired.append(f"{kind} {name}: invalid after import, valid after compiling")
+
+    for r in repaired:
+        ctx.log("REPAIRED  " + r)
+    for e in expected:
+        ctx.log("EXPECTED  " + e)
+    for x in left:
+        ctx.log("FOR A PERSON  " + x)
+    return result(PASS if not left else WARN,
+                  f"{len(issues)} import issue(s) and {len(invalid)} invalid object(s): {len(repaired)} repaired, "
+                  f"{len(expected)} expected and explained, {len(left)} left for a person",
+                  repaired=repaired, expected=expected, left_for_a_person=left)
+
+
 def runbook(ctx: Ctx) -> dict:
     """Phase 4's target-side steps for this phase, in rule order (the job is
     disabled before the materialized view is refreshed). DMS settings are listed
@@ -500,9 +675,18 @@ def reconcile(ctx: Ctx) -> dict:
     """A first count, not validation -- that is Phase 8's job. Objects by type from
     discovery against the target, invalid objects, and exact row counts."""
     owner = q(ctx.estate)
-    source_types = Counter(o["object_type"] for o in ctx.data("objects") if o.get("owner") == owner)
+    # Oracle Text keeps its index in DR$ tables whose names and number depend on
+    # the engine version (21c has $B, $C, $Q that 19c does not). They are
+    # counted separately rather than reported as missing data.
+    internal = lambda name: str(name).startswith("DR$")  # noqa: E731
+    source_types = Counter(o["object_type"] for o in ctx.data("objects")
+                           if o.get("owner") == owner and not internal(o["object_name"]))
     target_types = dict(ctx.sql("SELECT object_type, COUNT(*) FROM dba_objects WHERE owner = :o "
-                                "GROUP BY object_type", {"o": owner}, fetch=True))
+                                "AND object_name NOT LIKE 'DR$%' GROUP BY object_type", {"o": owner}, fetch=True))
+    text_src = sum(1 for o in ctx.data("objects") if o.get("owner") == owner and internal(o["object_name"]))
+    text_tgt = ctx.one("SELECT COUNT(*) FROM dba_objects WHERE owner = :o AND object_name LIKE 'DR$%'",
+                       {"o": owner}, quiet=True)
+    ctx.log(f"Oracle Text internals (version-specific names): source {text_src}, target {text_tgt}")
     by_type = {t: {"source": source_types.get(t, 0), "target": target_types.get(t, 0)}
                for t in sorted(set(source_types) | set(target_types))}
     for t, v in by_type.items():
@@ -532,16 +716,26 @@ def reconcile(ctx: Ctx) -> dict:
             except Exception as exc:  # noqa: BLE001
                 src = f"error: {str(exc).splitlines()[0]}"
         rows[table] = {"source": src, "target": tgt, "external": table in ext}
-        if src is not None and src != tgt:
+        # A source count the read-only account could not take is "not comparable",
+        # not a mismatch -- claiming either would be a guess.
+        if isinstance(src, int) and isinstance(tgt, int) and src != tgt:
             mismatched.append(table)
             ctx.log(f"ROWS {table}: source {src}  target {tgt}")
+        elif not isinstance(src, int):
+            ctx.log(f"ROWS {table}: target {tgt}; source not comparable ({src})")
+    comparable = sum(1 for v in rows.values() if isinstance(v["source"], int) and isinstance(v["target"], int))
+    source_invalid = {(o.get("object_type"), o.get("object_name")) for o in ctx.data("invalid_objects")
+                      if o.get("owner") == owner}
+    new_invalid = [(t, n) for t, n in invalid if (t, n) not in source_invalid]
     same_types = all(v["source"] == v["target"] for v in by_type.values())
-    status = PASS if (same_types and not mismatched and not invalid) else WARN
+    status = PASS if (same_types and not mismatched and not new_invalid) else WARN
     return result(status,
-                  f"{sum(v['target'] for v in by_type.values())} objects on the target; "
-                  f"{len(tables) - len(mismatched)} of {len(tables)} tables match on rows; "
-                  f"{len(invalid)} invalid object(s). Full validation is Phase 8.",
-                  by_type=by_type, rows=rows, invalid=[f"{t} {n}" for t, n in invalid])
+                  f"{sum(v['target'] for v in by_type.values())} objects on the target (plus {text_tgt} Oracle "
+                  f"Text internals); {comparable - len(mismatched)} of {comparable} comparable tables match on "
+                  f"rows; {len(new_invalid)} object(s) invalid that were valid on the source. "
+                  "Full validation is Phase 8.",
+                  by_type=by_type, rows=rows, invalid=[f"{t} {n}" for t, n in invalid],
+                  text_internals={"source": text_src, "target": text_tgt})
 
 
 # --------------------------------------------------------------------------- the order
@@ -589,6 +783,11 @@ STEPS = [
          "Data Pump loads tables, then rows, then builds indexes and constraints, then code -- the order "
          "the architecture asks for, so foreign keys are not checked row by row during the load.",
          "orchestrator", "target: the whole schema", "drop the user cascade and re-import", import_schema),
+    Step("repair", "Triage the import log and repair",
+         "Data Pump reports a failure and carries on. Every failure is classified by rule: repaired where the "
+         "fix is certain, explained where failing is correct, left for a person otherwise.",
+         "rule", "target: re-applied grants, a rebuilt index, recompiled objects",
+         "drop what was re-created", repair),
     Step("runbook", "Apply Phase 4's target steps",
          "Disable the scheduler job before it runs against a half-built schema, then give the materialized "
          "view its first complete refresh.", "phase4_advice", "target: one job, one materialized view",
