@@ -16,7 +16,7 @@
   --accent:#0C6E75; --accent-soft:#DCEDEE; --accent-ink:#0A5A60; --on-accent:#FFFFFF;
   --ok:#1F7A4C; --ok-soft:#E0F0E7;
   --warn:#8A6A0D; --warn-soft:#F6EEDA;
-  --bad:#A31D2C; --bad-soft:#F7E3E5;
+  --bad:#A31D2C; --bad-soft:#F7E3E5; --on-bad:#FFFFFF;
   --crit:#A31D2C; --high:#BE5A12; --med:#8A6A0D; --low:#3D6B8E; --info:#6D7883;
   --ease:cubic-bezier(.2,0,0,1);
   --shadow:0 1px 2px rgba(17,26,34,.05), 0 10px 30px -20px rgba(17,26,34,.35);
@@ -31,7 +31,7 @@
     --accent:#46AEB4; --accent-soft:#10312F; --accent-ink:#7FD0D4; --on-accent:#0B1419;
     --ok:#5BBE87; --ok-soft:#12271C;
     --warn:#C9A63E; --warn-soft:#2A2313;
-    --bad:#E4707F; --bad-soft:#2B1418;
+    --bad:#E4707F; --bad-soft:#2B1418; --on-bad:#0B1419;
     --crit:#E4707F; --high:#E39A55; --med:#C9A63E; --low:#7BA9C9; --info:#93A0AB;
     --shadow:0 1px 2px rgba(0,0,0,.5), 0 10px 30px -20px rgba(0,0,0,.8);
   }
@@ -114,6 +114,8 @@ main{max-width:1180px;margin:0 auto;padding:28px 24px 80px}
 .btn.ghost{background:none;border:1px solid var(--rule-strong);color:var(--ink-2)}
 .btn.ghost:hover:not(:disabled){border-color:var(--ink-3);color:var(--ink)}
 .btn.sm{padding:6px 12px;font-size:12px}
+/* Reserved for the two actions that bill or destroy: Deploy and Destroy. */
+.btn.danger{background:var(--bad);color:var(--on-bad)}
 .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 /* ---------- status ---------- */
@@ -534,6 +536,79 @@ tr:last-child td{border-bottom:none}
     <div id="gateEmpty" class="panel"><div class="empty">Run the assessment first, then evaluate the gate.</div></div>
   </section>
 
+  <!-- ============ 7. PROVISION ============ -->
+  <section class="view" id="view-provision">
+    <div class="head">
+      <h2>Provision the target</h2>
+      <p>The RDS instance is rendered from the records above, and every value says where it came
+         from. Rendering and checking are free and read-only. <b>Deploying bills</b> — it asks for
+         the account id, the hourly rate typed back, and, while the gate says halt, a
+         provision-only acknowledgement recorded against your AWS login.</p>
+    </div>
+
+    <div class="spread" style="margin-bottom:16px">
+      <button class="btn" id="btnProvision">Render and check</button>
+      <span class="mono" id="provMeta" style="font-size:12px;color:var(--ink-3)"></span>
+    </div>
+    <div class="ticker" id="provLive"></div>
+
+    <div id="provResult" style="display:none">
+      <div class="tiles mt" id="provTiles"></div>
+
+      <div class="mt"><div class="eyebrow">Preflight — read-only</div>
+        <div class="checks" id="provChecks"></div></div>
+
+      <div class="mt"><div class="eyebrow">Where each value came from</div>
+        <div class="tblwrap"><table>
+          <thead><tr><th>Property</th><th>Value</th><th>Source</th><th>Why</th></tr></thead>
+          <tbody id="provTable"></tbody></table></div>
+        <p class="mono mt-s" id="provHandoffs" style="font-size:12px;color:var(--ink-3)"></p></div>
+
+      <div class="panel pad mt" id="statusPanel">
+        <div class="spread"><div class="eyebrow" style="margin:0">Target — live from CloudFormation</div>
+          <button class="btn ghost sm" id="btnStatus">Refresh</button></div>
+        <div id="statusBody" class="mt-s"></div>
+        <div class="ticker mt-s" id="statusEvents"></div>
+        <div class="spread mt"><button class="btn ghost sm" id="btnVerify" disabled>Verify the database</button><span></span></div>
+        <div class="checks mt-s" id="verifyChecks"></div>
+      </div>
+
+      <div class="panel pad mt" id="deployForm">
+        <div class="eyebrow">Deploy — this starts billing</div>
+        <div class="note warn" id="deployCost"></div>
+        <div class="row2">
+          <div class="field"><label for="dAcct">Account id</label>
+            <input id="dAcct" autocomplete="off" spellcheck="false" placeholder="12 digits"></div>
+          <div class="field"><label for="dRate">Hourly rate, typed back (USD)</label>
+            <input id="dRate" inputmode="decimal" autocomplete="off" placeholder="as shown above"></div>
+        </div>
+        <div class="field" id="dReasonWrap">
+          <label for="dReason">Why provisioning is acceptable while the gate says halt</label>
+          <input id="dReason" autocomplete="off" placeholder="recorded with your AWS identity; provisioning only"></div>
+        <div class="spread"><button class="btn danger" id="btnDeploy">Deploy</button><span></span></div>
+        <div id="deployErr"></div>
+      </div>
+    </div>
+
+    <div id="provEmpty" class="panel"><div class="empty">Evaluate the gate first, then render the target.</div></div>
+
+    <div class="panel pad mt" id="killPanel">
+      <div class="spread"><div class="eyebrow" style="margin:0">Kill switch</div>
+        <button class="btn ghost sm" id="btnKillScan">Check what is billing</button></div>
+      <p style="font-size:12.5px;color:var(--ink-2);margin-top:8px;max-width:78ch">Acts only on
+        resources named <span class="mono">dbshift</span> or tagged
+        <span class="mono">project=dbshift</span>; anything else is listed and never touched. Destroy
+        ends billing: it empties the exchange bucket, then deletes the stack. No final snapshot.</p>
+      <div class="checks mt-s" id="killList"></div>
+      <div class="row2 mt">
+        <div class="field"><label for="kAcct">Account id, typed to confirm</label>
+          <input id="kAcct" autocomplete="off" spellcheck="false" placeholder="12 digits"></div>
+        <span></span></div>
+      <div class="spread"><button class="btn danger" id="btnDestroy">Destroy everything dbshift owns</button><span></span></div>
+      <div id="killMsg"></div>
+    </div>
+  </section>
+
   <!-- ============ CATALOGUE ============ -->
   <section class="view" id="view-catalogue">
     <div class="head">
@@ -618,12 +693,13 @@ const STAGES = [
   {id:'target',    label:'Size & Edition', n:3},
   {id:'remediate', label:'Remediate',      n:4},
   {id:'gate',      label:'Blocker gate',   n:5},
+  {id:'provision', label:'Provision',      n:6},
 ];
 const IDLE_STAGES = {connect:'active', discover:'idle', assess:'idle',
-                     target:'idle', remediate:'idle', gate:'idle'};
+                     target:'idle', remediate:'idle', gate:'idle', provision:'idle'};
 let current = 'connect';
 let stageState = {...IDLE_STAGES};
-let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:''};
+let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:''};
 let ISSUES = [], sevFilter = new Set(), catFilter = new Set();
 
 function renderRail(){
@@ -656,7 +732,7 @@ function renderPageNav(){
     ${next ? `<button class="btn sm" ${nextLocked ? 'disabled' : ''}
                 onclick="show('${next.id}')"
                 title="${nextLocked ? 'Finish this stage first' : ''}">${esc(nextLabel)} &rarr;</button>`
-           : '<span class="mono" style="font-size:11.5px;color:var(--ink-3)">Phase 6 onward is not built</span>'}`;
+           : '<span class="mono" style="font-size:11.5px;color:var(--ink-3)">Phase 7 onward is not built</span>'}`;
 }
 function show(id){
   const previous = current;
@@ -740,6 +816,7 @@ async function loadState(){
     await renderRemediation();
   }
   if (s.has_gate) await renderGate();
+  if (s.has_provision) await renderProvision();
   if (s.rehearsal_dsn) {
     $('#rehearsalDsn').value = s.rehearsal_dsn;
     $('#rehearsalState').textContent = 'registered: ' + s.rehearsal_dsn;
@@ -823,7 +900,7 @@ $('#btnDisconnect').onclick = async () => {
   $('#checks').innerHTML = '<div class="empty">Connect to run the preflight checks.</div>';
   $('#btnDiscover').disabled = true;
   stageState = {...IDLE_STAGES};
-  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:''};
+  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:''};
   renderRail();
 };
 
@@ -1372,6 +1449,12 @@ async function renderGate(){
   const style = VERDICT_STYLE[g.verdict] || VERDICT_STYLE.HALT;
   setStage('gate', g.verdict === 'HALT' ? 'active' : 'done',
     g.verdict === 'HALT' ? `${g.blockers.length} blocking` : style.word.toLowerCase());
+  // Provision opens when nothing blocks it, even under an overall HALT: rendering
+  // is free, and the deploy then asks for a provision-only acknowledgement.
+  if (g.by_phase.provision.status === 'clear') {
+    if (stageState.provision === 'idle') setStage('provision', 'active');
+    $('#btnProvision').disabled = false;
+  }
   $('#gateMeta').textContent =
     `${g.critical_findings} critical findings · ${g.blockers.length} open · ${g.waived.length} waived`;
 
@@ -1450,6 +1533,170 @@ async function unwaive(ruleId){
   await fetch('/api/waivers/' + encodeURIComponent(ruleId), {method:'DELETE'});
   await renderGate();
 }
+
+/* ---------------- provision (Phase 6) ---------------- */
+$('#btnProvision').disabled = true;
+let statusTimer = null;
+
+const CHECK_MARK = {pass:'✓', warn:'!', fail:'×', blocked:'⏸', info:'i'};
+function checkRow(c){
+  const cls = c.status === 'pass' ? 'pass' : c.status === 'fail' ? 'fail' : 'warn';
+  return `<div class="check ${cls}"><span class="mark">${CHECK_MARK[c.status] || '·'}</span>
+    <div><div class="name">${esc(c.name.replace(/_/g,' '))}</div><div class="detail">${esc(c.detail)}</div>
+    ${c.remedy && c.status !== 'pass' ? `<div class="remedy">${esc(c.remedy)}</div>` : ''}</div></div>`;
+}
+
+$('#btnProvision').onclick = () => {
+  const btn = $('#btnProvision');
+  btn.disabled = true;
+  $('#provEmpty').style.display = 'none';
+  $('#provLive').innerHTML = '';
+  setStage('provision', 'busy', 'rendering');
+  const es = new EventSource('/api/provision');
+  es.onmessage = async (m) => {
+    const d = JSON.parse(m.data);
+    if (d.event === 'stage') {
+      $('#provLive').insertAdjacentHTML('beforeend', `<div class="tick done"><span class="st"></span>
+        <span class="nm">${esc(d.stage)}</span><span class="meta">${esc(d.detail)}</span></div>`);
+    } else if (d.event === 'complete') {
+      es.close();
+      await renderProvision();
+      btn.disabled = false;
+    } else if (d.event === 'error') {
+      es.close();
+      setStage('provision', 'active', 'failed');
+      $('#provLive').insertAdjacentHTML('beforeend', `<div class="note bad mt-s">${esc(d.message)}</div>`);
+      btn.disabled = false;
+    }
+  };
+  es.onerror = () => { es.close(); btn.disabled = false; setStage('provision', 'active', 'connection lost'); };
+};
+
+async function renderProvision(){
+  const r = await fetch('/api/provision/plan');
+  if (!r.ok) return;
+  const p = await r.json();
+  const rd = p.rendered, est = (p.cost || {}).estimate;
+  $('#provEmpty').style.display = 'none';
+  $('#provResult').style.display = '';
+  $('#provMeta').textContent = `${p.stack_name || ''} · collector run ${String(p.collector_run_id || '').slice(0, 8)}`;
+
+  const tile = (k, v, h) => `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${v}</div>
+    <div class="h">${esc(h)}</div></div>`;
+  $('#provTiles').innerHTML = rd ? [
+    tile('Engine', esc(rd.engine.replace('oracle-', '').toUpperCase()) + '<small>19c</small>', rd.licence),
+    tile('Instance', esc(rd.instance_class), `${rd.storage_gb} GB ${rd.storage_type}`),
+    tile('Per hour', est ? '$' + est.instance_per_hour : '—', est ? `plus $${est.storage_per_month}/month storage` : 'no price list'),
+    tile('If forgotten', est ? '$' + est.if_left_running_30_days : '—', est ? `30 days · an 8-hour day is $${est.per_8h_day}` : ''),
+  ].join('') : '';
+
+  $('#provChecks').innerHTML = p.checks.map(checkRow).join('');
+  $('#provTable').innerHTML = rd ? rd.provenance.map(x => `<tr><td class="mono">${esc(x.property)}</td>
+    <td class="mono">${esc(x.value)}</td><td>${esc(x.source)}</td><td>${esc(x.why)}</td></tr>`).join('') : '';
+  $('#provHandoffs').textContent = rd && rd.handoffs.length
+    ? `${rd.handoffs.length} Phase 4 artefacts handed on to ${[...new Set(rd.handoffs.map(h => h.phase))].join(', ')}` : '';
+
+  $('#dReasonWrap').style.display = p.gate && p.gate.verdict === 'HALT' ? '' : 'none';
+  $('#deployCost').innerHTML = est
+    ? `Deploying starts billing at <b>$${est.instance_per_hour}/hour</b> plus $${est.storage_per_month}/month
+       storage — $${est.per_8h_day} for an 8-hour day, <b>$${est.if_left_running_30_days} if left running
+       30 days</b>. Excludes ${esc(est.excludes.replace(/^Oracle/, 'Oracle'))}.`
+    : 'No price list, so no deploy: a deploy is never offered without a stated cost.';
+  setStage('provision', 'active', p.ready ? (est ? `ready · $${est.instance_per_hour}/h` : 'ready') : 'not ready');
+  await refreshStatus();
+}
+
+async function refreshStatus(){
+  clearTimeout(statusTimer);
+  const r = await fetch('/api/provision/status');
+  if (!r.ok) return;
+  const s = await r.json();
+  const moving = /_IN_PROGRESS$/.test(s.status || '');
+  const cls = s.status === 'CREATE_COMPLETE' ? 'ok' : moving ? 'busy' : s.exists ? 'bad' : '';
+  const word = {NOT_DEPLOYED: 'Not deployed', CREATE_COMPLETE: 'Running — billing'}[s.status]
+    || (s.status || 'unknown').replace(/_/g, ' ').toLowerCase();
+  const ack = [...(s.history || [])].reverse().find(h => h.acknowledgement)?.acknowledgement;
+  $('#statusBody').innerHTML = `
+    <div class="status ${cls}"><span class="led"></span><span>${esc(word)}</span></div>
+    ${s.aws_error ? `<div class="note bad mt-s">AWS: ${esc(s.aws_error)} — paste fresh keys into the
+      dbshift-static profile.</div>` : ''}
+    ${s.console_error ? `<div class="note bad mt-s">${esc(s.console_error)}</div>` : ''}
+    ${s.outputs && s.outputs.Endpoint ? `<p class="mono mt-s" style="font-size:12.5px">${esc(s.outputs.Endpoint)}:${esc(s.outputs.Port)}</p>` : ''}
+    ${ack && s.exists ? `<p class="why mt-s"><b>Provisioned under HALT</b> — acknowledged by ${esc(ack.approved_by)}
+      for provisioning only: “${esc(ack.reason)}”. Still open: ${esc(ack.blockers_left_open.join(', '))}.</p>` : ''}`;
+  $('#statusEvents').innerHTML = (s.events || []).slice(-14).map(e => `
+    <div class="tick ${/FAILED/.test(e.status) ? 'err' : /COMPLETE$/.test(e.status) ? 'done' : 'run'}"><span class="st"></span>
+      <span class="nm">${esc(e.resource)}</span><span class="meta">${esc(e.status)}${e.reason ? ' · ' + esc(e.reason) : ''}</span></div>`).join('');
+  $('#btnVerify').disabled = s.status !== 'CREATE_COMPLETE';
+  $('#deployForm').style.display = s.exists ? 'none' : '';
+  if (s.status === 'CREATE_COMPLETE') setStage('provision', 'done', 'running · billing');
+  else if (moving) setStage('provision', 'busy', (s.status || '').replace(/_/g, ' ').toLowerCase());
+  if (moving || s.console_deploy_running) statusTimer = setTimeout(refreshStatus, 15000);
+}
+$('#btnStatus').onclick = refreshStatus;
+
+$('#btnDeploy').onclick = async () => {
+  const btn = $('#btnDeploy');
+  btn.disabled = true;
+  $('#deployErr').innerHTML = `<p class="mono mt-s" style="font-size:12px;color:var(--ink-3)">Re-checking
+    everything. Nothing is created until every check passes…</p>`;
+  const r = await fetch('/api/provision/deploy', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({confirm_account: $('#dAcct').value.trim(),
+                          accept_hourly: parseFloat($('#dRate').value),
+                          halt_reason: $('#dReason').value.trim()})});
+  const d = await r.json();
+  btn.disabled = false;
+  if (!r.ok) {
+    const why = Array.isArray(d.detail) ? 'Type the account id and the hourly rate as shown.' : d.detail;
+    $('#deployErr').innerHTML = `<div class="note bad mt-s"><b>Refused — nothing was created.</b> ${esc(why)}</div>`;
+    return;
+  }
+  $('#deployErr').innerHTML = `<div class="note info mt-s">Every check passed. Creating the stack — billing
+    starts when the instance is up.</div>`;
+  await refreshStatus();
+};
+
+$('#btnVerify').onclick = async () => {
+  const btn = $('#btnVerify');
+  btn.disabled = true;
+  $('#verifyChecks').innerHTML = '<div class="empty">Logging in to the target…</div>';
+  const r = await fetch('/api/provision/verify', {method:'POST'});
+  const d = await r.json();
+  btn.disabled = false;
+  $('#verifyChecks').innerHTML = r.ok ? d.checks.map(checkRow).join('')
+    : `<div class="note bad">${esc(d.detail)}</div>`;
+};
+
+function renderKill(rep){
+  $('#killList').innerHTML = rep.found.length
+    ? rep.found.map(x => `<div class="check ${x.ours ? 'warn' : 'pass'}"><span class="mark">${x.ours ? '$' : '·'}</span>
+        <div><div class="name">${esc(x.kind.replace(/_/g, ' '))} · ${esc(x.id)}</div>
+        <div class="detail">${esc(x.status || '')} ${esc(x.detail || '')} ·
+          ${x.ours ? 'ours — the kill switch acts on this' : 'not ours — never touched'}</div></div></div>`).join('')
+    : `<div class="check pass"><span class="mark">✓</span><div><div class="name">Nothing billable</div>
+        <div class="detail">no resources of these kinds in ${esc(rep.regions.join(', '))}</div></div></div>`;
+  $('#killMsg').innerHTML = (rep.results || []).length
+    ? `<div class="note info mt-s">${rep.results.map(x => esc(`${x.action} ${x.id}: ${x.outcome}`)).join('<br>')}
+       <br>Deletes take minutes. Check again to confirm nothing is left.</div>` : '';
+}
+$('#btnKillScan').onclick = async () => {
+  $('#killMsg').innerHTML = '';
+  const r = await fetch('/api/killswitch');
+  const d = await r.json();
+  if (!r.ok) { $('#killMsg').innerHTML = `<div class="note bad mt-s">${esc(d.detail)}</div>`; return; }
+  renderKill(d);
+};
+$('#btnDestroy').onclick = async () => {
+  const btn = $('#btnDestroy');
+  btn.disabled = true;
+  const r = await fetch('/api/killswitch', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({mode: 'destroy', confirm: $('#kAcct').value.trim()})});
+  const d = await r.json();
+  btn.disabled = false;
+  if (!r.ok) { $('#killMsg').innerHTML = `<div class="note bad mt-s"><b>Refused.</b> ${esc(d.detail)}</div>`; return; }
+  renderKill(d);
+  await refreshStatus();
+};
 
 /* ---------------- catalogue ---------------- */
 $('#navCatalogue').onclick = async () => { await renderCatalogue(); show('catalogue'); };

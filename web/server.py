@@ -36,6 +36,12 @@ from collector import config as collector_config
 from collector import run as collector_run
 from blocker import gate as blocker_gate
 from blocker import policy as blocker_policy
+from botocore.exceptions import ClientError
+from killswitch import run as killswitch_run
+from provision import deploy as provision_deploy
+from provision import policy as provision_policy
+from provision import run as provision_run
+from provision import verify as provision_verify
 from remediate import plan as remediate_plan
 from sizing import run as sizing_run
 from sizing import utilization as sizing_utilization
@@ -73,6 +79,7 @@ class State:
     rehearsal: Any = None
     gate: dict | None = None
     waivers: list = field(default_factory=list)
+    provision: dict | None = None
 
 
 STATE = State()
@@ -215,6 +222,7 @@ def get_state():
         "has_sizing": STATE.sizing is not None,
         "has_remediation": STATE.remediation is not None,
         "has_gate": STATE.gate is not None,
+        "has_provision": STATE.provision is not None,
         "waivers": STATE.waivers,
         "utilization": STATE.utilization,
         "rehearsal_dsn": STATE.rehearsal_dsn,
@@ -734,6 +742,184 @@ def gate():
         json.dumps(decision, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     return decision
+
+
+# --------------------------------------------------------------------------- phase 6
+
+
+def _aws_session():
+    import boto3
+    return boto3.Session(profile_name=provision_run.DEFAULT_PROFILE)
+
+
+def _provision_plan() -> dict | None:
+    if STATE.provision:
+        return STATE.provision
+    path = provision_run.OUTPUT / "provision_plan.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+@app.get("/api/provision")
+def provision():
+    """Phase 6 render + read-only preflight. Streams its stages; creates nothing."""
+    def work(emit):
+        plan = provision_run.execute(session=_aws_session(),
+                                     price_file=provision_run.default_price_file(), on_event=emit)
+        STATE.provision = plan
+        est = (plan.get("cost") or {}).get("estimate") or {}
+        emit({"event": "complete", "ready": plan["ready"], "stack": plan.get("stack_name"),
+              "hourly": est.get("instance_per_hour"),
+              "warnings": sum(c["status"] == "warn" for c in plan["checks"]),
+              "failures": sum(c["status"] in ("fail", "blocked") for c in plan["checks"])})
+
+    return _stream(work)
+
+
+@app.get("/api/provision/plan")
+def provision_plan():
+    plan = _provision_plan()
+    if not plan:
+        raise HTTPException(409, "not rendered yet")
+    return plan
+
+
+class DeployRequest(BaseModel):
+    confirm_account: str
+    accept_hourly: float
+    halt_reason: str = ""
+
+
+_DEPLOY: dict = {"thread": None, "error": None}
+
+
+@app.post("/api/provision/deploy")
+def provision_deploy_route(req: DeployRequest):
+    """Start a deploy -- the one console action that bills.
+
+    Every refusal in provision.deploy is answered here, synchronously, as a 400
+    with its reason. Only a deploy that passed all of them carries on in the
+    background; progress is read from /api/provision/status, the same view that
+    follows a deploy started from the CLI.
+    """
+    running = _DEPLOY["thread"]
+    if running is not None and running.is_alive():
+        raise HTTPException(409, "a deploy started from this console is already running")
+
+    passed = threading.Event()
+    outcome: dict = {}
+    _DEPLOY["error"] = None
+
+    def on_event(e):
+        # The password step is the first side effect, so reaching it means every
+        # refusal is behind us.
+        if e.get("stage") == "password":
+            passed.set()
+
+    def runner():
+        try:
+            outcome["record"] = provision_deploy.deploy(
+                _aws_session(), confirm_account=req.confirm_account,
+                accept_hourly=req.accept_hourly, halt_reason=req.halt_reason or None,
+                price_file=provision_run.default_price_file(), on_event=on_event)
+        except provision_deploy.DeployRefused as exc:
+            outcome["refused"] = str(exc)
+        except Exception as exc:  # noqa: BLE001 -- shown in status, never swallowed
+            outcome["error"] = _DEPLOY["error"] = str(exc).splitlines()[0]
+        finally:
+            passed.set()
+
+    thread = threading.Thread(target=runner, daemon=True)
+    _DEPLOY["thread"] = thread
+    thread.start()
+    passed.wait(timeout=240)
+    if "refused" in outcome:
+        raise HTTPException(400, outcome["refused"])
+    if "error" in outcome:
+        raise HTTPException(500, outcome["error"])
+    return {"started": True}
+
+
+@app.get("/api/provision/status")
+def provision_status():
+    """Where the target stands, read live from CloudFormation. Read-only."""
+    plan = _provision_plan()
+    if not plan or not plan.get("stack_name"):
+        raise HTTPException(409, "not rendered yet")
+    stack = plan["stack_name"]
+    history_path = provision_run.OUTPUT / "deployments.jsonl"
+    history = ([json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()] if history_path.exists() else [])
+    running = _DEPLOY["thread"]
+    out = {"stack_name": stack, "history": history[-6:], "console_error": _DEPLOY["error"],
+           "console_deploy_running": bool(running and running.is_alive())}
+    try:
+        cfn = _aws_session().client("cloudformation", region_name=provision_policy.REGION)
+        try:
+            s = cfn.describe_stacks(StackName=stack)["Stacks"][0]
+        except ClientError as exc:
+            if "does not exist" not in str(exc):
+                raise
+            out.update(exists=False, status="NOT_DEPLOYED", events=[], outputs={})
+            return out
+        events = cfn.describe_stack_events(StackName=stack)["StackEvents"][:40]
+        out.update(
+            exists=True, status=s["StackStatus"], created=str(s["CreationTime"]),
+            outputs={o["OutputKey"]: o["OutputValue"] for o in s.get("Outputs", [])},
+            events=[{"at": str(e["Timestamp"]), "resource": e["LogicalResourceId"],
+                     "status": e["ResourceStatus"], "reason": e.get("ResourceStatusReason") or ""}
+                    for e in reversed(events)],
+        )
+    except Exception as exc:  # noqa: BLE001 -- expired credentials, most often
+        out["aws_error"] = str(exc).splitlines()[0]
+    return out
+
+
+@app.post("/api/provision/verify")
+def provision_verify_route():
+    """Log in to the created target and compare it with the render. Read-only."""
+    plan = _provision_plan()
+    if not plan or not plan.get("rendered"):
+        raise HTTPException(409, "not rendered yet")
+    session = _aws_session()
+    cfn = session.client("cloudformation", region_name=provision_policy.REGION)
+    try:
+        s = cfn.describe_stacks(StackName=plan["stack_name"])["Stacks"][0]
+    except ClientError as exc:
+        raise HTTPException(409, str(exc).splitlines()[0])
+    if s["StackStatus"] != "CREATE_COMPLETE":
+        raise HTTPException(409, f"the stack is {s['StackStatus']}; verify runs on CREATE_COMPLETE")
+    deployed = {"stack_name": plan["stack_name"],
+                "outputs": {o["OutputKey"]: o["OutputValue"] for o in s.get("Outputs", [])}}
+    checks = provision_verify.verify(session, deployed, plan)
+    (provision_run.OUTPUT / "verify.json").write_text(json.dumps(checks, indent=2), encoding="utf-8")
+    return {"checks": checks}
+
+
+class KillRequest(BaseModel):
+    mode: str
+    confirm: str
+
+
+@app.get("/api/killswitch")
+def killswitch_scan():
+    """What is billing right now. Read-only."""
+    try:
+        return killswitch_run.execute(_aws_session(), mode=None, confirm=None,
+                                      regions=[provision_policy.REGION])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, str(exc).splitlines()[0])
+
+
+@app.post("/api/killswitch")
+def killswitch_act(req: KillRequest):
+    """Stop or destroy what this project owns. The account id must be typed."""
+    if req.mode not in ("stop", "destroy"):
+        raise HTTPException(400, "mode must be stop or destroy")
+    try:
+        return killswitch_run.execute(_aws_session(), mode=req.mode, confirm=req.confirm,
+                                      regions=[provision_policy.REGION])
+    except PermissionError as exc:
+        raise HTTPException(400, str(exc))
 
 
 def main() -> int:

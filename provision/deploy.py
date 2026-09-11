@@ -151,6 +151,11 @@ def deploy(session, *, confirm_account: str, accept_hourly: float | None, halt_r
     if not plan["ready"]:
         bad = [f"{c['name']}: {c['detail']}" for c in plan["checks"] if c["status"] in ("fail", "blocked")]
         raise DeployRefused("preflight is not clean -- " + ("; ".join(bad) or "nothing rendered"))
+    # stack_name_free is a WARN for rendering, but a deploy onto an existing stack
+    # would only fail at CloudFormation, after the request had been recorded.
+    taken = next((c for c in plan["checks"] if c["name"] == "stack_name_free" and c["status"] != "pass"), None)
+    if taken:
+        raise DeployRefused(f"{taken['detail']} -- watch it in status, or remove it with the kill switch first")
 
     identity = session.client("sts").get_caller_identity()
     if str(confirm_account) != identity["Account"]:
@@ -227,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="the instance rate shown by provision.run, typed back")
     ap.add_argument("--acknowledge-halt", default=None,
                     help="reason for provisioning while the gate says HALT (provision only)")
-    ap.add_argument("--price-file", type=Path, default=os.environ.get("DBSHIFT_PRICE_FILE"))
+    ap.add_argument("--price-file", type=Path, default=run_mod.default_price_file())
     ap.add_argument("--operator-cidr", default=None)
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
     ap.add_argument("--timeout-minutes", type=int, default=90)

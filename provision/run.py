@@ -25,6 +25,16 @@ from . import policy, preflight, pricing, records, render
 
 OUTPUT = Path(__file__).resolve().parent / "output"
 DEFAULT_PROFILE = os.environ.get("DBSHIFT_AWS_PROFILE", "dbshift-static")
+# AWS's public RDS price list for the region, downloaded by hand. It lives in the
+# gitignored output folder: prices change, and a committed copy would go stale.
+PRICE_FILE = OUTPUT / f"rds_{policy.REGION}_prices.json"
+
+
+def default_price_file() -> Path | None:
+    env = os.environ.get("DBSHIFT_PRICE_FILE")
+    if env:
+        return Path(env)
+    return PRICE_FILE if PRICE_FILE.exists() else None
 
 
 def execute(*, session=None, price_file: Path | None = None, operator_cidr: str | None = None,
@@ -115,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="DBShift Phase 6 -- render and preflight; creates nothing")
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
     ap.add_argument("--no-aws", action="store_true", help="skip every AWS call")
-    ap.add_argument("--price-file", type=Path, default=os.environ.get("DBSHIFT_PRICE_FILE"))
+    ap.add_argument("--price-file", type=Path, default=default_price_file())
     ap.add_argument("--operator-cidr", default=None)
     args = ap.parse_args(argv)
 

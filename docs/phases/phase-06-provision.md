@@ -68,7 +68,9 @@ checking are free and happen every run; deploying is a separate, deliberate act.
 ### Deploy — `provision/deploy.py :: deploy()`
 
 1. **Re-run steps 1–12.** Nothing is trusted from an earlier plan.
-2. **Refuse, before anything is created**, when: preflight is not clean;
+2. **Refuse, before anything is created**, when: preflight is not clean; the
+   stack already exists (a `WARN` for rendering, a refusal for deploying — the
+   create would otherwise fail at CloudFormation after the request was recorded);
    `--confirm` ≠ the account the credentials resolve to; `--accept-hourly` ≠ the
    rate just computed from the price list (no price → no deploy); or the gate
    says HALT and `--acknowledge-halt` is missing or under 15 characters.
@@ -209,11 +211,43 @@ python -m provision.deploy --confirm <account-id> --accept-hourly <rate-from-pro
 python -m provision.verify                   # after a successful create
 ```
 
+The price list is read from `provision/output/rds_ap-south-1_prices.json`
+(gitignored) or `DBSHIFT_PRICE_FILE`. Download it from AWS's public offer file
+for the region; prices change, so it is never committed.
+
+**Console: Phase 6 · Provision.** It opens once the gate reports `provision`
+clear — even under an overall HALT. It renders and checks with a live stage
+ticker, then shows four tiles (engine, instance, per hour, *if forgotten for 30
+days*), every preflight check, and the full provenance table. Below that:
+
+- **Target — live from CloudFormation.** Status, endpoint, the last stack events,
+  and the provision-only acknowledgement word for word with the blockers it left
+  open. Polls every 15 s while the stack is moving. It follows a deploy started
+  from the CLI just as well as one started here.
+- **Verify the database** — enabled only at `CREATE_COMPLETE`.
+- **Deploy** — account id, hourly rate typed back, and the acknowledgement
+  reason. Every refusal comes back from the server synchronously, with its
+  reason, before anything is created. The form hides once a stack exists.
+- **Kill switch** — what is billing, marked ours or not ours, and *Destroy
+  everything dbshift owns*, which needs the account id typed.
+
+Deploy and Destroy are the only two red buttons in the console.
+
 To remove anything this project created: `python -m killswitch --destroy --confirm <account-id>`
 (see `docs/06-cost-model.md`). It empties the exchange bucket before deleting
 the stack, because a stack cannot delete a bucket that holds objects.
 
 ## Change log
+
+**2026-09-11 — console stage.** Phase 6 added to the rail and a Provision screen
+built (`/api/provision`, `/plan`, `/deploy`, `/status`, `/verify`,
+`/api/killswitch`). Tested against the live deploy started from the CLI: status
+showed `CREATE_IN_PROGRESS` and the acknowledgement, the kill switch listed the
+stack, instance and bucket as ours, the deploy form hid itself because the stack
+exists. Deploy now also refuses when the stack already exists. The console
+deliberately was *not* driven through Discover and Assess for this test: that
+would have written a new collector run's records to disk while a deploy built
+from the previous run's records was still in flight.
 
 **2026-09-11 — deploy and verify built, not run.** `provision/deploy.py`,
 `provision/verify.py`, `provision/selftest.py`. The route past HALT was a
