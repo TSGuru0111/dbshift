@@ -72,14 +72,37 @@ def _stub_scan(stubs):
          "ReplicationInstanceClass": "dms.t3.micro", "ReplicationInstanceArn": REPL_ARN},
     ]})
     stubs["ec2"].add_response("describe_nat_gateways", {"NatGateways": []}, None)
+    stubs["s3"].add_response("list_buckets", {"Buckets": [
+        {"Name": "dbshift-target-exchange", "CreationDate": NOW},
+        {"Name": "finance-reports", "CreationDate": NOW},
+    ]})
+    stubs["s3"].add_response("get_bucket_location", {"LocationConstraint": REGION},
+                             {"Bucket": "dbshift-target-exchange"})
+    stubs["s3"].add_response("get_bucket_tagging", {"TagSet": [
+        {"Key": "aws:cloudformation:stack-name", "Value": "dbshift-target"}]},
+        {"Bucket": "dbshift-target-exchange"})
+    stubs["s3"].add_response("get_bucket_location", {"LocationConstraint": REGION},
+                             {"Bucket": "finance-reports"})
+    stubs["s3"].add_client_error("get_bucket_tagging", "NoSuchTagSet",
+                                 expected_params={"Bucket": "finance-reports"})
+
+
+EMPTY_EXCHANGE = [
+    ("s3", "list_object_versions", {"Bucket": "dbshift-target-exchange"},
+     {"Versions": [{"Key": "dbmig_golden.dmp", "VersionId": "null"}]}),
+    ("s3", "delete_objects", {"Bucket": "dbshift-target-exchange",
+                              "Delete": {"Objects": [{"Key": "dbmig_golden.dmp", "VersionId": "null"}],
+                                         "Quiet": True}}, {}),
+]
 
 
 def _run(mode, expect_calls, **kw):
     clients = _clients()
     stubs = {k: Stubber(c) for k, c in clients.items()}
     _stub_scan(stubs)
-    for service, method, params in expect_calls:
-        stubs[service].add_response(method, {}, params)
+    for call in expect_calls:
+        service, method, params = call[:3]
+        stubs[service].add_response(method, call[3] if len(call) > 3 else {}, params)
     for s in stubs.values():
         s.activate()
     found = scan.scan(clients, REGION)
@@ -114,8 +137,10 @@ def main() -> int:
     print("stop  -- the stub raises if finance-prod-db is ever stopped")
     check("four of ours stopped, foreign untouched (enforced by stub)", True)
 
+    check("foreign bucket found but marked NOT ours", ids["finance-reports"]["ours"] is False)
+
     print("destroy")
-    _, plan, results = _run("destroy", [
+    _, plan, results = _run("destroy", EMPTY_EXCHANGE + [
         ("cloudformation", "delete_stack", {"StackName": "dbshift-target"}),
         ("rds", "delete_db_instance", {"DBInstanceIdentifier": "dbshift-orphan-db",
                                        "SkipFinalSnapshot": True, "DeleteAutomatedBackups": True}),
@@ -131,10 +156,16 @@ def main() -> int:
     check("manual snapshot kept by default", by["dbshift-final-snap"]["action"] == actions.LEAVE)
     check("foreign instance left", by["finance-prod-db"]["action"] == actions.LEAVE)
     check("foreign stack left", by["finance-prod"]["action"] == actions.LEAVE)
+    check("stack-owned bucket emptied, not deleted directly",
+          by["dbshift-target-exchange"]["action"] == actions.EMPTY)
+    check("bucket emptied BEFORE its stack is deleted",
+          [r["id"] for r in results].index("dbshift-target-exchange")
+          < [r["id"] for r in results].index("dbshift-target"))
+    check("foreign bucket left", by["finance-reports"]["action"] == actions.LEAVE)
     check("every requested action succeeded", all(r["outcome"] == "requested" for r in results))
 
     print("destroy --include-snapshots --force-deletion-protection")
-    _, plan, _ = _run("destroy", [
+    _, plan, _ = _run("destroy", EMPTY_EXCHANGE + [
         ("cloudformation", "delete_stack", {"StackName": "dbshift-target"}),
         ("rds", "delete_db_instance", {"DBInstanceIdentifier": "dbshift-orphan-db",
                                        "SkipFinalSnapshot": True, "DeleteAutomatedBackups": True}),

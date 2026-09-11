@@ -20,7 +20,11 @@ Never acted on, in either mode:
 
 from __future__ import annotations
 
-LEAVE, STOP, DELETE, BLOCKED = "leave", "stop", "delete", "blocked"
+LEAVE, STOP, DELETE, BLOCKED, EMPTY = "leave", "stop", "delete", "blocked", "empty"
+
+# Buckets are emptied before anything is deleted: CloudFormation cannot delete a
+# stack whose bucket still holds objects, and would leave it DELETE_FAILED.
+ORDER = {EMPTY: 0, STOP: 1, DELETE: 2}
 
 
 def _a(res, action, why):
@@ -50,7 +54,7 @@ def decide(found: list[dict], mode: str, *, include_snapshots: bool = False,
             elif kind == "rds_instance" and status == "stopped":
                 plan.append(_a(r, LEAVE, "already stopped -- but it restarts itself 7 days after "
                                          "it was stopped"))
-            elif kind in ("dms_replication_instance", "nat_gateway"):
+            elif kind in ("dms_replication_instance", "nat_gateway", "s3_bucket"):
                 plan.append(_a(r, LEAVE, "cannot be stopped, only deleted -- use destroy"))
             else:
                 plan.append(_a(r, LEAVE, "nothing to stop"))
@@ -62,6 +66,8 @@ def decide(found: list[dict], mode: str, *, include_snapshots: bool = False,
                 plan.append(_a(r, LEAVE, "already deleting"))
             else:
                 plan.append(_a(r, DELETE, "deleting the stack deletes everything it created"))
+        elif kind == "s3_bucket" and r.get("stack") in live_stacks:
+            plan.append(_a(r, EMPTY, f"emptied first so its stack {r['stack']} can delete it"))
         elif r.get("stack") in live_stacks:
             plan.append(_a(r, LEAVE, f"deleted with its stack {r['stack']}"))
         elif kind == "rds_snapshot" and not include_snapshots:
@@ -84,9 +90,7 @@ def execute(plan: list[dict], clients: dict) -> list[dict]:
     the bill running on everything after the failure.
     """
     results = []
-    for step in plan:
-        if step["action"] not in (STOP, DELETE):
-            continue
+    for step in sorted((s for s in plan if s["action"] in ORDER), key=lambda s: ORDER[s["action"]]):
         try:
             _do(step, clients)
             results.append({**step, "outcome": "requested"})
@@ -97,6 +101,11 @@ def execute(plan: list[dict], clients: dict) -> list[dict]:
 
 def _do(step: dict, clients: dict) -> None:
     kind, rid = step["kind"], step["id"]
+    if kind == "s3_bucket":
+        _empty_bucket(clients["s3"], rid)
+        if step["action"] == DELETE:
+            clients["s3"].delete_bucket(Bucket=rid)
+        return
     if step["action"] == STOP:
         clients["rds"].stop_db_instance(DBInstanceIdentifier=rid)
         return
@@ -118,3 +127,13 @@ def _do(step: dict, clients: dict) -> None:
         clients["ec2"].delete_nat_gateway(NatGatewayId=rid)
     else:
         raise ValueError(f"no delete action for {kind}")
+
+
+def _empty_bucket(s3, bucket: str) -> None:
+    """Delete every object and every version. Versions are included so a bucket
+    that ever had versioning on is really empty, not just holding delete markers."""
+    for page in s3.get_paginator("list_object_versions").paginate(Bucket=bucket):
+        objects = [{"Key": v["Key"], "VersionId": v["VersionId"]}
+                   for v in page.get("Versions", []) + page.get("DeleteMarkers", [])]
+        if objects:
+            s3.delete_objects(Bucket=bucket, Delete={"Objects": objects, "Quiet": True})

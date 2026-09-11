@@ -13,7 +13,7 @@ from __future__ import annotations
 PREFIX = "dbshift"
 
 KINDS = ("cloudformation_stack", "rds_instance", "rds_snapshot",
-         "dms_replication_instance", "nat_gateway")
+         "dms_replication_instance", "nat_gateway", "s3_bucket")
 
 
 def _tags(tag_list) -> dict:
@@ -33,7 +33,7 @@ def _item(kind, rid, status, region, *, ours, billable, stack=None, detail="", *
 
 def clients_for(session, region: str) -> dict:
     return {name: session.client(name, region_name=region)
-            for name in ("cloudformation", "rds", "dms", "ec2")}
+            for name in ("cloudformation", "rds", "dms", "ec2", "s3")}
 
 
 def scan(clients: dict, region: str) -> list[dict]:
@@ -89,5 +89,22 @@ def scan(clients: dict, region: str) -> list[dict]:
             ours=is_ours(tags.get("name"), tags), billable=True,
             stack=tags.get("aws:cloudformation:stack-name"),
         ))
+
+    # S3 is global in listing but regional in storage: report each bucket in the
+    # region it lives in, once. Phase 6 creates an exchange bucket for dumps, and
+    # a stack cannot delete a bucket that still holds objects.
+    s3 = clients.get("s3")
+    if s3 is not None:
+        for b in s3.list_buckets().get("Buckets", []):
+            name = b["Name"]
+            location = s3.get_bucket_location(Bucket=name).get("LocationConstraint") or "us-east-1"
+            if location != region:
+                continue
+            try:
+                tags = _tags(s3.get_bucket_tagging(Bucket=name).get("TagSet"))
+            except Exception:  # noqa: BLE001 -- NoSuchTagSet is the normal untagged case
+                tags = {}
+            found.append(_item("s3_bucket", name, "exists", region, ours=is_ours(name, tags),
+                               billable=True, stack=tags.get("aws:cloudformation:stack-name")))
 
     return found

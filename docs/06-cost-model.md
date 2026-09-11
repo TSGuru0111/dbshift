@@ -103,7 +103,10 @@ billing.
 
 **Destroy** deletes `dbshift-` CloudFormation stacks (which deletes what they
 created — a stack-owned resource is never deleted underneath its stack), then
-any of ours not owned by a stack. No final snapshot is taken: the target is a
+any of ours not owned by a stack. **S3 buckets are emptied first** — Phase 6's
+template creates an exchange bucket for Data Pump dumps, and CloudFormation cannot
+delete a stack whose bucket still holds objects; it would stop at
+`DELETE_FAILED`. No final snapshot is taken: the target is a
 copy, the source is the system of record, and a snapshot would be a new
 billable thing the kill switch created. Two things it will not do without an
 explicit flag: delete a manual snapshot (`--include-snapshots` — a backup, and
