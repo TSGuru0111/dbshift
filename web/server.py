@@ -662,7 +662,9 @@ def remediate():
     def work(emit):
         result = remediate_plan.build(
             STATE.assessment,
-            allow_model=False,          # Bedrock invoke is blocked; never claim otherwise
+            # Static stand-ins, never "live": Bedrock invoke is blocked, and a
+            # static fixture reports model_id=None so nothing claims a model ran.
+            model_mode="static",
             rehearsal_target=_rehearsal_target(),
             on_event=emit,
         )

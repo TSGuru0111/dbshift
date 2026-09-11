@@ -45,6 +45,25 @@ ALLOWED_STATEMENT = re.compile(
 REQUIRES_ROLLBACK = True
 
 
+def rollback_undoes_own_constraint(fix_sql: str, rollback_sql: str) -> bool:
+    """True only when the rollback drops the very constraint the fix adds.
+
+    DROP CONSTRAINT is prohibited everywhere, rollbacks included -- a rollback
+    that removes an existing integrity constraint is as dangerous as a fix that
+    does. But adding a primary key has exactly one inverse, and refusing it
+    meant every correct PK fix was REJECTED for carrying its own undo.
+
+    So the exemption is as narrow as it can be: the fix must ADD CONSTRAINT X
+    and the rollback must DROP CONSTRAINT X, same name. Constraint names are
+    unique within a schema, so this cannot reach any constraint the fix did
+    not create. Any other DROP CONSTRAINT in a rollback is still refused.
+    """
+    added = re.search(r'\bADD\s+CONSTRAINT\s+("?)([A-Za-z0-9_$#]+)\1', fix_sql or "", re.IGNORECASE)
+    dropped = re.search(r'\bDROP\s+CONSTRAINT\s+("?)([A-Za-z0-9_$#]+)\1', rollback_sql or "",
+                        re.IGNORECASE)
+    return bool(added and dropped and added.group(2).upper() == dropped.group(2).upper())
+
+
 def classify(level: str) -> str:
     if level in NEVER_FIX_LEVELS:
         return "never_fix"

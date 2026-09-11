@@ -45,8 +45,14 @@ def static_check(fix: dict, finding: dict) -> dict:
 def policy_check(fix: dict, finding: dict) -> dict:
     """The prohibitions. This is the gate that does not negotiate."""
     violations = policy.check_statement(fix.get("sql", ""))
-    violations += [f"rollback {v}" for v in policy.check_statement(fix.get("rollback_sql", ""))
-                   if "not one of the shapes" not in v]
+    rollback_violations = [v for v in policy.check_statement(fix.get("rollback_sql", ""))
+                           if "not one of the shapes" not in v]
+    if policy.rollback_undoes_own_constraint(fix.get("sql", ""), fix.get("rollback_sql", "")):
+        # Dropping the constraint this fix itself adds is its exact inverse.
+        # Dropping any other constraint is still refused -- see policy.py.
+        rollback_violations = [v for v in rollback_violations
+                               if v != "removes an integrity constraint"]
+    violations += [f"rollback {v}" for v in rollback_violations]
 
     stance = policy.classify(finding["remediation_level"])
     if stance == "never_fix":

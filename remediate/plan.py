@@ -20,6 +20,7 @@ READY_TO_APPLY = "READY_TO_APPLY"                # gates clear, approval held
 BLOCKED = "BLOCKED"                              # a gate needs something missing
 REJECTED = "REJECTED"                            # policy refused the statement
 MANUAL_ACTION_REQUIRED = "MANUAL_ACTION_REQUIRED"  # a person must author it
+ADVICE_DRAFTED = "ADVICE_DRAFTED"                # a recommendation, no statement to gate
 NOT_A_FIX = "NOT_A_FIX"                          # L4: a decision, not a statement
 
 
@@ -30,7 +31,7 @@ def _fix_id(finding: dict) -> str:
 
 def plan_finding(
     finding: dict,
-    allow_model: bool = False,
+    model_mode: str = "off",
     rehearsal_target=None,
     approvals: dict | None = None,
 ) -> dict:
@@ -52,13 +53,30 @@ def plan_finding(
         "sql": None,
         "rollback_sql": None,
         "source": None,
+        "model_id": None,
+        "fixture_id": None,
+        "evidence": None,
+        "advice": None,
+        "artefact": None,
         "gates": [],
         "status": None,
         "reason": None,
     }
 
-    fix, source = generate.build_fix(finding, allow_model=allow_model)
+    fix, source = generate.build_fix(finding, model_mode=model_mode)
     entry["source"] = source
+
+    if fix is not None and not fix.get("sql"):
+        # Advice with no statement. Most of what a model would say about these
+        # findings is not SQL on the source at all -- a DMS setting, a step to
+        # run on the target after load, a parameter for provisioning. There is
+        # nothing to gate, so it is recorded for a person to act on.
+        entry.update({k: fix.get(k) for k in
+                      ("advice", "artefact", "evidence", "explain", "fixture_id", "model_id")})
+        entry["source"] = fix.get("source", source)
+        entry["status"] = ADVICE_DRAFTED
+        entry["reason"] = "advice drafted; there is no statement to gate, so a person acts on it"
+        return entry
 
     if fix is None:
         if stance == "never_fix":
@@ -80,6 +98,8 @@ def plan_finding(
         "caveat": fix.get("caveat"),
         "source": fix.get("source", source),
         "model_id": fix.get("model_id"),
+        "fixture_id": fix.get("fixture_id"),
+        "evidence": fix.get("evidence"),
     })
 
     results = gates.run_all(
@@ -101,11 +121,15 @@ def plan_finding(
 
 def build(
     assessment: dict,
-    allow_model: bool = False,
+    model_mode: str | None = None,
     rehearsal_target=None,
     approvals: dict | None = None,
     on_event=None,
+    allow_model: bool = False,
 ) -> dict:
+    # allow_model is the older switch, kept so an existing caller does not
+    # silently change meaning: True meant "call Bedrock", which is now "live".
+    model_mode = model_mode or ("live" if allow_model else "off")
     findings = assessment["findings"]
     entries = []
     for i, finding in enumerate(findings, start=1):
@@ -118,7 +142,7 @@ def build(
                 "object_name": finding.get("object_name"),
             })
         entry = plan_finding(
-            finding, allow_model=allow_model, rehearsal_target=rehearsal_target, approvals=approvals
+            finding, model_mode=model_mode, rehearsal_target=rehearsal_target, approvals=approvals
         )
         entries.append(entry)
         if on_event:
@@ -144,7 +168,11 @@ def build(
     return {
         "collector_run_id": assessment.get("collector_run_id"),
         "planned_at_utc": datetime.now(timezone.utc).isoformat(),
-        "model_generation_enabled": allow_model,
+        "model_mode": model_mode,
+        # True only when a model actually generates. Static fixtures are not a
+        # model, so "static" reports False here -- deliberately.
+        "model_generation_enabled": model_mode == "live",
+        "static_outputs_used": sum(1 for e in entries if e["source"] == "static_fixture"),
         "rehearsal_configured": bool(rehearsal_target),
         "totals": counts,
         "fixes_with_sql": sum(1 for e in entries if e["sql"]),

@@ -1,6 +1,20 @@
 # Phase 4 — Detect & Remediate
 
-> **Latest update — 2026-09-10 (rehearsal live).** The dry-run gate now runs
+> **Latest update — 2026-09-11 (static stand-ins).** Bedrock invoke is still
+> blocked, so the model seam is now filled by **hand-written static output**,
+> `bedrock/static/DBMIG_APP.json`, served under `model_mode="static"`. It is
+> labelled everywhere as `source: static_fixture`, `model_id: null`, and the plan
+> reports `model_generation_enabled: false` — a static entry is not a model and
+> never claims to be. Result on run `18c1809a`: all 25 L2 no-template findings
+> answered. **2 are SQL** (primary keys for `DQ-001`), both passed the real dry run
+> on the rehearsal copy and stop only at approval, as L2 must. **23 are advice**
+> (new status `ADVICE_DRAFTED`) — DMS LOB settings, table exclusions, target
+> runbook steps, a provisioning parameter — because most of what a model would
+> say about these findings is not SQL on the source at all. One policy change,
+> deliberately narrow: a rollback may drop a constraint **only if its own fix
+> added that exact constraint**.
+>
+> **Previous — 2026-09-10 (rehearsal live).** The dry-run gate now runs
 > against a real restored copy, `DBMIG_REHEARSAL` (85 objects, 1,079 MB). Both
 > drafted fixes moved `BLOCKED → AUTO_APPLY` with all five gates green:
 > `DQ-007` applied in **5,704 ms** and rolled back in **1,254 ms**; `PERF-001`
@@ -25,14 +39,26 @@ production database is not.
    from the assessment rule and is not re-judged here:
    - `L1` → auto-apply · `L2` → needs approval · `L3` → a human authors it ·
      `L4` → never fixed, it is a decision not a statement
-2. **Source a fix** — `remediate/generate.py`, in order:
-   - **template** — deterministic, no model, no cost
-   - **bedrock** — for findings with no template. **Not wired**
-   - **none** — routed to a human
+2. **Source a fix** — `remediate/generate.py`, in order, governed by `model_mode`:
+   - **template** — deterministic, no model, no cost. Always tried first.
+   - **static_fixture** — `model_mode="static"` (the CLI and console default).
+     `bedrock/static.py` looks up a hand-written entry for **exactly** this rule,
+     owner and object. No entry → routed to a human. An entry whose recorded
+     `written_against` no longer matches the live finding detail → refused as
+     stale and routed to a human, so a changed estate never receives an answer
+     to a question it is no longer asking. An entry may carry SQL (then it takes
+     all five gates) or only advice (then it becomes `ADVICE_DRAFTED`).
+   - **bedrock** — `model_mode="live"`. **Not wired**; invoke is blocked.
+   - **none** — `model_mode="off"`, or nothing above produced anything.
+
+   L3 and L4 return before any of these are tried — see Known limits.
 3. **Run the five gates** — `remediate/gates.py`, stopping at the first failure:
    `static → policy → syntax → dry run on rehearsal → approval`
 4. **Record the outcome**: `AUTO_APPLY`, `READY_TO_APPLY`, `BLOCKED`, `REJECTED`,
-   `MANUAL_ACTION_REQUIRED`, or `NOT_A_FIX`.
+   `ADVICE_DRAFTED`, `MANUAL_ACTION_REQUIRED`, or `NOT_A_FIX`.
+   `ADVICE_DRAFTED` means a recommendation exists but there is no statement to
+   gate — a DMS setting, a step on the target, a parameter for Phase 6. Entries
+   carry an `artefact` with `applies_to_phase` so later phases can consume them.
 
 ### The gates
 
@@ -121,8 +147,25 @@ is worse than no plan.
 **A model-authored fix gets no shortcut.** When Bedrock is wired it must return
 the same shape a template does and passes exactly the same five gates.
 
-**`allow_model` is pinned false on the server side**, not merely defaulted — the
-console cannot claim a model produced a fix while invoke is blocked.
+**The console pins `model_mode="static"`**, never `"live"`, so it cannot claim a
+model produced a fix while invoke is blocked. (`allow_model` is still accepted by
+`plan.build` so an old caller keeps its meaning — `True` maps to `"live"`.)
+
+**Static output is labelled, not disguised.** It exists so the pipeline runs end
+to end without Bedrock, and so every downstream phase can be built against real
+shapes. It must never be presented as model output: every entry carries
+`source: static_fixture` and `model_id: null`. If a client asks whether an AI
+wrote a recommendation, the screen gives the true answer.
+
+**One narrow policy exemption, 2026-09-11.** `DROP CONSTRAINT` is prohibited in a
+fix *and* in a rollback. That made every correct primary-key fix `REJECTED`,
+because a PK has exactly one inverse. `policy.rollback_undoes_own_constraint()`
+now allows it only when the fix `ADD CONSTRAINT X` and the rollback
+`DROP CONSTRAINT X` name the same constraint. Tested five ways — the own
+constraint passes; a different constraint, a fix that drops one, and a rollback
+with a second statement appended are all still refused. Verified on the
+rehearsal copy that the rollback is a true inverse: after both dry runs the key
+columns were nullable again and no constraint or index was left behind.
 
 ## Known limits
 
@@ -132,6 +175,13 @@ console cannot claim a model produced a fix while invoke is blocked.
 - **XML-typed findings cannot be rehearsed** on a same-instance copy, because an
   XML schema URL is unique per database. They stay `BLOCKED`, which is honest —
   a separate instance would lift this.
+- **Static output is estate-specific.** `bedrock/static/` has entries for
+  `DBMIG_APP` only. A collaborator's estate gets no static answers at all —
+  its L2 findings route to a human — which is the honest result, not a gap to
+  paper over with generic text.
+- **With static mode on, 36 findings still need a human** (25 L3 by policy, 11
+  DQ-009 on a discovery gap). The 25 L2 that a model would handle are answered
+  by static entries. The breakdown below is what a live model would change:
 - **61 of 66 findings are routed to a human — but Bedrock would only move 25.**
   The earlier wording here implied all 61 were waiting on a model. They are not:
 
@@ -178,6 +228,28 @@ Console: **Phase 4 - Remediate**.
 3. **`CHAR_LENGTH` in the column probe** — converts 11 more without a model.
 
 ## Change log
+
+**2026-09-11 (static stand-ins)** — `model_mode` (`off` / `static` / `live`)
+replaces the `allow_model` boolean; `static` is the CLI and console default.
+`bedrock/static.py` + `bedrock/static/DBMIG_APP.json` answer all 25 L2
+no-template findings, each written against facts checked on the source that day
+(recorded in `evidence`): `NOTE_ID` 20,000 distinct in 20,000 rows, `EVENT_ID` 2
+in 2, `LEGACY_SCORE` 0 non-null in 120,000, `COMM_LOG.NOTES` longest value 510
+characters. New status `ADVICE_DRAFTED`. Narrow rollback exemption for
+`DROP CONSTRAINT` (see Design decisions).
+
+Two draft answers were withdrawn during authoring because they were wrong for
+this migration, which is worth recording because a model could make the same
+mistake: a `NUMBER(10,2)` precision for `DQ-006` (same engine both sides, so
+`NUMBER` migrates as `NUMBER`; the "fix" would have changed production to solve
+a heterogeneous-target problem this migration does not have), and excluding
+`LEGACY_SCORE` from the load for `DQ-008` (saves nothing measurable, risks
+anything still referencing it).
+
+Run `18c1809a`: `AUTO_APPLY` 2, `BLOCKED` 2 (L2 approval only — all other gates
+passed), `ADVICE_DRAFTED` 23, `MANUAL_ACTION_REQUIRED` 36, `NOT_A_FIX` 3. Dry
+runs: `DQ-001` AUDIT_SCRATCH 358/393 ms, COLLATERAL_NOTE 234/38 ms, `DQ-007`
+12,892/1,784 ms, `PERF-001` 66/48 ms (apply/rollback).
 
 **2026-09-10 (rehearsal live)** — Dry-run gate wired to a real copy; both fixes
 proven end to end with the timings in `Latest update`.

@@ -23,9 +23,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--assessment", type=Path, default=DEFAULT_ASSESS_OUTPUT / "assessment.json")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
-        "--allow-model",
-        action="store_true",
-        help="permit Bedrock generation for findings with no template (not yet wired)",
+        "--model-mode",
+        choices=["off", "static", "live"],
+        default="static",
+        help="where fixes come from when no template applies: off (route to a human), "
+             "static (hand-written stand-ins in bedrock/static/, labelled as such), "
+             "live (Bedrock -- not wired; invoke is blocked on this account)",
     )
     parser.add_argument(
         "--rehearsal-dsn",
@@ -49,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
             target = None
 
     result = plan_mod.build(
-        assessment, allow_model=args.allow_model, rehearsal_target=target
+        assessment, model_mode=args.model_mode, rehearsal_target=target
     )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -67,12 +70,18 @@ def _report(r: dict) -> None:
     print(f"\ncollector_run_id : {r['collector_run_id']}")
     print(f"findings planned : {sum(r['totals'].values())}")
     print(f"fixes with SQL   : {r['fixes_with_sql']}")
-    print(f"model generation : {'enabled' if r['model_generation_enabled'] else 'disabled'}")
+    mode = r.get("model_mode", "off")
+    mode_note = {
+        "off": "no model, no stand-ins",
+        "static": f"hand-written stand-ins, NOT model output ({r.get('static_outputs_used', 0)} used)",
+        "live": "Bedrock",
+    }.get(mode, mode)
+    print(f"model mode       : {mode} -- {mode_note}")
     print(f"rehearsal        : {'in use' if r['rehearsal_configured'] else 'not configured'}")
 
     print("\nOUTCOMES")
     order = ["AUTO_APPLY", "READY_TO_APPLY", "BLOCKED", "REJECTED",
-             "MANUAL_ACTION_REQUIRED", "NOT_A_FIX"]
+             "ADVICE_DRAFTED", "MANUAL_ACTION_REQUIRED", "NOT_A_FIX"]
     for status in order:
         if r["totals"].get(status):
             print(f"  {status:<24} {r['totals'][status]}")
