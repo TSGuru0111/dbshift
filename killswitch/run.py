@@ -103,6 +103,15 @@ def main(argv: list[str] | None = None) -> int:
     except PermissionError as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return 1
+    except Exception as exc:  # noqa: BLE001 -- expired keys, most often
+        # The identity check is the first call, so a failure here means nothing
+        # was stopped or deleted. Say that plainly; a traceback hides it.
+        first = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+        print(f"NOTHING WAS CHANGED -- could not reach AWS: {first}", file=sys.stderr)
+        if "ExpiredToken" in first or "expired" in first.lower():
+            print("The session keys have expired. Paste fresh ones from the access portal into the "
+                  f"'{args.profile}' profile and run this again.", file=sys.stderr)
+        return 3
 
     _print(report)
     return 2 if report["ours_billing"] else 0
