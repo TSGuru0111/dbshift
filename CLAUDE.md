@@ -27,7 +27,11 @@ See `docs/02-architecture.md` for why, and do not re-add them.
 | Bedrock access | ⛔ **Blocked** — listing works, every invoke fails on a Marketplace subscription gap. `docs/05-aws-services.md` has the two fixes |
 | Rehearsal copy | ✅ `DBMIG_REHEARSAL`, 85/90 objects, same XE instance. `scripts/oracle-source/06_*` |
 | Detect & Remediate | 🟡 `remediate/`, all 5 gates live. 2 fixes proven apply+rollback on the copy; the other 61 need Bedrock |
-| Everything AWS-side | ⬜ Nothing provisioned yet. Set budget alerts before the first resource |
+| Provision (6) | ✅ `dbshift-target-dbmig-app` deployed and verified 2026-09-11, RDS Oracle 19c SE2 |
+| Migrate (7) | ✅ Full load run 2026-09-11 — 11/11 tables match |
+| Validate (8) | ✅ `validated` 2026-09-12 — 5 levels, 5.4M rows a side, 0 mismatches |
+| Cutover (9) | ◐ Built; certificate correctly **refuses** — records describe run `83eadb57`, target holds `6e48d16a`, and the gate blocks on OPS-001/OPS-002 |
+| Kill switch | ✅ `killswitch/` — stop, empty and destroy every `dbshift-*` resource. **The instance is stopped; RDS auto-restarts it ~18 Sept** |
 
 ## Running it
 

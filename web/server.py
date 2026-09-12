@@ -34,6 +34,7 @@ from assess import loader as assess_loader
 from assess import scoring as assess_scoring
 from collector import config as collector_config
 from collector import run as collector_run
+from cutover import run as cutover_run
 from blocker import gate as blocker_gate
 from blocker import policy as blocker_policy
 from botocore.exceptions import ClientError
@@ -1012,6 +1013,51 @@ def validate(checksum: bool = True):
         report = validate_run.execute(_aws_session(), opts, on_event=emit)
         emit({"event": "complete", "status": report.get("status"), "reason": report.get("reason"),
               "mismatches": report.get("mismatches", 0)})
+
+    return _stream(work)
+
+
+@app.get("/api/cutover")
+def cutover():
+    """Phase 9's certificate. Read-only: it reads records, the report and the
+    instance's tag, and changes nothing. Safe to open at any time."""
+    try:
+        return cutover_run.certificate(_aws_session())
+    except Exception as exc:  # noqa: BLE001 -- the reason belongs on screen
+        raise HTTPException(400, str(exc).splitlines()[0] or type(exc).__name__)
+
+
+class CutoverApproval(BaseModel):
+    reason: str
+
+
+@app.post("/api/cutover/approve")
+def cutover_approve(req: CutoverApproval):
+    """Record who accepts the cutover. The approver is taken from the AWS
+    identity, never from the browser -- a name typed into a form is not an
+    approval."""
+    try:
+        return cutover_run.approve(_aws_session(), req.reason)
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+class CutoverExecute(BaseModel):
+    confirm_account: str
+
+
+@app.post("/api/cutover/execute")
+def cutover_execute(req: CutoverExecute):
+    """Run the target-side cutover steps. Every refusal in cutover.run answers
+    here as a 400 with its reason, before anything is touched."""
+    def work(emit):
+        try:
+            record = cutover_run.execute(_aws_session(), confirm_account=req.confirm_account,
+                                         on_event=emit)
+        except (PermissionError, ValueError) as exc:
+            emit({"event": "refused", "message": str(exc)})
+            return
+        emit({"event": "complete", **record})
 
     return _stream(work)
 

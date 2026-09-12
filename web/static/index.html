@@ -683,6 +683,53 @@ tr:last-child td{border-bottom:none}
       against the estate it was built from.</div></div>
   </section>
 
+  <!-- ============ 10. CUTOVER ============ -->
+  <section class="view" id="view-cutover">
+    <div class="head">
+      <h2>Cutover</h2>
+      <p>A readiness certificate, then a named approval, then the few target-side steps Phase 4 set
+         aside. Every requirement is <b>met</b>, <b>waived</b> by a named person, <b>not applicable</b>
+         with the reason it does not apply, or <b>unmet</b> — and an unmet requirement says what would
+         clear it. Building the certificate changes nothing.</p>
+    </div>
+
+    <div class="panel pad">
+      <div class="spread"><div class="eyebrow" style="margin:0">Readiness certificate</div>
+        <button class="btn ghost sm" id="btnCutRefresh">Rebuild</button></div>
+      <p id="cutEstate" style="font-size:12.5px;color:var(--ink-2);margin:8px 0 0"></p>
+    </div>
+
+    <div class="checks mt" id="cutReqs"></div>
+
+    <div class="panel pad mt" id="cutApprovePanel" style="display:none">
+      <div class="eyebrow">Approval</div>
+      <p style="font-size:12.5px;color:var(--ink-2);margin-bottom:10px">
+        The gate blocks cutover on this estate. A person may accept those blockers, and the reason is
+        recorded against the AWS identity making the call — <b>the approver is never typed into this
+        form</b>. An approval names one collector run; it does not carry to another.</p>
+      <div class="field"><label for="cutReason">Why this is acceptable</label>
+        <textarea id="cutReason" spellcheck="false"
+          placeholder="e.g. full-outage window agreed with the application owner for Saturday 02:00; no CDC required"></textarea></div>
+      <div class="spread"><button class="btn" id="btnCutApprove">Record approval</button>
+        <span class="mono" id="cutApproveMeta" style="font-size:12px;color:var(--ink-3)"></span></div>
+    </div>
+
+    <div class="panel pad mt" id="cutExecPanel" style="display:none">
+      <div class="eyebrow">Run the cutover steps</div>
+      <p style="font-size:12.5px;color:var(--ink-2);margin-bottom:10px">
+        Runs only the target-side steps listed above. It does <b>not</b> repoint any application, and
+        the source is left untouched and authoritative.</p>
+      <div class="field"><label for="cutConfirm">Type the AWS account id to confirm</label>
+        <input id="cutConfirm" class="mono" placeholder="000000000000"></div>
+      <div class="spread"><button class="btn" id="btnCutExecute">Run cutover steps</button>
+        <span class="mono" id="cutExecMeta" style="font-size:12px;color:var(--ink-3)"></span></div>
+      <div class="checks mt-s" id="cutExecLog"></div>
+    </div>
+
+    <div id="cutEmpty" class="panel mt"><div class="empty">Validate first. The certificate binds to the
+      collector run on the target's own tag and requires a clean validation of that run.</div></div>
+  </section>
+
   <!-- ============ CATALOGUE ============ -->
   <section class="view" id="view-catalogue">
     <div class="head">
@@ -770,12 +817,14 @@ const STAGES = [
   {id:'provision', label:'Provision',      n:6},
   {id:'migrate',   label:'Migrate',        n:7},
   {id:'validate',  label:'Validate',       n:8},
+  {id:'cutover',   label:'Cutover',        n:9},
 ];
 const IDLE_STAGES = {connect:'active', discover:'idle', assess:'idle', target:'idle',
-                     remediate:'idle', gate:'idle', provision:'idle', migrate:'idle', validate:'idle'};
+                     remediate:'idle', gate:'idle', provision:'idle', migrate:'idle', validate:'idle',
+                     cutover:'idle'};
 let current = 'connect';
 let stageState = {...IDLE_STAGES};
-let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:'', migrate:'', validate:''};
+let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:'', migrate:'', validate:'', cutover:''};
 let ISSUES = [], sevFilter = new Set(), catFilter = new Set();
 
 function renderRail(){
@@ -808,7 +857,7 @@ function renderPageNav(){
     ${next ? `<button class="btn sm" ${nextLocked ? 'disabled' : ''}
                 onclick="show('${next.id}')"
                 title="${nextLocked ? 'Finish this stage first' : ''}">${esc(nextLabel)} &rarr;</button>`
-           : '<span class="mono" style="font-size:11.5px;color:var(--ink-3)">Phase 9 onward is not built</span>'}`;
+           : '<span class="mono" style="font-size:11.5px;color:var(--ink-3)">Phase 10 (Report) is not built</span>'}`;
 }
 function show(id){
   const previous = current;
@@ -976,7 +1025,7 @@ $('#btnDisconnect').onclick = async () => {
   $('#checks').innerHTML = '<div class="empty">Connect to run the preflight checks.</div>';
   $('#btnDiscover').disabled = true;
   stageState = {...IDLE_STAGES};
-  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:'', migrate:'', validate:''};
+  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:'', migrate:'', validate:'', cutover:''};
   renderRail();
 };
 
@@ -1986,6 +2035,12 @@ $('#btnValidate').onclick = () => {
         + (d.mismatches ? ` · ${d.mismatches} mismatch(es)` : '');
       setStage('validate', d.status === 'validated' ? 'done' : 'active',
         d.status === 'validated' ? 'validated' : (d.status || 'stopped'));
+      // Cutover opens on a clean validation and nothing less. The certificate
+      // re-checks this itself -- unlocking a screen is not an authorisation.
+      if (d.status === 'validated' && stageState.cutover === 'idle') {
+        setStage('cutover', 'active');
+        renderCutover();
+      }
     } else if (d.event === 'error') {
       es.close(); btn.disabled = false;
       $('#valMeta').textContent = 'error — ' + d.message;
@@ -1993,6 +2048,128 @@ $('#btnValidate').onclick = () => {
     }
   };
   es.onerror = () => { es.close(); btn.disabled = false; setStage('validate', 'active', 'connection lost'); };
+};
+
+/* ---------------- cutover (Phase 9) ---------------- */
+// Four outcomes, and three of them are not "pass". A requirement that does not
+// apply says why; one that is waived names who waived it.
+const REQSTATE = {
+  met:            {cls:'pass', mark:'✓', word:'met'},
+  waived:         {cls:'warn', mark:'!', word:'waived'},
+  not_applicable: {cls:'warn', mark:'–', word:'not applicable'},
+  unmet:          {cls:'fail', mark:'×', word:'unmet'},
+};
+
+function reqRow(r){
+  const v = REQSTATE[r.status] || REQSTATE.unmet;
+  const ev = r.evidence || {};
+  const bullets = (ev.gaps || []).concat((ev.steps || []).map(s =>
+    typeof s === 'string' ? s : `${s.rule_id} ${s.object || ''} — ${s.when || ''}`));
+  return `<div class="check ${v.cls}"><span class="mark">${v.mark}</span>
+    <div style="min-width:0;flex:1">
+      <div class="name">${esc(r.title)} <span class="who">${esc(v.word)}</span></div>
+      <div class="detail">${esc(r.detail)}</div>
+      ${r.remedy ? `<div class="remedy">${esc(r.remedy)}</div>` : ''}
+      ${bullets.length ? `<ul style="margin:6px 0 0 16px;padding:0;font-size:12px;color:var(--ink-2)">
+        ${bullets.map(b => `<li style="margin:2px 0">${esc(b)}</li>`).join('')}</ul>` : ''}
+    </div></div>`;
+}
+
+async function renderCutover(){
+  const r = await fetch('/api/cutover');
+  $('#cutEmpty').style.display = 'none';
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({detail:'could not build the certificate'}));
+    $('#cutEstate').textContent = 'Certificate could not be built — ' + (e.detail || r.status);
+    $('#cutReqs').innerHTML = '';
+    return;
+  }
+  const c = await r.json();
+  $('#cutEstate').innerHTML = `Collector run <b class="mono">${esc(String(c.collector_run_id || '').slice(0, 8))}</b> `
+    + `(${esc(c.estate || '')}) on <b class="mono">${esc(c.stack_name || '')}</b>, read from ${esc(c.run_id_source || '')}. `
+    + `Target is ${esc(String(c.target_status))}. `
+    + (c.ready ? '<b>Ready to cut over.</b>' : '<b>Not ready</b> — each unmet requirement below says what would clear it.');
+  $('#cutReqs').innerHTML = (c.requirements || []).map(reqRow).join('');
+
+  // The approval box appears only when the gate is what stands in the way.
+  const gate = (c.requirements || []).find(x => x.id === 'gate') || {};
+  $('#cutApprovePanel').style.display = (gate.status === 'unmet' || gate.status === 'waived') ? '' : 'none';
+  if (c.approval) {
+    $('#cutApproveMeta').textContent = `approved by ${c.approval.approved_by} · accepting `
+      + (c.approval.accepting || []).join(', ');
+    $('#cutReason').value = c.approval.reason || '';
+  }
+  $('#cutExecPanel').style.display = c.ready ? '' : 'none';
+  setStage('cutover', c.ready ? 'active' : 'active', c.ready ? 'certificate ready' : 'not ready');
+}
+
+$('#btnCutRefresh').onclick = () => renderCutover();
+
+$('#btnCutApprove').onclick = async () => {
+  const btn = $('#btnCutApprove');
+  btn.disabled = true;
+  $('#cutApproveMeta').textContent = 'recording…';
+  const r = await fetch('/api/cutover/approve', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({reason: $('#cutReason').value})});
+  const d = await r.json().catch(() => ({}));
+  btn.disabled = false;
+  if (!r.ok) { $('#cutApproveMeta').textContent = 'refused — ' + (d.detail || r.status); return; }
+  $('#cutApproveMeta').textContent = `approved by ${d.approved_by}`;
+  await renderCutover();
+};
+
+$('#btnCutExecute').onclick = async () => {
+  const btn = $('#btnCutExecute');
+  btn.disabled = true;
+  $('#cutExecLog').innerHTML = '';
+  $('#cutExecMeta').textContent = 'running…';
+  setStage('cutover', 'busy', 'cutting over');
+  const r = await fetch('/api/cutover/execute', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({confirm_account: $('#cutConfirm').value.trim()})});
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    btn.disabled = false;
+    $('#cutExecMeta').textContent = 'refused — ' + (d.detail || r.status);
+    setStage('cutover', 'active', 'refused');
+    return;
+  }
+  // The endpoint streams, so the refusal path is a message, not a status code.
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream:true});
+    const parts = buf.split('\n\n'); buf = parts.pop();
+    for (const p of parts) {
+      const line = p.split('\n').find(l => l.startsWith('data: '));
+      if (!line) continue;
+      const d = JSON.parse(line.slice(6));
+      if (d.event === 'step') {
+        $('#cutExecLog').insertAdjacentHTML('beforeend',
+          `<div class="check"><span class="mark">›</span><div class="detail">${esc(d.detail)}</div></div>`);
+      } else if (d.event === 'refused') {
+        $('#cutExecMeta').textContent = 'refused — nothing was changed';
+        $('#cutExecLog').insertAdjacentHTML('beforeend',
+          `<div class="check fail"><span class="mark">×</span><div class="detail">${esc(d.message)}</div></div>`);
+        setStage('cutover', 'active', 'refused');
+      } else if (d.event === 'complete') {
+        $('#cutExecMeta').textContent = `${d.status} · applied ${(d.applied || []).length}`
+          + ((d.failed || []).length ? ` · ${d.failed.length} failed` : '');
+        for (const f of d.failed || []) {
+          $('#cutExecLog').insertAdjacentHTML('beforeend',
+            `<div class="check fail"><span class="mark">×</span><div class="detail">${esc(f)}</div></div>`);
+        }
+        setStage('cutover', d.status === 'cut_over' ? 'done' : 'active', d.status.replace(/_/g, ' '));
+      } else if (d.event === 'error') {
+        $('#cutExecMeta').textContent = 'error — ' + d.message;
+        setStage('cutover', 'active', 'error');
+      }
+    }
+  }
+  btn.disabled = false;
 };
 
 /* ---------------- catalogue ---------------- */

@@ -47,7 +47,7 @@ When you make a change:
 | 6 | Provision | ✅ built, deployed and verified 2026-09-11 | [phase-06-provision.md](phase-06-provision.md) |
 | 7 | Migrate | ✅ built and run 2026-09-11 — full load, 11/11 tables match | [phase-07-migrate.md](phase-07-migrate.md) |
 | 8 | Validate | ◐ built; first run pending | [phase-08-validate.md](phase-08-validate.md) |
-| 9 | Cutover | ⬜ not started | — |
+| 9 | Cutover | ◐ built; certificate refuses (run-id mismatch, gate blocks) | [phase-09-cutover.md](phase-09-cutover.md) |
 | 10 | Report | ◐ partial — the HTML report covers 1–3 | — |
 
 `docs/02-architecture.md` holds the cross-phase design and the scope decisions.
