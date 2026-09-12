@@ -402,16 +402,39 @@ def behaviour(ctx: Ctx) -> list[dict]:
                     if ic.get("index_name") == idx["index_name"]), None)
         if not col:
             continue
-        sql = (f'SELECT COUNT(*) FROM "{owner}"."{table}" WHERE CONTAINS("{col}", :t) > 0')
-        src, tgt = ctx.both(sql, {"t": "the"})
+        # Search for a word taken from the data. The first version searched for
+        # "the", matched nothing on either side, and called 0 = 0 a match -- a
+        # check that cannot fail proves nothing.
+        token = None
+        try:
+            got = ctx.rows(ctx.source(),
+                           f'SELECT TO_CHAR(REGEXP_SUBSTR(TO_CHAR(SUBSTR("{col}",1,200)),\'[A-Za-z]{{4,}}\')) '
+                           f'FROM "{owner}"."{table}" WHERE "{col}" IS NOT NULL AND ROWNUM = 1')
+            token = got[0][0] if got else None
+        except Exception as exc:  # noqa: BLE001
+            ctx.log(f"could not take a search word from {table}.{col}: {str(exc).splitlines()[0]}")
+        if not token:
+            out.append(finding(5, "text index", NOT_COMPARABLE,
+                               f"{idx['index_name']}: no word could be taken from the data to search for",
+                               evidence={"table": table, "column": col}))
+            continue
+        sql = f'SELECT COUNT(*) FROM "{owner}"."{table}" WHERE CONTAINS("{col}", :t) > 0'
+        src, tgt = ctx.both(sql, {"t": token})
         s = src[0][0] if isinstance(src, list) else src
         t = tgt[0][0] if isinstance(tgt, list) else tgt
-        out.append(finding(5, "text index", MATCH if (isinstance(s, int) and s == t) else
-                           (NOT_COMPARABLE if not isinstance(s, int) else MISMATCH),
-                           f"{idx['index_name']}: a CONTAINS search returns source {s}, target {t}",
-                           why="The index was rebuilt on 19c in Phase 7; this asks it to answer, rather than "
-                               "checking that it exists.",
-                           evidence={"table": table, "column": col}))
+        if not isinstance(s, int) or not isinstance(t, int):
+            verdict, why = NOT_COMPARABLE, "one side could not run the search."
+        elif s == 0:
+            verdict, why = NOT_COMPARABLE, ("the word matched nothing on the source either, so equal counts "
+                                            "here prove nothing about the target's index.")
+        elif s == t:
+            verdict, why = MATCH, ("The index was rebuilt on 19c in Phase 7; this asks it to answer a real "
+                                   "search, rather than checking that it exists.")
+        else:
+            verdict, why = MISMATCH, ""
+        out.append(finding(5, "text index", verdict,
+                           f"{idx['index_name']}: searching for '{token}' returns source {s}, target {t}",
+                           why=why, evidence={"table": table, "column": col, "token": token}))
 
     # database links
     for link in ctx.data("db_links"):

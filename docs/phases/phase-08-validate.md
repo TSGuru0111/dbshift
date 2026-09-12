@@ -1,6 +1,27 @@
 # Phase 8 — Validate
 
-> **Latest update — 2026-09-12 (first run: nothing validated, and it said
+> **Latest update — 2026-09-12 (validated).** With the security group pointed at
+> the current operator address, all five levels ran against the live target:
+> **50 named objects present; 72 columns matching on type, length, precision,
+> scale and nullability; 40 constraints; 13 indexes; 11 of 11 tables matching on
+> exact row counts; and a checksum of every row matching on all 11 tables** —
+> 5.4 million rows a side in about 28 seconds (`LOAN_TXN` 3,000,000 in 14.0 s,
+> `PAYMENT_HIST` 1,800,001 in 7.7 s). Behaviour: grants, sequences, the
+> materialized view `FRESH`, the external table reading its file on RDS. Six
+> expected differences, each traced to a recorded decision, a 21c/19c difference
+> or the source-only discovery account. **Verdict `validated`, zero mismatches.**
+> The target billed about a minute and was stopped again automatically.
+>
+> One check passed vacuously and has been fixed: the text-index search asked for
+> "the", got 0 on both sides, and called that a match. It now takes a word from
+> the data and treats "no matches anywhere" as *not comparable*. Chasing that
+> down found a real defect **in the source estate**: `IX_COMM_NOTES_TEXT` holds
+> **zero tokens** (`DR$…$I` is empty) while reporting `INDEXED` / `VALID`, so
+> application searches on the source silently return nothing. The migrated target
+> does not share it — Phase 7 rebuilt that index after the load, and it holds
+> 13,896 tokens over all 400,000 rows.
+>
+> **Previous — 2026-09-12 (first run: nothing validated, and it said
 > "validated").** The run reached the source but every connection to the target
 > failed with `DPY-6005`, because the security group admits the single address
 > the stack was deployed with (`14.97.44.14/32`) and this machine's address had
@@ -107,6 +128,18 @@ card per level, each finding marked with its verdict, its reason, and its
 evidence.
 
 ## Change log
+
+**2026-09-12 — validated, and a vacuous check found a source defect.** Full run
+as summarised at the top: five levels, zero mismatches, six expected differences.
+Two fixes came out of it. The text-index check searched for a hardcoded "the",
+matched nothing on either side and scored 0 = 0 as a match; it now takes a word
+from the data and reports *not comparable* when the search matches nothing on
+the source. Investigating that revealed the source's `IX_COMM_NOTES_TEXT` is
+**empty** — `DR$…$I` holds no rows, though the index reports `INDEXED` and
+`VALID` and has nothing pending sync — because it was created before the data
+was generated and never synced. It is a real source-side defect, worth an
+assessment rule: *a CONTEXT index whose token table is empty*. Discovery already
+collects everything needed to spot it.
 
 **2026-09-12 — a validation that validated nothing, and passed.** First run:
 source read fine, every target connection refused, and the report said
