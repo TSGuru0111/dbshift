@@ -58,6 +58,17 @@ Keep `assessment.object_mapping` in the metadata model even though nothing maps
 in a homogeneous migration. It costs nothing and is what allows a heterogeneous
 target to be added later without reworking the schema.
 
+**Decision 2026-09-12 — PL/SQL conversion is in scope as a capability, not as
+a target.** Aurora PostgreSQL stays off the list above: nothing provisions it,
+nothing migrates into it. But the one thing every heterogeneous path needs and
+AWS's own Oracle Modernization Accelerator lists as manual — stored procedures,
+functions, packages and triggers — is now built as **Phase 4b**
+(`docs/phases/phase-04b-convert.md`): PL/SQL to PL/pgSQL through the same
+rules-then-model-then-person seam as Phase 4, gated five ways including a real
+compile on PostgreSQL inside a rolled-back transaction. It is target-agnostic
+and applies nothing. Adding the target itself remains a separate, explicit
+decision.
+
 ## Known cost traps
 
 - **OpenSearch Serverless** — Bedrock's Quick-create default provisions a

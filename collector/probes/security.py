@@ -2,6 +2,14 @@ from ..db import in_binds
 
 NAME = "security"
 
+# Datasets whose feeding query is labelled differently from the dataset name.
+# Consulted only when the dataset comes back empty, to recover its column list.
+QUERY_LABELS = {
+    "source_inventory.role_privileges": "security.role_privs",
+    "source_inventory.system_privileges": "security.sys_privs",
+    "source_inventory.table_privileges": "security.tab_privs",
+}
+
 
 def collect(s, owners):
     frag, binds = in_binds("o", owners)

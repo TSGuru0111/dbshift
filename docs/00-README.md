@@ -17,4 +17,7 @@ these are the files it should be pointed at for specific work.
 | `09-conventions.md` | Writing code or SQL in this repo. |
 | `10-glossary.md` | Unfamiliar term or acronym. |
 | `11-checks-catalogue.md` | **What exactly runs.** Every collector statement and all 50 assessment rules. |
+| `12-telco-estate.md` | The second source estate, used to prove the phases are portable. |
+| `13-demo-script.md` | **Presenting to a client.** Phase-by-phase talk track, pre-flight checks, and answers to the questions you will get. |
+| `14-bedrock-enablement.md` | **The day Bedrock is unblocked.** What to do first, what each phase changes (and what must not), and how to prove it end to end. |
 | `phases/` | **One file per phase.** Read before changing a phase; update after. |

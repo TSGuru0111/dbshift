@@ -43,6 +43,15 @@ class QueryRecord:
 class Session:
     connection: Any
     query_log: list[QueryRecord] = field(default_factory=list)
+    # Column names per query label, captured from cur.description.
+    #
+    # A query that returns no rows still knows its own shape, and that shape is
+    # the only record of it: the JSON dataset would otherwise be an empty list,
+    # and the assessment loader -- which infers SQLite columns from the rows --
+    # would build a table with no columns. Every rule referencing one then dies
+    # with "no such column", which is a property of the estate having no jobs or
+    # queues, not of the rule being wrong.
+    columns_by_label: dict[str, list[str]] = field(default_factory=dict)
 
     def fetch(self, label: str, sql: str, binds: dict | None = None) -> list[dict]:
         binds = binds or {}
@@ -52,6 +61,7 @@ class Session:
             with self.connection.cursor() as cur:
                 cur.execute(sql, binds)
                 columns = [d[0].lower() for d in cur.description]
+                self.columns_by_label[label] = columns
                 rows = [dict(zip(columns, r)) for r in cur.fetchall()]
         except oracledb.Error as exc:
             elapsed = int((time.perf_counter() - started) * 1000)

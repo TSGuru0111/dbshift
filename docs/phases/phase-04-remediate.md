@@ -229,6 +229,19 @@ Console: **Phase 4 - Remediate**.
 
 ## Change log
 
+**2026-09-12 — database-level static entries are served across estates.** The
+full telco run reported `static_outputs_used: 2` although every entry in
+`bedrock/static/DBMIG_APP.json` was authored for `DBMIG_APP`. The two are
+`OPS-006` (`V$SYSMETRIC`, utilization unavailable) and `RDS-015`
+(`NLS_CHARACTERSET`, create the target as AL32UTF8): findings with **no owner**,
+so their lookup key is identical on any estate, and their `written_against`
+detail matched exactly because `DBMIG_TELCO` is also AL32UTF8 with no metric
+rows. The staleness guard therefore did its job — a different character set
+would have been refused — and both answers are correct for telco. Recorded
+rather than changed: a database-level fact is not estate-specific, and the
+detail match is the real guard. Anyone adding an owner-less entry should write
+its `written_against` to carry the fact it depends on, as these two do.
+
 **2026-09-11 (static stand-ins)** — `model_mode` (`off` / `static` / `live`)
 replaces the `allow_model` boolean; `static` is the CLI and console default.
 `bedrock/static.py` + `bedrock/static/DBMIG_APP.json` answer all 25 L2

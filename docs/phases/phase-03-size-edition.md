@@ -102,15 +102,20 @@ marked `example_not_real_data` and is not used unless explicitly uploaded.
 
 ## Change log
 
+**2026-09-12 — Multitenant reason corrected in code.** The `CONTEXTUAL_FEATURES`
+wording in `sizing/policy.py` now says that a single PDB is included in every
+edition *and* that a non-CDB target uses no Multitenant at all, naming RDS 19c
+as non-CDB. String and comment only; the verdict logic is untouched, so the
+edition decision on both estates is unchanged. Closes the 2026-09-11 entry below.
+
 **2026-09-11 — a stated reason contradicted by the real target.** The rules engine
 dismisses Multitenant partly because "RDS for Oracle runs a container database
 with one PDB by default". The RDS 19c target Phase 6 created for `DBMIG_APP` is
 **non-CDB** (`v$database.cdb = NO`, from `provision.verify`). The *verdict* is
 unaffected — a single PDB is included in every edition, and a non-CDB uses no
 Multitenant at all — but the *reason* in `sizing/policy.py` is wrong for this
-target, and in a licence discussion the reason is what gets audited. Not yet
-changed in code; the wording should say that neither a single PDB nor a non-CDB
-needs the Multitenant option.
+target, and in a licence discussion the reason is what gets audited. Fixed
+2026-09-12, see above.
 
 **2026-09-10** — `main()` split into `execute()`; console stage added with
 utilization upload.

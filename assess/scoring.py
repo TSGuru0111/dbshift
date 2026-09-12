@@ -2,13 +2,61 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from collections import Counter
 from pathlib import Path
 
-ANSWER_KEY_PATH = Path(__file__).resolve().parent / "answer_key.json"
+# Both of these are overridable so a second estate can be scored against its own
+# seeded defects without editing this file. They are read at import time from the
+# environment, defaulting to the DBMIG_APP reference estate that ships here.
+#
+#   DBSHIFT_ANSWER_KEY       path to the answer key JSON
+#   DBSHIFT_REFERENCE_SCHEMA owner the key's defects were seeded into
+#
+# The pairing matters: an answer key is only meaningful against the schema it was
+# written for, so pointing one of these at a new estate without the other would
+# silently measure recall against the wrong database.
+ANSWER_KEY_PATH = Path(
+    os.environ.get("DBSHIFT_ANSWER_KEY")
+    or Path(__file__).resolve().parent / "answer_key.json"
+)
 
 # The estate the seeded defects live in. Recall is only meaningful against it.
-REFERENCE_SCHEMA = "DBMIG_APP"
+REFERENCE_SCHEMA = os.environ.get("DBSHIFT_REFERENCE_SCHEMA", "DBMIG_APP")
+
+# Every estate that ships with seeded defects, and the key describing them.
+#
+# The env vars above configure ONE key, which suits the CLI: it is invoked per
+# estate and its environment says which. A long-running process -- the console --
+# serves whichever estate the operator connected to, and cannot re-read an
+# env var it inherited at import. `resolve_answer_key` picks from this registry
+# by the owners actually present in the findings, so the console reports real
+# recall on either estate without a restart.
+#
+# Add a row when an estate gains a seeded-defect key. A schema absent here still
+# assesses normally; it just gets `applicable: false` for recall, which is the
+# honest answer rather than a misleading 0%.
+_HERE = Path(__file__).resolve().parent
+KNOWN_ANSWER_KEYS: dict[str, Path] = {
+    "DBMIG_APP": _HERE / "answer_key.json",
+    "DBMIG_TELCO": _HERE.parent / "scripts" / "telco-source" / "answer_key.json",
+}
+
+
+def resolve_answer_key(owners: set[str] | None) -> tuple[Path, str]:
+    """Pick the answer key matching the estate these findings came from.
+
+    An explicit DBSHIFT_ANSWER_KEY always wins -- it is how the CLI pins a key,
+    including one not in the registry. Otherwise match the registry against the
+    owners present. Falls back to the configured default, which then reports
+    itself inapplicable rather than measuring the wrong estate.
+    """
+    if os.environ.get("DBSHIFT_ANSWER_KEY"):
+        return ANSWER_KEY_PATH, REFERENCE_SCHEMA
+    for schema, path in KNOWN_ANSWER_KEYS.items():
+        if owners and schema in owners and path.exists():
+            return path, schema
+    return ANSWER_KEY_PATH, REFERENCE_SCHEMA
 
 CATEGORIES = (
     "rds_compatibility",
@@ -86,26 +134,33 @@ def score_findings(findings: list[dict]) -> dict:
 
 def score_against_answer_key(
     findings: list[dict],
-    path: Path = ANSWER_KEY_PATH,
+    path: Path | None = None,
     owners: set[str] | None = None,
 ) -> dict:
-    """Measure recall against the seeded defects in docs/04-defects.md.
+    """Measure recall against the seeded defects for this estate.
 
     Findings that match no seeded defect are reported as `additional`, not as
     false positives. Most are genuine facts about the estate -- NOARCHIVELOG,
     grants to PUBLIC -- and calling them false positives would be wrong. A real
     false-positive count needs human triage, so it is reported as pending.
+
+    `path` omitted means resolve the key from `owners`, so a caller that serves
+    more than one estate gets the right one without configuring anything.
     """
+    if path is None:
+        path, reference_schema = resolve_answer_key(owners)
+    else:
+        reference_schema = REFERENCE_SCHEMA
     key = json.loads(path.read_text(encoding="utf-8"))
 
     # The answer key describes defects seeded into one specific reference estate.
     # Against any other database it measures nothing, and reporting 0% recall
     # there would read as a broken engine rather than an inapplicable metric.
-    if owners is not None and REFERENCE_SCHEMA not in owners:
+    if owners is not None and reference_schema not in owners:
         return {
             "applicable": False,
             "reason": (
-                f"The seeded-defect answer key applies to the {REFERENCE_SCHEMA} reference "
+                f"The seeded-defect answer key applies to the {reference_schema} reference "
                 "estate, which is not present in this database. Recall is not measured here — "
                 "the findings above are still real."
             ),

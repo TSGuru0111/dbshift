@@ -121,6 +121,15 @@ def _report(a: dict) -> None:
             f"{g['remediation_level']}"
         )
 
+    # score_against_answer_key returns applicable=False when the key's reference
+    # estate is not in this database. Everything below assumes a real recall
+    # figure, and k["recall"] is None in that case, so print the reason and stop.
+    if not k.get("applicable", True):
+        print("\nANSWER KEY")
+        print(f"  not applicable: {k['reason']}")
+        print(f"  Findings:        {k['additional_findings']}  (all triage pending)")
+        return
+
     print(f"\nANSWER KEY  (docs/04-defects.md)")
     for d in k["defects"]:
         if d["detected"]:

@@ -164,6 +164,24 @@ Also confirm whether the model is reachable directly or only through an
 inference profile — `bedrock:ListInferenceProfiles` is granted, which suggests
 cross-region inference profiles are expected.
 
+### Tested 2026-09-12 — the cause has changed: **no payment instrument**
+
+Re-tested with fresh session credentials (`DBA_permissions`, account
+`106325261146`). Both tiers and the Claude 3 Haiku alternate return:
+
+> Model access is denied due to **INVALID_PAYMENT_INSTRUMENT: A valid payment
+> instrument must be provided.** Your AWS Marketplace subscription for this
+> model cannot be completed at this time. If you recently fixed this issue, try
+> again after 2 minutes.
+
+This is not the Marketplace-permission error of 2026-09-09. The subscription
+is now being attempted and refused because **the AWS account has no valid
+payment method on file** for Marketplace charges. The fix is in the Billing
+console, by an account administrator: add or fix the payment method, then
+retry after about two minutes and run `python -m bedrock.verify`. Neither
+IAM change below helps until that is done. `bedrock/client.py` now names this
+cause explicitly instead of the generic "check model access" text.
+
 ### Tested 2026-09-09 — `ap-south-1` — **invoke is currently BLOCKED**
 
 | Call | Result |

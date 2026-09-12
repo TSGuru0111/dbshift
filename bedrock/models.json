@@ -1,8 +1,8 @@
 {
   "region": "ap-south-1",
-  "tested_on": "2026-09-09",
+  "tested_on": "2026-09-12",
   "invoke_status": "BLOCKED",
-  "invoke_blocker": "AccessDeniedException on every model: 'not authorized to perform the required AWS Marketplace actions (aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe)'. Listing works, invoking does not. Fix by enabling model access in the Bedrock console (admin, one-time) or adding aws-marketplace actions to the permission set. See docs/05-aws-services.md.",
+  "invoke_blocker": "AccessDeniedException on every model, 2026-09-12: 'Model access is denied due to INVALID_PAYMENT_INSTRUMENT: A valid payment instrument must be provided. Your AWS Marketplace subscription for this model cannot be completed at this time.' The cause has moved on from the 2026-09-09 Marketplace-permission error: the account now has no valid payment method for the Marketplace subscription. Fix: an account administrator adds a payment method under Billing, then retry after ~2 minutes and re-run bedrock.verify. See docs/05-aws-services.md and docs/14-bedrock-enablement.md.",
   "note": "Model bindings live here, not in phase code. A phase asks for a tier; this file decides which model serves it. Swapping a model is editing this file. 'verified' below means an actual invoke succeeded -- set it only from a passing `python -m bedrock.verify` run, never from a report.",
 
   "tiers": {

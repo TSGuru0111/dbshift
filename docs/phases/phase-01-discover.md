@@ -1,6 +1,14 @@
 # Phase 1 — Discover
 
-> **Latest update — 2026-09-10.** `collector.run.main` was split into
+> **Latest update — 2026-09-10.** **Run against a second estate (`DBMIG_TELCO`,
+> 5.67 GB, 32.7M rows) and two bugs fell out that `DBMIG_APP` could not show.**
+> A single ungranted table made the profiler skip every alphabetically-later
+> table in the schema without attempting it — silently losing the row data two
+> seeded defects depended on. And empty datasets carried no column names, which
+> broke five assessment rules downstream. Both fixed; see the change log.
+> Verify reconciled 5/5 on the new estate (68 objects, 78 constraints).
+>
+> Earlier the same day: `collector.run.main` was split into
 > `execute(cfg, on_event, enabled_probes, extra_probes)`, shared by the CLI and
 > the console so there is one orchestration path rather than two that drift.
 > Probes can now be switched off and custom query-probes added from the console.
@@ -112,6 +120,28 @@ python -m collector.verify     # reconcile two runs against ground truth
 Console: **Phase 1 - Discover**, with probe-by-probe progress.
 
 ## Change log
+
+**2026-09-10 (later)** — **Two bugs found by running Phase 1 against a second
+estate (`DBMIG_TELCO`), neither visible on `DBMIG_APP`.**
+
+1. **One ungranted table blinded the profiler for the whole schema.**
+   `dataprofile.py` treated a single `ORA-00942` as proof the owner held no data
+   access and added it to an `unreadable` set, skipping every table processed
+   after it. Tables are processed alphabetically, so an ungranted `"SESSION"`
+   caused `SUBSCRIBER`, `SUPPORT_TICKET` and `USAGE_STAGING` to be skipped
+   **without being attempted**, despite valid grants. Two seeded defects living
+   in `SUBSCRIBER` were then reported as assessment misses — the collector had
+   simply never looked. The owner-level short circuit is gone; each table is
+   judged on its own attempt. Per-table grants are exactly what a least-privilege
+   collector account has, so this would misfire on real client estates.
+
+2. **Empty datasets carried no schema.** A dataset with zero rows was written as
+   an empty row list, so a consumer had no way to know its shape. `Session.fetch`
+   already read `cur.description` and discarded it; it now records the column
+   names per query label, and `writer.write_dataset` stores them in the envelope
+   as `columns`. Probes whose query label differs from the dataset name declare
+   the mapping in a `QUERY_LABELS` dict rather than relying on the suffix
+   matching by coincidence. See phase 2 for what this was breaking.
 
 **2026-09-10** — `main()` split into `execute()` with an event callback and
 probe filters, shared with the console. Probes can be disabled and custom

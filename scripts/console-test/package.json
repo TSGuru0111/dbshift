@@ -1,0 +1,7 @@
+{
+  "name": "dbshift-console-test",
+  "private": true,
+  "description": "Drives the DBShift console end to end in headless Edge (same engine as the Playwright MCP server in .mcp.json).",
+  "scripts": { "test": "node drive.js" },
+  "dependencies": { "playwright-core": "^1.55.0" }
+}

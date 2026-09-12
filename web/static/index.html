@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DBShift Console</title>
+<link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -19,7 +20,8 @@
   --bad:#A31D2C; --bad-soft:#F7E3E5; --on-bad:#FFFFFF;
   --crit:#A31D2C; --high:#BE5A12; --med:#8A6A0D; --low:#3D6B8E; --info:#6D7883;
   --ease:cubic-bezier(.2,0,0,1);
-  --shadow:0 1px 2px rgba(17,26,34,.05), 0 10px 30px -20px rgba(17,26,34,.35);
+  /* Panels are bordered; the shadow is a hairline lift, not an ambient glow. */
+  --shadow:0 1px 2px rgba(17,26,34,.06);
 }
 @media (prefers-color-scheme:dark){
   :root{
@@ -33,7 +35,7 @@
     --warn:#C9A63E; --warn-soft:#2A2313;
     --bad:#E4707F; --bad-soft:#2B1418; --on-bad:#0B1419;
     --crit:#E4707F; --high:#E39A55; --med:#C9A63E; --low:#7BA9C9; --info:#93A0AB;
-    --shadow:0 1px 2px rgba(0,0,0,.5), 0 10px 30px -20px rgba(0,0,0,.8);
+    --shadow:0 1px 2px rgba(0,0,0,.45);
   }
 }
 *{box-sizing:border-box}
@@ -45,79 +47,91 @@ p{margin:0}
 button{font:inherit}
 .mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
 .num{font-variant-numeric:tabular-nums}
+::selection{background:var(--accent-soft);color:var(--ink)}
+
+/* Type scale, fixed. 12.5 meta · 13.5 support · 14 body/controls · 15 intro · 22 title.
+   Nothing functional below 12px; monospace is for data, not for labels. */
 
 /* ---------- chrome + stage rail ---------- */
 header{background:var(--chrome);color:#E8EEF2;padding:14px 24px 0}
-.brand{display:flex;align-items:baseline;gap:12px;max-width:1180px;margin:0 auto}
-.brand h1{font-size:15px;font-weight:600;letter-spacing:-.01em}
-.brand .tag{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.13em;
-  text-transform:uppercase;color:#6F8593}
+.brand{display:flex;align-items:baseline;gap:12px;max-width:1180px;margin:0 auto;flex-wrap:wrap}
+.brand h1{font-size:16px;font-weight:600;letter-spacing:-.01em}
+.brand .tag{font-size:13px;color:#8FA5B3}
 .brand .right{margin-left:auto;display:flex;align-items:center;gap:14px}
-.linkbtn{background:none;border:none;color:#8FA5B3;font-size:12px;cursor:pointer;padding:4px 2px;
-  border-bottom:1px solid transparent;transition:color .15s var(--ease)}
+.linkbtn{background:none;border:none;color:#8FA5B3;font-size:13px;cursor:pointer;padding:4px 2px;
+  border-bottom:1px solid transparent;transition:color .15s var(--ease);text-decoration:none}
 .linkbtn:hover{color:#E8EEF2}
 .linkbtn[aria-pressed="true"]{color:var(--accent-ink);border-bottom-color:var(--accent-ink)}
 
-.rail{max-width:1180px;margin:0 auto;display:flex;gap:0;padding:16px 0 0}
-.stage{flex:1;position:relative;padding:0 0 16px;cursor:default;text-align:left;
-  background:none;border:none;color:inherit}
-.stage:not(:last-child)::after{content:"";position:absolute;top:11px;left:calc(50% + 18px);
-  right:calc(-50% + 18px);height:1px;background:#26333D}
+.rail{max-width:1180px;margin:0 auto;display:flex;gap:0;padding:18px 0 0}
+.stage{flex:1;position:relative;padding:0 12px 16px 0;cursor:default;text-align:left;
+  background:none;border:none;color:inherit;min-width:0}
+.stage:not(:last-child)::after{content:"";position:absolute;top:12px;left:calc(50% + 12px);
+  right:calc(-50% + 24px);height:1px;background:#26333D}
 .stage.done:not(:last-child)::after{background:var(--accent)}
-.stage .dot{width:22px;height:22px;border-radius:50%;border:1.5px solid #33434F;
+.stage .dot{width:24px;height:24px;border-radius:50%;border:1.5px solid #33434F;
   background:var(--chrome);display:grid;place-items:center;position:relative;z-index:1;
-  font-family:"IBM Plex Mono",monospace;font-size:10px;color:#7A8D9B;
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;font-weight:500;color:#7A8D9B;
   transition:border-color .3s var(--ease),background .3s var(--ease),color .3s var(--ease)}
 .stage.active .dot{border-color:var(--accent);color:#fff;background:var(--accent)}
 .stage.done .dot{border-color:var(--accent);background:var(--accent);color:#fff}
-.stage .label{font-size:12.5px;font-weight:500;color:#7A8D9B;margin-top:8px;
+.stage .label{font-size:13px;font-weight:500;color:#7A8D9B;margin-top:8px;line-height:1.3;
   transition:color .3s var(--ease)}
 .stage.active .label,.stage.done .label{color:#E8EEF2}
-.stage .sub{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:#5E7080;
-  margin-top:2px;min-height:14px}
+.stage .sub{font-family:"IBM Plex Mono",monospace;font-size:12px;color:#5E7080;
+  margin-top:3px;min-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stage.active .sub{color:var(--accent-ink)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
 .stage.busy .dot{animation:pulse 1.4s var(--ease) infinite}
+/* Eleven stages do not fit a phone. The rail scrolls sideways and the active
+   stage is brought into view; the connectors stay continuous. */
+@media(max-width:860px){
+  .rail{overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+  .rail::-webkit-scrollbar{display:none}
+  .stage{flex:0 0 124px}
+}
 
 /* ---------- layout ---------- */
-main{max-width:1180px;margin:0 auto;padding:28px 24px 80px}
+main{max-width:1180px;margin:0 auto;padding:32px 24px 96px}
 .view{display:none}
 .view.on{display:block;animation:rise .32s var(--ease) both}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-.head{margin-bottom:20px}
-.head h2{font-size:22px;font-weight:700;letter-spacing:-.02em}
-.head p{color:var(--ink-2);margin-top:6px;max-width:70ch}
+.head{margin-bottom:24px}
+.head h2{font-size:24px;font-weight:700;letter-spacing:-.02em}
+.head p{color:var(--ink-2);margin-top:8px;max-width:68ch;font-size:15px;line-height:1.6}
 .panel{background:var(--surface);border:1px solid var(--rule);border-radius:4px;box-shadow:var(--shadow)}
-.pad{padding:20px}
+.pad{padding:24px}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:20px}
 .split2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .split2 .field{margin-bottom:0}
-@media(max-width:860px){.split{grid-template-columns:1fr}}
-.eyebrow{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.12em;
-  text-transform:uppercase;color:var(--ink-3);margin-bottom:12px}
+@media(max-width:860px){.split{grid-template-columns:1fr}.pad{padding:20px}}
+/* Panel and section titles. Sentence case, the body face, one weight step up. */
+.eyebrow{font-size:13.5px;font-weight:600;color:var(--ink);margin-bottom:12px;letter-spacing:-.005em}
 
 /* ---------- form ---------- */
 .field{margin-bottom:14px}
-.field label{display:block;font-size:11.5px;font-weight:500;color:var(--ink-2);margin-bottom:5px}
-.field input,.field select,.field textarea{width:100%;padding:9px 11px;border:1px solid var(--rule-strong);
+.field label{display:block;font-size:12.5px;font-weight:500;color:var(--ink-2);margin-bottom:6px}
+.field input,.field select,.field textarea{width:100%;padding:10px 12px;border:1px solid var(--rule-strong);
   border-radius:3px;background:var(--surface);color:var(--ink);
-  font-family:"IBM Plex Mono",monospace;font-size:12.5px;transition:border-color .15s var(--ease)}
-.field textarea{font-size:12px;line-height:1.5;resize:vertical;min-height:90px}
+  font-family:"IBM Plex Mono",monospace;font-size:13.5px;transition:border-color .15s var(--ease)}
+.field textarea{font-size:13px;line-height:1.5;resize:vertical;min-height:90px}
 .field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--accent);
   box-shadow:0 0 0 3px var(--accent-soft)}
+.field input::placeholder,.field textarea::placeholder{color:var(--ink-3)}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:600px){.row2,.split2{grid-template-columns:1fr}}
 
-.btn{background:var(--accent);color:var(--on-accent);border:none;padding:10px 18px;border-radius:3px;
-  font-size:13px;font-weight:500;cursor:pointer;transition:opacity .15s var(--ease)}
+.btn{background:var(--accent);color:var(--on-accent);border:none;padding:10px 20px;border-radius:3px;
+  font-size:14px;font-weight:500;cursor:pointer;transition:opacity .15s var(--ease)}
 .btn:hover:not(:disabled){opacity:.88}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 .btn.ghost{background:none;border:1px solid var(--rule-strong);color:var(--ink-2)}
 .btn.ghost:hover:not(:disabled){border-color:var(--ink-3);color:var(--ink)}
-.btn.sm{padding:6px 12px;font-size:12px}
+.btn.sm{padding:7px 14px;font-size:13px}
 /* Reserved for the two actions that bill or destroy: Deploy and Destroy. */
 .btn.danger{background:var(--bad);color:var(--on-bad)}
 /* Phase 7 step timeline: who decided each step, and its live backend log. */
-.who{font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:400;padding:1px 7px;margin-left:8px;
+.who{font-family:"IBM Plex Mono",monospace;font-size:12.5px;font-weight:400;padding:1px 7px;margin-left:8px;
   border:1px solid var(--rule-strong);border-radius:3px;color:var(--ink-2);white-space:nowrap}
 .who.phase4_advice{border-color:var(--warn);color:var(--warn)}
 .who.approval{border-color:var(--accent);color:var(--accent-ink)}
@@ -125,15 +139,15 @@ main{max-width:1180px;margin:0 auto;padding:28px 24px 80px}
 .check.pending .mark{background:var(--rule-strong)}
 .check.run .mark{background:var(--accent);animation:pulse 1s var(--ease) infinite}
 .steplog{margin-top:8px}
-.steplog summary{cursor:pointer;font-size:12px;color:var(--ink-2)}
-.steplog pre{max-height:260px;overflow:auto;background:var(--surface-2);padding:10px 12px;font-size:12px;
-  line-height:1.5;margin:6px 0 0;white-space:pre-wrap;word-break:break-word}
-.chk{display:flex;gap:8px;align-items:flex-start;font-size:13px;margin-bottom:12px;max-width:82ch}
+.steplog summary{cursor:pointer;font-size:13px;color:var(--ink-2)}
+.steplog pre{max-height:260px;overflow:auto;background:var(--surface-2);padding:12px 14px;font-size:12.5px;
+  line-height:1.5;margin:6px 0 0;white-space:pre-wrap;word-break:break-word;border-radius:3px}
+.chk{display:flex;gap:10px;align-items:flex-start;font-size:14px;margin-bottom:12px;max-width:82ch}
 .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 /* ---------- status ---------- */
-.status{display:flex;align-items:center;gap:9px;padding:11px 14px;border-radius:3px;
-  border:1px solid var(--rule);background:var(--surface-2);font-size:13px}
+.status{display:flex;align-items:center;gap:9px;padding:12px 14px;border-radius:3px;
+  border:1px solid var(--rule);background:var(--surface-2);font-size:14px}
 .status .led{width:9px;height:9px;border-radius:50%;background:var(--ink-3);flex:none}
 .status.ok{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
 .status.ok .led{background:var(--ok)}
@@ -143,111 +157,115 @@ main{max-width:1180px;margin:0 auto;padding:28px 24px 80px}
 
 .checks{display:flex;flex-direction:column;gap:1px;background:var(--rule);
   border:1px solid var(--rule);border-radius:3px;overflow:hidden}
-.check{background:var(--surface);padding:11px 14px;display:grid;grid-template-columns:auto 1fr;
-  gap:11px;align-items:start}
-.check .mark{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;
-  font-size:10px;font-weight:700;color:#fff;margin-top:2px;flex:none}
+.check{background:var(--surface);padding:12px 16px;display:grid;grid-template-columns:auto 1fr;
+  gap:12px;align-items:start}
+.check .mark{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;
+  font-size:11px;font-weight:700;color:#fff;margin-top:2px;flex:none}
 .check.pass .mark{background:var(--ok)}
 .check.warn .mark{background:var(--warn)}
 .check.fail .mark{background:var(--bad)}
 /* An override is the rules engine working, not a failure -- it reads as the accent. */
 .check.over .mark{background:var(--accent)}
 .check.over .remedy{border-left-color:var(--accent);background:var(--accent-soft)}
-.check .name{font-size:12.5px;font-weight:600}
-.check .detail{font-size:12px;color:var(--ink-2);margin-top:2px}
-.check .remedy{font-size:12px;color:var(--ink-2);margin-top:6px;padding:8px 10px;
-  background:var(--surface-2);border-left:2px solid var(--rule-strong);border-radius:0 2px 2px 0}
-.check.fail .remedy{border-left-color:var(--bad)}
-.check.warn .remedy{border-left-color:var(--warn)}
+.check .name{font-size:14px;font-weight:600}
+.check .detail{font-size:13px;color:var(--ink-2);margin-top:3px}
+.check .remedy{font-size:13px;color:var(--ink-2);margin-top:8px;padding:10px 12px;
+  background:var(--surface-2);border:1px solid var(--rule);border-radius:3px}
+.check.fail .remedy{background:var(--bad-soft);border-color:transparent;color:var(--bad)}
+.check.warn .remedy{background:var(--warn-soft);border-color:transparent;color:var(--warn)}
 
 .facts{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--rule);
-  border:1px solid var(--rule);border-radius:3px;overflow:hidden;margin-top:14px}
-.facts div{background:var(--surface);padding:10px 13px}
-.facts .k{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.1em;
-  text-transform:uppercase;color:var(--ink-3)}
+  border:1px solid var(--rule);border-radius:3px;overflow:hidden;margin-top:16px}
+.facts div{background:var(--surface);padding:12px 14px}
+.facts .k{font-size:12.5px;color:var(--ink-3)}
 /* Wrap between tokens, never inside one -- "db.t3.medium" split across lines
    reads as a different instance class. */
-.facts .v{font-family:"IBM Plex Mono",monospace;font-size:12.5px;margin-top:3px;
+.facts .v{font-family:"IBM Plex Mono",monospace;font-size:13.5px;margin-top:4px;
   overflow-wrap:anywhere;word-break:normal}
 #targetSpec .facts{grid-template-columns:repeat(4,1fr)}
 @media(max-width:760px){#targetSpec .facts{grid-template-columns:repeat(2,1fr)}}
+/* One column on a phone: two squeezes NOARCHIVELOG into NOARCHIVELO / G. */
+@media(max-width:600px){.facts,#targetSpec .facts{grid-template-columns:1fr}}
 
-.netreq{display:flex;flex-direction:column;gap:12px}
-.netreq div{padding-left:13px;border-left:2px solid var(--accent)}
-.netreq .t{font-size:12.5px;font-weight:600}
-.netreq .d{font-size:12px;color:var(--ink-2);margin-top:2px}
+.netreq{display:flex;flex-direction:column;gap:14px}
+.netreq>div{padding-left:18px;position:relative}
+.netreq>div::before{content:"";position:absolute;left:0;top:7px;width:7px;height:7px;border-radius:50%;
+  background:var(--accent)}
+.netreq .t{font-size:14px;font-weight:600}
+.netreq .d{font-size:13px;color:var(--ink-2);margin-top:3px;max-width:78ch}
 
 /* ---------- live probe / rule ticker ---------- */
 .ticker{display:flex;flex-direction:column;gap:1px;background:var(--rule);
   border:1px solid var(--rule);border-radius:3px;overflow:hidden;max-height:340px;overflow-y:auto}
-.tick{background:var(--surface);padding:9px 13px;display:grid;
-  grid-template-columns:18px 1fr auto;gap:11px;align-items:center;font-size:12.5px}
+.tick{background:var(--surface);padding:10px 14px;display:grid;
+  grid-template-columns:18px 1fr auto;gap:12px;align-items:center;font-size:13.5px}
 .tick .st{width:8px;height:8px;border-radius:50%;background:var(--rule-strong);justify-self:center}
 .tick.run .st{background:var(--accent);animation:pulse 1s var(--ease) infinite}
 .tick.done .st{background:var(--ok)}
 .tick.err .st{background:var(--bad)}
-.tick .nm{font-family:"IBM Plex Mono",monospace}
-.tick .meta{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-3)}
+.tick .nm{font-family:"IBM Plex Mono",monospace;font-size:13px}
+.tick .meta{font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--ink-3)}
 .tick.run .nm{color:var(--accent-ink);font-weight:500}
 
 /* ---------- summary tiles ---------- */
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule);
   border:1px solid var(--rule);border-radius:3px;overflow:hidden}
 @media(max-width:860px){.tiles{grid-template-columns:repeat(2,1fr)}}
-.tile{background:var(--surface);padding:15px 16px}
-.tile .k{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.1em;
-  text-transform:uppercase;color:var(--ink-3)}
-.tile .v{font-family:Archivo,sans-serif;font-size:25px;font-weight:700;letter-spacing:-.02em;
-  font-variant-numeric:tabular-nums;margin-top:4px}
+.tile{background:var(--surface);padding:16px 18px}
+.tile .k{font-size:13px;font-weight:500;color:var(--ink-2)}
+.tile .v{font-family:Archivo,sans-serif;font-size:28px;font-weight:700;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;margin-top:4px;line-height:1.15}
 .tile .v small{font-size:13px;font-weight:500;color:var(--ink-3);margin-left:2px}
-.tile .h{font-size:11.5px;color:var(--ink-2);margin-top:3px}
+.tile .h{font-size:12.5px;color:var(--ink-3);margin-top:4px}
 
 /* ---------- accordion ---------- */
 .acc{display:flex;flex-direction:column;gap:1px;background:var(--rule);
   border:1px solid var(--rule);border-radius:3px;overflow:hidden}
 details.item{background:var(--surface)}
-details.item>summary{padding:12px 15px;cursor:pointer;display:grid;
+details.item>summary{padding:13px 16px;cursor:pointer;display:grid;
   grid-template-columns:auto 1fr auto;gap:12px;align-items:center;list-style:none}
+details.item>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 details.item>summary::-webkit-details-marker{display:none}
 details.item>summary::before{content:"›";font-family:"IBM Plex Mono",monospace;color:var(--ink-3);
   transition:transform .25s var(--ease);display:inline-block;font-size:15px}
 details.item[open]>summary::before{transform:rotate(90deg)}
 details.item>summary:hover{background:var(--surface-2)}
-.item .title{font-size:13px;font-weight:500}
-.item .title .sub{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-3);
+.item .title{font-size:14px;font-weight:500;min-width:0}
+.item .title .sub{font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--ink-3);
   margin-left:8px;font-weight:400}
-.item .count{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-2);
-  background:var(--surface-2);border:1px solid var(--rule);padding:1px 8px;border-radius:2px}
-.item .body{padding:0 15px 15px;border-top:1px solid var(--rule)}
-.item .body p.why{font-size:12.5px;color:var(--ink-2);margin:12px 0}
+.item .count{font-family:"IBM Plex Mono",monospace;font-size:13.5px;color:var(--ink-2);
+  background:var(--surface-2);border:1px solid var(--rule);padding:2px 9px;border-radius:2px;
+  white-space:nowrap}
+.item .body{padding:0 16px 16px;border-top:1px solid var(--rule)}
+.item .body p.why{font-size:13.5px;color:var(--ink-2);margin:12px 0;max-width:80ch;line-height:1.55}
 
 .tblwrap{overflow-x:auto;border:1px solid var(--rule);border-radius:3px;margin-top:12px}
-table{border-collapse:collapse;width:100%;font-size:12px;min-width:520px}
-th{text-align:left;font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.08em;
-  text-transform:uppercase;color:var(--ink-3);font-weight:500;padding:8px 11px;
+table{border-collapse:collapse;width:100%;font-size:13px;min-width:520px}
+th{text-align:left;font-size:13.5px;color:var(--ink-2);font-weight:600;padding:9px 12px;
   border-bottom:1px solid var(--rule-strong);white-space:nowrap;background:var(--surface-2)}
-td{padding:7px 11px;border-bottom:1px solid var(--rule);font-family:"IBM Plex Mono",monospace;
-  font-size:11.5px;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis}
+td{padding:9px 12px;border-bottom:1px solid var(--rule);font-family:"IBM Plex Mono",monospace;
+  font-size:12.5px;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis}
 tr:last-child td{border-bottom:none}
 
-.sev{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.05em;font-weight:500;
-  display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.sev{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.03em;font-weight:500;
+  display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .sev::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
 .sev.CRITICAL{color:var(--crit)}.sev.HIGH{color:var(--high)}.sev.MEDIUM{color:var(--med)}
 .sev.LOW{color:var(--low)}.sev.INFO{color:var(--info)}
 
-.bars{display:flex;flex-direction:column;gap:11px}
-.bar{display:grid;grid-template-columns:132px 1fr 44px;gap:13px;align-items:center;font-size:12.5px}
-.bar .track{height:18px;background:var(--surface-2);border-radius:2px;overflow:hidden}
+.bars{display:flex;flex-direction:column;gap:12px}
+.bar{display:grid;grid-template-columns:140px 1fr 44px;gap:14px;align-items:center;font-size:13.5px}
+.bar .track{height:16px;background:var(--surface-2);border-radius:2px;overflow:hidden}
 .bar .fill{height:100%;background:var(--accent);border-radius:0 2px 2px 0;
   transition:width .7s var(--ease)}
 .bar .val{font-family:"IBM Plex Mono",monospace;font-weight:500;font-variant-numeric:tabular-nums;
   text-align:right}
 
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;align-items:center}
-.chip{font-family:"IBM Plex Mono",monospace;font-size:11.5px;padding:5px 11px;
+.chip{font-family:"IBM Plex Mono",monospace;font-size:12.5px;padding:6px 12px;
   border:1px solid var(--rule-strong);background:var(--surface);color:var(--ink-2);
   border-radius:2px;cursor:pointer;transition:.13s var(--ease)}
+.chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .chip:hover{border-color:var(--ink-3);color:var(--ink)}
 .chip[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
 
@@ -261,17 +279,18 @@ tr:last-child td{border-bottom:none}
 .toggle input:checked + .slide::before{transform:translateX(15px)}
 .toggle input:focus-visible + .slide{outline:2px solid var(--accent);outline-offset:2px}
 
-.note{padding:11px 14px;border-radius:3px;font-size:12.5px;margin-bottom:14px}
-.note.info{background:var(--accent-soft);color:var(--accent-ink);border-left:2px solid var(--accent)}
-.note.bad{background:var(--bad-soft);color:var(--bad);border-left:2px solid var(--bad)}
-.note.warn{background:var(--warn-soft);color:var(--warn);border-left:2px solid var(--warn)}
-.empty{padding:34px;text-align:center;color:var(--ink-3);font-size:13px}
+.note{padding:12px 16px;border-radius:3px;font-size:13.5px;line-height:1.5;margin-bottom:14px;
+  border:1px solid transparent}
+.note.info{background:var(--accent-soft);color:var(--accent-ink)}
+.note.bad{background:var(--bad-soft);color:var(--bad)}
+.note.warn{background:var(--warn-soft);color:var(--warn)}
+.empty{padding:40px 24px;text-align:center;color:var(--ink-3);font-size:14px}
 /* Sits above the content: a long findings list should not require scrolling to
    the bottom to move on. */
 .pagenav{display:flex;justify-content:space-between;align-items:center;gap:14px;
   margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid var(--rule)}
 .pagenav:empty{display:none}
-.mt{margin-top:20px}.mt-s{margin-top:12px}
+.mt{margin-top:24px}.mt-s{margin-top:12px}
 .spread{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
@@ -283,6 +302,8 @@ tr:last-child td{border-bottom:none}
     <h1>DBShift</h1>
     <span class="tag">Oracle → RDS migration console</span>
     <div class="right">
+      <a class="linkbtn" href="/api/report" target="_blank" rel="noopener" id="navReport"
+         title="Phase 10 · Migration assessment report: SCT-style conversion assessment and DMS pre-migration assessment, built from this run's records">Report ↗</a>
       <button class="linkbtn" id="navCatalogue" aria-pressed="false">Rules &amp; probes</button>
     </div>
   </div>
@@ -343,17 +364,17 @@ tr:last-child td{border-bottom:none}
     </div>
     <div class="spread" style="margin-bottom:16px">
       <button class="btn" id="btnDiscover">Run discovery</button>
-      <span class="mono" id="discMeta" style="font-size:12px;color:var(--ink-3)"></span>
+      <span class="mono" id="discMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
     </div>
     <div id="discLive" style="display:none"><div class="ticker" id="probeTicker"></div></div>
     <div id="discResult" style="display:none">
       <div class="eyebrow mt">At a glance</div>
       <div class="tiles" id="discTiles"></div>
       <div class="spread mt"><div class="eyebrow" style="margin:0">Everything collected</div>
-        <span class="mono" style="font-size:11.5px;color:var(--ink-3)">click any dataset to open it</span></div>
+        <span class="mono" style="font-size:12.5px;color:var(--ink-3)">click any dataset to open it</span></div>
       <div class="acc mt-s" id="discAcc"></div>
       <div class="spread mt" id="toAssess" style="display:none">
-        <span style="font-size:12.5px;color:var(--ink-2)">Discovery complete. The assessment
+        <span style="font-size:13.5px;color:var(--ink-2)">Discovery complete. The assessment
           runs its rules against exactly this data.</span>
         <button class="btn" onclick="show('assess')">Continue to assessment →</button>
       </div>
@@ -371,7 +392,7 @@ tr:last-child td{border-bottom:none}
     </div>
     <div class="spread" style="margin-bottom:16px">
       <button class="btn" id="btnAssess">Run assessment</button>
-      <span class="mono" id="assessMeta" style="font-size:12px;color:var(--ink-3)"></span>
+      <span class="mono" id="assessMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
     </div>
     <div id="assessLive" style="display:none"><div class="ticker" id="ruleTicker"></div></div>
     <div id="assessResult" style="display:none">
@@ -389,7 +410,7 @@ tr:last-child td{border-bottom:none}
       <div class="mt"><div class="eyebrow">Issues</div>
         <div class="chips" id="sevChips"></div>
         <div class="acc" id="issueAcc"></div>
-        <div class="mono mt-s" id="issueCount" style="font-size:11.5px;color:var(--ink-3)"></div>
+        <div class="mono mt-s" id="issueCount" style="font-size:12.5px;color:var(--ink-3)"></div>
       </div>
     </div>
     <div id="assessEmpty" class="panel"><div class="empty">Run discovery first, then assess.</div></div>
@@ -409,7 +430,7 @@ tr:last-child td{border-bottom:none}
       <div class="spread">
         <div>
           <div class="eyebrow" style="margin:0">Measured utilization — optional</div>
-          <p style="font-size:12.5px;color:var(--ink-2);margin-top:6px;max-width:74ch">
+          <p style="font-size:13.5px;color:var(--ink-2);margin-top:6px;max-width:74ch">
             A catalogue scan cannot produce utilization percentiles — there is no history to take
             a percentile of. Without a feed this sizing is a <b>capacity floor</b>, not a
             load-derived recommendation. An AWS OLA / DB OLA, Migration Evaluator or monitoring
@@ -427,7 +448,7 @@ tr:last-child td{border-bottom:none}
 
     <div class="spread" style="margin-bottom:16px">
       <button class="btn" id="btnSize">Decide target</button>
-      <span class="mono" id="sizeMeta" style="font-size:12px;color:var(--ink-3)"></span>
+      <span class="mono" id="sizeMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
     </div>
     <div id="sizeLive" style="display:none"><div class="ticker" id="sizeTicker"></div></div>
     <div id="sizeResult" style="display:none">
@@ -442,7 +463,7 @@ tr:last-child td{border-bottom:none}
         </div>
         <div class="panel pad">
           <div class="eyebrow">Detected, but not forcing</div>
-          <p style="font-size:12.5px;color:var(--ink-2);margin-bottom:12px">A feature showing as
+          <p style="font-size:13.5px;color:var(--ink-2);margin-bottom:12px">A feature showing as
             used is not a feature you owe a licence for.</p>
           <div class="acc" id="dismissedList"></div>
         </div>
@@ -468,7 +489,7 @@ tr:last-child td{border-bottom:none}
         <div class="eyebrow">Fix generation</div>
         <div class="status" id="genStatus"><span class="led"></span>
           <span>Templates + static stand-ins — <b>not model output</b></span></div>
-        <p style="font-size:12.5px;color:var(--ink-2);margin-top:10px">
+        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
           Findings with exactly one correct remedy are templated, where a model would add cost and
           risk but no information. Where a model would answer, Bedrock <b>InvokeModel</b> is blocked
           on this account, so hand-written static output stands in. Every such answer is marked
@@ -490,9 +511,9 @@ tr:last-child td{border-bottom:none}
                  spellcheck="false"></div>
         <div class="spread">
           <button class="btn ghost sm" id="btnRehearsal">Register</button>
-          <span class="mono" id="rehearsalState" style="font-size:11.5px;color:var(--ink-3)">not configured</span>
+          <span class="mono" id="rehearsalState" style="font-size:12.5px;color:var(--ink-3)">not configured</span>
         </div>
-        <p style="font-size:12.5px;color:var(--ink-2);margin-top:10px">
+        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
           Every fix is applied <b>and rolled back</b> here before production. Without it no fix can be
           proven safe, so none may be applied. Build it with
           <span class="mono">scripts/oracle-source/06_create_rehearsal.sql</span>. The password is held
@@ -502,7 +523,7 @@ tr:last-child td{border-bottom:none}
 
     <div class="spread" style="margin-bottom:16px">
       <button class="btn" id="btnRemediate">Plan remediations</button>
-      <span class="mono" id="remMeta" style="font-size:12px;color:var(--ink-3)"></span>
+      <span class="mono" id="remMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
     </div>
     <div id="remLive" style="display:none"><div class="ticker" id="remTicker"></div></div>
     <div id="remResult" style="display:none">
@@ -513,9 +534,70 @@ tr:last-child td{border-bottom:none}
       <div class="mt"><div class="eyebrow">Routed elsewhere</div>
         <div class="chips" id="remChips"></div>
         <div class="acc" id="routedList"></div>
-        <div class="mono mt-s" id="routedCount" style="font-size:11.5px;color:var(--ink-3)"></div></div>
+        <div class="mono mt-s" id="routedCount" style="font-size:12.5px;color:var(--ink-3)"></div></div>
     </div>
     <div id="remEmpty" class="panel"><div class="empty">Run the assessment first, then plan remediations.</div></div>
+  </section>
+
+  <!-- ============ 5b. CONVERT PL/SQL ============ -->
+  <section class="view" id="view-convert">
+    <div class="head">
+      <h2>Convert stored code to PostgreSQL</h2>
+      <p>For the day the target is not Oracle. Every procedure, function, package, trigger and
+         type is rewritten as PL/pgSQL — by <b>rules first</b>, a model only where judgement is
+         needed, and a person where PostgreSQL has no equivalent. Each conversion passes five gates,
+         including a <b>real compile on PostgreSQL</b> inside a transaction that is rolled back.
+         <b>Nothing is applied anywhere.</b> This is the part AWS's own migration accelerator
+         leaves as manual work.</p>
+    </div>
+
+    <div class="split" style="margin-bottom:16px">
+      <div class="panel pad">
+        <div class="eyebrow">Where a conversion comes from</div>
+        <div class="status" id="convGenStatus"><span class="led"></span>
+          <span>Rules, then static stand-ins — <b>not model output</b></span></div>
+        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
+          A construct with exactly one correct translation is rewritten by a rule and the reason is
+          recorded. Anything needing judgement goes to the model tier — and while Bedrock
+          <b>InvokeModel</b> is blocked on this account, only a labelled hand-written stand-in can
+          answer there. Anything PostgreSQL cannot express goes to a person. Whatever produced the
+          text, the same five gates decide whether it is ready.</p>
+      </div>
+      <div class="panel pad">
+        <div class="eyebrow">PostgreSQL compile target</div>
+        <div class="field" style="margin-bottom:6px">
+          <input id="pgDsn" placeholder="host:5432/dbname" value="localhost:5432/dbshift"
+                 spellcheck="false"></div>
+        <div class="split2" style="margin-bottom:8px">
+          <div class="field"><input id="pgUser" placeholder="user" value="dbshift"
+                 spellcheck="false" autocomplete="off"></div>
+          <div class="field"><input id="pgPassword" type="password" placeholder="password"
+                 autocomplete="off"></div>
+        </div>
+        <div class="spread">
+          <button class="btn ghost sm" id="btnPgTarget">Register</button>
+          <span class="mono" id="pgState" style="font-size:12.5px;color:var(--ink-3)">not configured</span>
+        </div>
+        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
+          Every converted object is created here and <b>rolled back</b>, so this database stays
+          empty. Without it nothing is proven to compile, so nothing is ready. Start one with
+          <span class="mono">scripts\postgres-target\run_pg.ps1</span>. The password is held in
+          server memory only.</p>
+      </div>
+    </div>
+
+    <div class="spread" style="margin-bottom:16px">
+      <button class="btn" id="btnConvert">Convert stored code</button>
+      <span class="mono" id="convMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
+    </div>
+    <div id="convLive" style="display:none"><div class="ticker" id="convTicker"></div></div>
+    <div id="convResult" style="display:none">
+      <div class="tiles mt" id="convTiles"></div>
+      <div id="convNotes" class="mt-s"></div>
+      <div class="mt"><div class="eyebrow">Every object, in the order PostgreSQL needs them</div>
+        <div class="acc" id="convList"></div></div>
+    </div>
+    <div id="convEmpty" class="panel"><div class="empty">Run discovery first, then convert the stored code.</div></div>
   </section>
 
   <!-- ============ 6. GATE ============ -->
@@ -530,7 +612,7 @@ tr:last-child td{border-bottom:none}
 
     <div class="spread" style="margin-bottom:16px">
       <button class="btn" id="btnGate">Evaluate gate</button>
-      <span class="mono" id="gateMeta" style="font-size:12px;color:var(--ink-3)"></span>
+      <span class="mono" id="gateMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
     </div>
 
     <div id="gateResult" style="display:none">
@@ -561,7 +643,7 @@ tr:last-child td{border-bottom:none}
 
     <div class="spread" style="margin-bottom:16px">
       <button class="btn" id="btnProvision">Render and check</button>
-      <span class="mono" id="provMeta" style="font-size:12px;color:var(--ink-3)"></span>
+      <span class="mono" id="provMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
     </div>
     <div class="ticker" id="provLive"></div>
 
@@ -575,7 +657,7 @@ tr:last-child td{border-bottom:none}
         <div class="tblwrap"><table>
           <thead><tr><th>Property</th><th>Value</th><th>Source</th><th>Why</th></tr></thead>
           <tbody id="provTable"></tbody></table></div>
-        <p class="mono mt-s" id="provHandoffs" style="font-size:12px;color:var(--ink-3)"></p></div>
+        <p class="mono mt-s" id="provHandoffs" style="font-size:12.5px;color:var(--ink-3)"></p></div>
 
       <div class="panel pad mt" id="statusPanel">
         <div class="spread"><div class="eyebrow" style="margin:0">Target — live from CloudFormation</div>
@@ -611,7 +693,7 @@ tr:last-child td{border-bottom:none}
     <div class="panel pad mt" id="killPanel">
       <div class="spread"><div class="eyebrow" style="margin:0">Kill switch</div>
         <button class="btn ghost sm" id="btnKillScan">Check what is billing</button></div>
-      <p style="font-size:12.5px;color:var(--ink-2);margin-top:8px;max-width:78ch">Acts only on
+      <p style="font-size:13.5px;color:var(--ink-2);margin-top:8px;max-width:78ch">Acts only on
         resources named <span class="mono">dbshift</span> or tagged
         <span class="mono">project=dbshift</span>; anything else is listed and never touched. Destroy
         ends billing: it empties the exchange bucket, then deletes the stack. No final snapshot.</p>
@@ -649,7 +731,7 @@ tr:last-child td{border-bottom:none}
         <div class="field"><label for="mFrom">Start from</label>
           <select id="mFrom"><option value="">the beginning</option></select></div></div>
       <div class="spread"><button class="btn" id="btnMigrate">Run the migration</button>
-        <span class="mono" id="migMeta" style="font-size:12px;color:var(--ink-3)"></span></div>
+        <span class="mono" id="migMeta" style="font-size:12.5px;color:var(--ink-3)"></span></div>
     </div>
 
     <div class="checks mt" id="migSteps"></div>
@@ -670,12 +752,12 @@ tr:last-child td{border-bottom:none}
 
     <div class="panel pad" id="valControls">
       <div class="eyebrow">Before it runs</div>
-      <p id="valEstate" style="font-size:12.5px;color:var(--ink-2);margin-bottom:10px"></p>
+      <p id="valEstate" style="font-size:13.5px;color:var(--ink-2);margin-bottom:10px"></p>
       <label class="chk"><input type="checkbox" id="vChecksum" checked>
         <span><b>Compare every row's values (level 4).</b> Reads all rows on both databases and
         compares checksums, so equal counts cannot hide changed data. Slower on large tables.</span></label>
       <div class="spread"><button class="btn" id="btnValidate">Run validation</button>
-        <span class="mono" id="valMeta" style="font-size:12px;color:var(--ink-3)"></span></div>
+        <span class="mono" id="valMeta" style="font-size:12.5px;color:var(--ink-3)"></span></div>
     </div>
 
     <div id="valLevels" class="mt"></div>
@@ -696,14 +778,14 @@ tr:last-child td{border-bottom:none}
     <div class="panel pad">
       <div class="spread"><div class="eyebrow" style="margin:0">Readiness certificate</div>
         <button class="btn ghost sm" id="btnCutRefresh">Rebuild</button></div>
-      <p id="cutEstate" style="font-size:12.5px;color:var(--ink-2);margin:8px 0 0"></p>
+      <p id="cutEstate" style="font-size:13.5px;color:var(--ink-2);margin:8px 0 0"></p>
     </div>
 
     <div class="checks mt" id="cutReqs"></div>
 
     <div class="panel pad mt" id="cutApprovePanel" style="display:none">
       <div class="eyebrow">Approval</div>
-      <p style="font-size:12.5px;color:var(--ink-2);margin-bottom:10px">
+      <p style="font-size:13.5px;color:var(--ink-2);margin-bottom:10px">
         The gate blocks cutover on this estate. A person may accept those blockers, and the reason is
         recorded against the AWS identity making the call — <b>the approver is never typed into this
         form</b>. An approval names one collector run; it does not carry to another.</p>
@@ -711,23 +793,55 @@ tr:last-child td{border-bottom:none}
         <textarea id="cutReason" spellcheck="false"
           placeholder="e.g. full-outage window agreed with the application owner for Saturday 02:00; no CDC required"></textarea></div>
       <div class="spread"><button class="btn" id="btnCutApprove">Record approval</button>
-        <span class="mono" id="cutApproveMeta" style="font-size:12px;color:var(--ink-3)"></span></div>
+        <span class="mono" id="cutApproveMeta" style="font-size:12.5px;color:var(--ink-3)"></span></div>
     </div>
 
     <div class="panel pad mt" id="cutExecPanel" style="display:none">
       <div class="eyebrow">Run the cutover steps</div>
-      <p style="font-size:12.5px;color:var(--ink-2);margin-bottom:10px">
+      <p style="font-size:13.5px;color:var(--ink-2);margin-bottom:10px">
         Runs only the target-side steps listed above. It does <b>not</b> repoint any application, and
         the source is left untouched and authoritative.</p>
       <div class="field"><label for="cutConfirm">Type the AWS account id to confirm</label>
         <input id="cutConfirm" class="mono" placeholder="000000000000"></div>
       <div class="spread"><button class="btn" id="btnCutExecute">Run cutover steps</button>
-        <span class="mono" id="cutExecMeta" style="font-size:12px;color:var(--ink-3)"></span></div>
+        <span class="mono" id="cutExecMeta" style="font-size:12.5px;color:var(--ink-3)"></span></div>
       <div class="checks mt-s" id="cutExecLog"></div>
     </div>
 
     <div id="cutEmpty" class="panel mt"><div class="empty">Validate first. The certificate binds to the
       collector run on the target's own tag and requires a clean validation of that run.</div></div>
+  </section>
+
+  <!-- ============ 10. REPORT ============ -->
+  <section class="view" id="view-report">
+    <div class="head">
+      <h2>Migration assessment report</h2>
+      <p>The deliverable. One document, built from this run's records and nothing else: the
+         <b>schema conversion assessment</b> AWS SCT would produce — every action item graded
+         simple, medium, complex or decision — and the <b>DMS pre-migration assessment</b> that
+         says whether full load and change data capture can run. Rebuilt on every request, so it
+         can never disagree with the screens before it.</p>
+    </div>
+
+    <div class="spread" style="margin-bottom:16px">
+      <button class="btn" id="btnReport">Build report</button>
+      <span class="mono" id="reportMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
+    </div>
+
+    <div id="reportResult" style="display:none">
+      <div class="tiles" id="reportTiles"></div>
+      <div id="reportNotes" class="mt-s"></div>
+      <div class="panel mt" style="overflow:hidden">
+        <div class="spread pad" style="border-bottom:1px solid var(--rule)">
+          <div class="eyebrow" style="margin:0">The report, as a client receives it</div>
+          <a class="btn ghost sm" id="reportOpen" href="/api/report" target="_blank" rel="noopener">Open in a new tab ↗</a>
+        </div>
+        <iframe id="reportFrame" title="Migration assessment report"
+                style="display:block;width:100%;height:78vh;border:0;background:#fff"></iframe>
+      </div>
+    </div>
+    <div id="reportEmpty" class="panel"><div class="empty">Run the assessment first. The report is
+      built from its findings, and grows as each later phase leaves a record.</div></div>
   </section>
 
   <!-- ============ CATALOGUE ============ -->
@@ -813,18 +927,20 @@ const STAGES = [
   {id:'assess',    label:'Assess',         n:2},
   {id:'target',    label:'Size & Edition', n:3},
   {id:'remediate', label:'Remediate',      n:4},
+  {id:'convert',   label:'Convert PL/SQL', n:'4b'},
   {id:'gate',      label:'Blocker gate',   n:5},
   {id:'provision', label:'Provision',      n:6},
   {id:'migrate',   label:'Migrate',        n:7},
   {id:'validate',  label:'Validate',       n:8},
   {id:'cutover',   label:'Cutover',        n:9},
+  {id:'report',    label:'Report',         n:10},
 ];
 const IDLE_STAGES = {connect:'active', discover:'idle', assess:'idle', target:'idle',
-                     remediate:'idle', gate:'idle', provision:'idle', migrate:'idle', validate:'idle',
-                     cutover:'idle'};
+                     remediate:'idle', convert:'idle', gate:'idle', provision:'idle', migrate:'idle',
+                     validate:'idle', cutover:'idle', report:'idle'};
 let current = 'connect';
 let stageState = {...IDLE_STAGES};
-let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:'', migrate:'', validate:'', cutover:''};
+let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', convert:'', gate:'', provision:'', migrate:'', validate:'', cutover:'', report:''};
 let ISSUES = [], sevFilter = new Set(), catFilter = new Set();
 
 function renderRail(){
@@ -833,15 +949,20 @@ function renderRail(){
     const cls = [st === 'done' ? 'done' : '', st === 'active' || st === 'busy' ? 'active' : '',
                  st === 'busy' ? 'busy' : ''].filter(Boolean).join(' ');
     const mark = st === 'done' ? '✓' : (s.n === null ? '·' : s.n);
-    return `<button class="stage ${cls}" data-stage="${s.id}">
+    // The dot carries the phase number; the label carries the name. Both on
+    // the label ran neighbours together ("Phase 1 · Discover Phase 2 · Assess").
+    return `<button class="stage ${cls}" data-stage="${s.id}" title="${s.n === null ? '' : 'Phase ' + s.n + ' · '}${esc(s.label)}">
       <div class="dot">${mark}</div>
-      <div class="label">${s.n === null ? '' : 'Phase ' + s.n + ' · '}${s.label}</div>
+      <div class="label">${esc(s.label)}</div>
       <div class="sub">${esc(stageSub[s.id])}</div></button>`;
   }).join('');
   document.querySelectorAll('.stage').forEach(el => el.onclick = () => {
     const id = el.dataset.stage;
     if (stageState[id] !== 'idle') show(id);
   });
+  // On a phone the rail scrolls; keep the current stage in view.
+  const cur = document.querySelector(`.stage[data-stage="${current}"]`);
+  if (cur && window.innerWidth <= 860) cur.scrollIntoView({block:'nearest', inline:'center'});
 }
 
 function renderPageNav(){
@@ -857,7 +978,7 @@ function renderPageNav(){
     ${next ? `<button class="btn sm" ${nextLocked ? 'disabled' : ''}
                 onclick="show('${next.id}')"
                 title="${nextLocked ? 'Finish this stage first' : ''}">${esc(nextLabel)} &rarr;</button>`
-           : '<span class="mono" style="font-size:11.5px;color:var(--ink-3)">Phase 10 (Report) is not built</span>'}`;
+           : '<span class="mono" style="font-size:12.5px;color:var(--ink-3)">End of the pipeline</span>'}`;
 }
 function show(id){
   const previous = current;
@@ -911,16 +1032,18 @@ async function loadState(){
   if (s.has_assessment) {
     setStage('assess', 'done', 'restored');
     // Everything that only needs an assessment is unlocked, not just the next
-    // one along. Target needs the collector run; Remediate and Gate need the
-    // assessment. All three are satisfied here.
-    for (const id of ['target', 'remediate', 'gate']) {
+    // one along. Target needs the collector run; Remediate, Gate and Report
+    // need the assessment. All of them are satisfied here.
+    for (const id of ['target', 'remediate', 'convert', 'gate', 'report']) {
       if (stageState[id] === 'idle') setStage(id, 'active');
     }
     $('#btnRemediate').disabled = false;
+    $('#btnConvert').disabled = false;
     $('#btnGate').disabled = false;
   }
   if (s.has_sizing) setStage('target', 'done', 'restored');
   if (s.has_remediation) setStage('remediate', 'done', 'restored');
+  if (s.has_conversion) setStage('convert', 'done', 'restored');
   show(current);
 
   if (s.has_discovery) {
@@ -939,6 +1062,15 @@ async function loadState(){
   if (s.has_remediation) {
     $('#remEmpty').style.display = 'none';
     await renderRemediation();
+  }
+  if (s.has_conversion) {
+    $('#convEmpty').style.display = 'none';
+    await renderConversion();
+  }
+  if (s.pg_dsn) {
+    $('#pgDsn').value = s.pg_dsn;
+    $('#pgState').style.color = 'var(--ok)';
+    $('#pgState').textContent = 'registered: ' + s.pg_dsn;
   }
   if (s.has_gate) await renderGate();
   if (s.has_provision) await renderProvision();
@@ -1025,7 +1157,7 @@ $('#btnDisconnect').onclick = async () => {
   $('#checks').innerHTML = '<div class="empty">Connect to run the preflight checks.</div>';
   $('#btnDiscover').disabled = true;
   stageState = {...IDLE_STAGES};
-  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:'', migrate:'', validate:'', cutover:''};
+  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', convert:'', gate:'', provision:'', migrate:'', validate:'', cutover:'', report:''};
   renderRail();
 };
 
@@ -1146,14 +1278,17 @@ $('#btnAssess').onclick = () => {
       es.close();
       if (last) last.className = 'tick done';
       setStage('assess', 'done', `${d.issues} issues · score ${d.overall}`);
-      // The same three stages the reload path unlocks, for the same reason.
+      // The same stages the reload path unlocks, for the same reason.
       // Enabling only the Run buttons left Remediate and Gate 'idle', and both
       // navigation routes refuse an idle stage -- so the screens had an armed
       // Run button that nothing could reach. Unlock the stage, not just the button.
-      for (const id of ['target', 'remediate', 'gate']) {
+      for (const id of ['target', 'remediate', 'convert', 'gate', 'report']) {
         if (stageState[id] === 'idle') setStage(id, 'active');
       }
       $('#btnRemediate').disabled = false;
+      // Convert was only enabled on the reload path, so after a live assessment
+      // the stage opened with a dead button until the page was refreshed.
+      $('#btnConvert').disabled = false;
       $('#btnGate').disabled = false;
       $('#remEmpty').querySelector('.empty').textContent = 'Plan remediations for these findings.';
       $('#gateEmpty').querySelector('.empty').textContent = 'Evaluate the gate for these findings.';
@@ -1319,10 +1454,10 @@ async function renderSizing(){
   $('#targetSpec').innerHTML = `
     <div style="font-family:Archivo,sans-serif;font-size:25px;font-weight:700;letter-spacing:-.02em">
       ${esc(editionFull)}
-      <span class="mono" style="font-size:12px;font-weight:500;color:var(--accent);
+      <span class="mono" style="font-size:12.5px;font-weight:500;color:var(--accent);
         border:1px solid var(--accent);border-radius:2px;padding:2px 8px;margin-left:6px;
         vertical-align:middle">${esc(d.licence_model)}</span></div>
-    <p style="font-size:12.5px;color:var(--ink-2);margin-top:8px">Proposed by the
+    <p style="font-size:13.5px;color:var(--ink-2);margin-top:8px">Proposed by the
       <b>${esc(p.source)}</b> proposer, then validated.
       ${d.agreed_with_proposal ? 'The rules engine confirmed it unchanged.'
         : 'The rules engine overruled part of the proposal.'}</p>
@@ -1333,14 +1468,14 @@ async function renderSizing(){
          ['Oracle licences', d.licence_model === 'BYOL' ? d.processor_licences + ' processor' : 'included',
           'two vCPU = one processor']]
         .map(([k,v,h]) => `<div><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>
-          <div style="font-size:11.5px;color:var(--ink-2);margin-top:3px">${esc(h)}</div></div>`).join('')}
+          <div style="font-size:13.5px;color:var(--ink-2);margin-top:3px">${esc(h)}</div></div>`).join('')}
     </div>`;
 
   $('#forcedList').innerHTML = (d.forced_by || []).map(x => `
     <details class="item"><summary><span class="title">${esc(x.feature)}</span><span></span>
       <span class="count">${esc(x.evidence)}</span></summary>
       <div class="body"><p class="why">${esc(x.why)}</p>
-        <p class="why mono" style="font-size:11.5px">detected ${esc(x.detected_usages)} ·
+        <p class="why mono" style="font-size:12.5px">detected ${esc(x.detected_usages)} ·
           currently_used=${esc(x.currently_used)}</p></div></details>`).join('')
     || '<div class="empty">Nothing forces an edition — SE2 is viable.</div>';
 
@@ -1551,6 +1686,148 @@ function adviceBlock(e){
       <td style="white-space:pre-wrap;max-width:none">${esc(JSON.stringify(a, null, 2))}</td>
       </tr></tbody></table></div>` : ''}
   </div>`;
+}
+
+/* ---------------- convert PL/SQL (Phase 4b) ---------------- */
+$('#btnConvert').disabled = true;
+let CONV = null;
+
+// Plain words. A client reads "Compiled — needs your approval", not READY_FOR_APPROVAL.
+const CONV_LABEL = {
+  APPROVED:'Approved', READY_FOR_APPROVAL:'Compiled — needs your approval',
+  BLOCKED:'Waiting on PostgreSQL', REJECTED:'Refused by a gate', MODEL_REQUIRED:'Needs the model tier',
+  MANUAL:'Needs a person', EXCLUDED_BROKEN_ON_SOURCE:'Broken on the source',
+  ABSORBED_INTO_BODY:'Folded into its body',
+};
+const CONV_HINT = {
+  APPROVED:'all five gates passed and a person signed it',
+  READY_FOR_APPROVAL:'created and rolled back on PostgreSQL; a person must approve',
+  BLOCKED:'the compile gate needs a PostgreSQL target',
+  REJECTED:'a gate found a problem, shown on the object',
+  MODEL_REQUIRED:'outside the rules; Bedrock is blocked on this account',
+  MANUAL:'PostgreSQL has no equivalent; a decision, not a rewrite',
+  EXCLUDED_BROKEN_ON_SOURCE:'has compile errors today; fix it before migrating it',
+  ABSORBED_INTO_BODY:'a package specification; its body became the functions',
+};
+const CONV_SOURCE = {rule:'deterministic rule', static_fixture:'static fixture — not model output',
+                     bedrock:'Bedrock model'};
+const CONV_ORDER = ['APPROVED','READY_FOR_APPROVAL','BLOCKED','REJECTED','MODEL_REQUIRED','MANUAL',
+                    'EXCLUDED_BROKEN_ON_SOURCE','ABSORBED_INTO_BODY'];
+
+$('#btnPgTarget').onclick = async () => {
+  const el = $('#pgState');
+  const dsn = $('#pgDsn').value.trim();
+  el.style.color = 'var(--ink-3)';
+  el.textContent = dsn ? 'checking…' : '';
+  const r = await fetch('/api/pgtarget', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({dsn, user: $('#pgUser').value.trim(), password: $('#pgPassword').value})});
+  const d = await r.json();
+  if (!r.ok) { el.style.color = 'var(--bad)'; el.textContent = d.detail || 'registration failed'; return; }
+  el.style.color = d.pg_dsn ? 'var(--ok)' : 'var(--ink-3)';
+  el.textContent = d.pg_dsn ? (d.detail || 'registered') : 'not configured';
+};
+
+$('#btnConvert').onclick = () => {
+  const btn = $('#btnConvert');
+  btn.disabled = true;
+  $('#convEmpty').style.display = 'none';
+  $('#convResult').style.display = 'none';
+  $('#convLive').style.display = '';
+  $('#convTicker').innerHTML = '';
+  setStage('convert', 'busy', 'starting');
+  const es = new EventSource('/api/convert');
+  const rows = {};
+  es.onmessage = async ev => {
+    const d = JSON.parse(ev.data);
+    if (d.event === 'converting') {
+      const el = document.createElement('div');
+      el.className = 'tick run';
+      el.innerHTML = `<span class="st"></span>
+        <span class="nm">${esc(d.object_type.toLowerCase())} ${esc(d.object_name)}</span>
+        <span class="meta"></span>`;
+      $('#convTicker').appendChild(el); el.scrollIntoView({block:'nearest'});
+      rows[d.index] = el;
+      setStage('convert', 'busy', `${d.index} of ${d.total}`);
+    } else if (d.event === 'converted') {
+      const el = rows[d.index]; if (!el) return;
+      const bad = d.status === 'REJECTED';
+      el.className = 'tick ' + (bad ? 'err' : 'done');
+      el.querySelector('.meta').textContent = d.status === 'queued_for_compile'
+        ? 'converted · to the compiler' : (CONV_LABEL[d.status] || d.status);
+      if (d.status === 'queued_for_compile') el.querySelector('.nm').style.color = 'var(--accent)';
+    } else if (d.event === 'compiling') {
+      const el = document.createElement('div');
+      el.className = 'tick run';
+      el.innerHTML = `<span class="st"></span><span class="nm">compile</span>
+        <span class="meta">${d.target ? esc(`${d.count} object(s) on ${d.target}, then roll back`)
+                                       : 'no PostgreSQL target — the gate will report blocked'}</span>`;
+      $('#convTicker').appendChild(el); el.scrollIntoView({block:'nearest'});
+      setStage('convert', 'busy', 'compiling');
+    } else if (d.event === 'complete') {
+      es.close();
+      const ready = (d.totals.READY_FOR_APPROVAL || 0) + (d.totals.APPROVED || 0);
+      const n = Object.values(d.totals).reduce((a,b) => a+b, 0);
+      setStage('convert', 'done', `${ready} of ${n} compiled`);
+      $('#convMeta').textContent = `${n} objects · ${ready} compiled and rolled back · nothing applied`;
+      await renderConversion();
+      btn.disabled = false;
+    } else if (d.event === 'error') {
+      es.close(); setStage('convert','active','failed');
+      $('#convLive').insertAdjacentHTML('beforeend', `<div class="note bad mt-s">${esc(d.message)}</div>`);
+      btn.disabled = false;
+    }
+  };
+  es.onerror = () => { es.close(); btn.disabled = false; setStage('convert','active','connection lost'); };
+};
+
+async function renderConversion(){
+  const p = await (await fetch('/api/conversion')).json();
+  CONV = p;
+  $('#convTiles').innerHTML = CONV_ORDER.filter(s => p.totals[s]).map(s => `
+    <div class="tile"><div class="k">${esc(CONV_LABEL[s])}</div>
+      <div class="v">${p.totals[s]}</div><div class="h">${esc(CONV_HINT[s] || '')}</div></div>`).join('');
+
+  const notes = [];
+  if (p.pg_target) notes.push(`<div class="note ${p.pg_target.ok ? 'info' : 'bad'}">Compile target: ${esc(p.pg_target.detail)}</div>`);
+  for (const b of (p.what_is_in_the_way || [])) notes.push(`<div class="note warn">${esc(b)}</div>`);
+  if (p.static_outputs_used === 0 && !p.totals.MODEL_REQUIRED)
+    notes.push(`<div class="note info">Every convertible object on this estate was handled by the deterministic rules. The model tier had nothing to do — that is the result, not a gap.</div>`);
+  $('#convNotes').innerHTML = notes.join('');
+
+  $('#convList').innerHTML = p.entries.map(convCard).join('');
+  $('#convResult').style.display = '';
+}
+
+// One object: what it was, what it became, what changed and why, the DDL, the gates.
+function convCard(e){
+  const conv = e.conversion;
+  const label = CONV_LABEL[e.status] || e.status;
+  const src = e.source ? CONV_SOURCE[e.source] || e.source : (e.route || '').toLowerCase().replace(/_/g,' ');
+  const names = Object.fromEntries((e.constructs_found || []).map(c => [c.id, c]));
+  const nameOf = id => (names[id] || {}).name || (id === 'AUTHID_DEFINER' ? 'definer-rights execution (Oracle default)' : id);
+  const changes = conv ? (conv.constructs || []).map(c => {
+    const ok = c.handling === 'translated';
+    return `<div class="check ${ok ? 'pass' : 'warn'}"><span class="mark">${ok ? '✓' : '!'}</span>
+      <div><div class="name">${esc(nameOf(c.oracle))}${ok && c.postgres ? ' → ' + esc(c.postgres) : ' — kept for a person'}</div>
+      ${c.note ? `<div class="detail">${esc(c.note)}</div>` : ''}</div></div>`;
+  }).join('') : '';
+  const found = (e.constructs_found || []).map(c =>
+    `<span class="chip" style="cursor:default" title="${esc(c.note || '')}">${esc(c.name)} · ${esc(c.tier)}</span>`).join('');
+  return `<details class="item"><summary>
+      <span class="title">${esc(e.owner)}.${esc(e.object_name)}<span class="sub">${esc(e.object_type.toLowerCase())} · ${esc(src)}${conv && conv.creates ? ' · creates ' + esc(conv.creates.join(', ')) : ''}</span></span>
+      <span></span><span class="count">${esc(label)}</span></summary>
+    <div class="body">
+      ${conv && conv.explain ? `<p class="why">${esc(conv.explain)}</p>` : ''}
+      ${!conv && e.reason ? `<p class="why">${esc(e.reason)}</p>` : ''}
+      ${conv && conv.caveat ? `<p class="why"><b>Check this.</b> ${esc(conv.caveat)}</p>` : ''}
+      ${found ? `<div class="eyebrow" style="margin:12px 0 6px">Oracle constructs found</div><div class="chips">${found}</div>` : ''}
+      ${changes ? `<div class="eyebrow" style="margin:14px 0 6px">What changed, and why</div><div class="checks">${changes}</div>` : ''}
+      ${conv ? `<div class="eyebrow" style="margin:14px 0 6px">PostgreSQL</div>
+        <div class="tblwrap"><table><tbody><tr>
+          <td style="white-space:pre-wrap;max-width:none">${esc(conv.ddl)}</td></tr></tbody></table></div>` : ''}
+      ${e.gates && e.gates.length ? `<div class="eyebrow" style="margin:14px 0 6px">Gates</div>
+        <div class="checks">${e.gates.map(gateRow).join('')}</div>` : ''}
+    </div></details>`;
 }
 
 /* ---------------- blocker gate ---------------- */
@@ -1797,7 +2074,7 @@ $('#cfnTemplate').addEventListener('toggle', async (ev) => {
 $('#btnDeploy').onclick = async () => {
   const btn = $('#btnDeploy');
   btn.disabled = true;
-  $('#deployErr').innerHTML = `<p class="mono mt-s" style="font-size:12px;color:var(--ink-3)">Re-checking
+  $('#deployErr').innerHTML = `<p class="mono mt-s" style="font-size:12.5px;color:var(--ink-3)">Re-checking
     everything. Nothing is created until every check passes…</p>`;
   const r = await fetch('/api/provision/deploy', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({confirm_account: $('#dAcct').value.trim(),
@@ -1966,8 +2243,8 @@ const VERDICT = {
 function levelCard(l){
   return `<div class="panel pad mt" id="vl-${l.level}">
     <div class="spread"><div class="eyebrow" style="margin:0">Level ${l.level} — ${esc(l.title)}</div>
-      <span class="mono" id="vlc-${l.level}" style="font-size:12px;color:var(--ink-3)">pending</span></div>
-    <p style="font-size:12.5px;color:var(--ink-2);margin:6px 0 10px">${esc(l.why)}</p>
+      <span class="mono" id="vlc-${l.level}" style="font-size:12.5px;color:var(--ink-3)">pending</span></div>
+    <p style="font-size:13.5px;color:var(--ink-2);margin:6px 0 10px">${esc(l.why)}</p>
     <div class="checks" id="vlf-${l.level}"></div></div>`;
 }
 
@@ -2070,7 +2347,7 @@ function reqRow(r){
       <div class="name">${esc(r.title)} <span class="who">${esc(v.word)}</span></div>
       <div class="detail">${esc(r.detail)}</div>
       ${r.remedy ? `<div class="remedy">${esc(r.remedy)}</div>` : ''}
-      ${bullets.length ? `<ul style="margin:6px 0 0 16px;padding:0;font-size:12px;color:var(--ink-2)">
+      ${bullets.length ? `<ul style="margin:6px 0 0 16px;padding:0;font-size:13px;color:var(--ink-2)">
         ${bullets.map(b => `<li style="margin:2px 0">${esc(b)}</li>`).join('')}</ul>` : ''}
     </div></div>`;
 }
@@ -2170,6 +2447,70 @@ $('#btnCutExecute').onclick = async () => {
     }
   }
   btn.disabled = false;
+};
+
+/* ---------------- report (Phase 10) ---------------- */
+// The server builds the report from its own records on every request; the
+// screen only asks for it. Two requests -- data for the tiles, the page for
+// the frame -- come from one builder, so they cannot disagree.
+async function renderReport(){
+  const btn = $('#btnReport');
+  btn.disabled = true;
+  $('#reportMeta').textContent = 'building…';
+  setStage('report', 'busy', 'building');
+  const r = await fetch('/api/report.json');
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({detail: 'could not build the report'}));
+    btn.disabled = false;
+    $('#reportMeta').textContent = 'refused — ' + (e.detail || r.status);
+    setStage('report', 'active', 'refused');
+    return;
+  }
+  const d = await r.json();
+  btn.disabled = false;
+  const sc = d.schema_conversion || {}, cs = sc.code_summary || {}, bc = sc.by_complexity || {};
+  const dms = d.dms_assessment || {}, tot = dms.totals || {}, path = dms.path || {};
+  const st = d.status || {}, scores = d.scores || {};
+  const items = (sc.action_items || []).length;
+  const pathWord = v => v || 'unknown';
+  $('#reportTiles').innerHTML = `
+    <div class="tile"><div class="k">Readiness score</div>
+      <div class="v">${scores.overall_score ?? '–'}<small>/ 100</small></div>
+      <div class="h">${scores.capped_by_critical ? `capped: ${scores.critical_findings} critical open` : `${scores.total_findings ?? 0} findings`}</div></div>
+    <div class="tile"><div class="k">Action items</div>
+      <div class="v">${items}</div>
+      <div class="h">${bc.simple ?? 0} simple · ${bc.medium ?? 0} medium · ${bc.complex ?? 0} complex · ${bc.decision ?? 0} decision</div></div>
+    <div class="tile"><div class="k">Stored code converted</div>
+      <div class="v">${cs.ran ? (cs.pct_automatic ?? 0) : '–'}<small>${cs.ran ? '%' : ''}</small></div>
+      <div class="h">${cs.ran ? `${cs.automatic ?? 0} of ${cs.convertible ?? 0} convertible objects compile · ${cs.manual ?? 0} manual` : 'Phase 4b not run'}</div></div>
+    <div class="tile"><div class="k">DMS checks</div>
+      <div class="v">${tot.fail ?? 0}<small>fail</small></div>
+      <div class="h">${tot.warning ?? 0} warning · ${tot.info ?? 0} info · full load ${pathWord(path.full_load)} · CDC ${pathWord(path.cdc)}</div></div>`;
+  const notes = [];
+  if (path.consequence) notes.push(`<div class="note warn">${esc(path.consequence)}</div>`);
+  if (path.used) notes.push(`<div class="note info">${esc(path.used)}</div>`);
+  const stages = [];
+  if (st.gate) stages.push(`gate <b>${esc(st.gate.verdict)}</b>`);
+  if (st.provision) stages.push(`target <b>${esc(st.provision.stack)}</b> ${st.provision.ready ? 'ready' : 'not ready'}`);
+  if (st.validation) stages.push(`validation <b>${esc(st.validation.status)}</b>${st.validation.mismatches ? ` · ${st.validation.mismatches} mismatch(es)` : ''}`);
+  if (st.cutover) stages.push(`cutover certificate <b>${st.cutover.ready ? 'ready' : 'not ready'}</b>`);
+  if (stages.length) notes.push(`<div class="note ${st.same_run === false ? 'warn' : 'info'}">Recorded so far: ${stages.join(' · ')}.`
+    + (st.same_run === false ? ' <b>Some records describe a different collector run</b> — re-run the phases to align them.' : '') + '</div>');
+  $('#reportNotes').innerHTML = notes.join('');
+  $('#reportFrame').src = '/api/report?t=' + Date.now();
+  $('#reportEmpty').style.display = 'none';
+  $('#reportResult').style.display = '';
+  $('#reportMeta').textContent = `${d.estate || ''} · run ${String(d.collector_run_id || '').slice(0, 8)} · built ${String(d.generated_at_utc || '').replace('T', ' ').slice(0, 16)} UTC`;
+  setStage('report', 'done', `${items} action items · ${tot.fail ?? 0} DMS fail`);
+}
+$('#btnReport').onclick = () => renderReport();
+// The header link is the printable page. Once the stage is reachable it goes
+// there instead, so a client sees the summary before the document.
+$('#navReport').onclick = ev => {
+  if (stageState.report === 'idle') return;   // nothing to show yet: let the page explain
+  ev.preventDefault();
+  show('report');
+  if (!$('#reportFrame').getAttribute('src')) renderReport();
 };
 
 /* ---------------- catalogue ---------------- */

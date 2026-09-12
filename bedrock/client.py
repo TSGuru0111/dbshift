@@ -137,6 +137,20 @@ class BedrockClient:
                 "switching to its inference profile will both fail. Pick another model "
                 "in models.json or raise it with AWS Sales."
             )
+        if "INVALID_PAYMENT_INSTRUMENT" in message:
+            return BedrockError(
+                f"Access denied invoking {binding['model_id']}: the AWS account has no valid payment "
+                "instrument, so the Marketplace subscription Bedrock needs cannot complete. This is a "
+                "billing-console fix by an account administrator (add a payment method under Billing), "
+                "not an IAM or model-access one. Retry ~2 minutes after it is added."
+            )
+        if "aws-marketplace:" in message:
+            return BedrockError(
+                f"Access denied invoking {binding['model_id']}: the role lacks the Marketplace actions "
+                "Bedrock uses to self-subscribe (aws-marketplace:ViewSubscriptions, Subscribe). Either an "
+                "admin enables model access in the Bedrock console, or those actions are added to the "
+                "permission set. See docs/05-aws-services.md."
+            )
         if "AccessDeniedException" in message:
             return BedrockError(
                 f"Access denied invoking {binding['model_id']}. Check model access is "

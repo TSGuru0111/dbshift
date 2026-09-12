@@ -58,6 +58,39 @@ def _resolve_owners(session: Session, configured: tuple[str, ...]) -> dict:
     }
 
 
+def _dataset_columns(
+    session, dataset: str, labels: list[str], rows: list[dict], probe_module=None
+) -> list[str]:
+    """Best-known column list for a dataset, so an empty one still has a shape.
+
+    Rows win when there are any -- probes may add derived keys the query never
+    returned. With no rows, fall back to the columns the probe's own query
+    reported, matched by label: probes name their queries after the dataset
+    (`programmatic.queues` -> `source_inventory.queues`), so the suffix match is
+    reliable, and an unmatched dataset simply gets no declared columns, which is
+    the behaviour that existed before.
+    """
+    if rows:
+        seen: list[str] = []
+        for row in rows:
+            for key in row:
+                if key not in seen:
+                    seen.append(key)
+        return seen
+    short = dataset.split(".")[-1]
+    for label in labels:
+        if label.split(".")[-1] == short:
+            return list(session.columns_by_label.get(label, []))
+    # A probe may label its query differently from the dataset it feeds --
+    # "security.role_privs" produces "source_inventory.role_privileges". Let a
+    # probe declare those explicitly rather than making the naming a silent
+    # contract that breaks an empty dataset's schema when it drifts.
+    alias = getattr(probe_module, "QUERY_LABELS", {}).get(dataset)
+    if alias:
+        return list(session.columns_by_label.get(alias, []))
+    return []
+
+
 def _externalize(probe, produced: dict[str, list[dict]], run_dir: Path) -> None:
     """Move unbounded text fields out of the dataset file.
 
@@ -157,6 +190,7 @@ def execute(
                         source_queries=labels,
                         source=source,
                         collected_at=started_at,
+                        columns=_dataset_columns(session, dataset, labels, rows, probe),
                     )
                 )
             probe_report.append(

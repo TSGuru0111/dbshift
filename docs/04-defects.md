@@ -25,8 +25,8 @@ UPDATE customer SET full_name = full_name || CHR(146) WHERE customer_id = 3;
 ```
 
 This database is **AL32UTF8**, where byte `0x92` is a bare UTF-8 continuation
-byte, not a character. `CHR(146)` returns NULL, `full_name || NULL` is
-`full_name`, and the UPDATE reported one row modified having changed nothing.
+byte, not a character. The concatenation is a silent no-op and the UPDATE
+reported one row modified having changed nothing.
 
 Proof:
 
@@ -35,6 +35,32 @@ SELECT DUMP(full_name,1016) FROM customer WHERE customer_id = 3;
 -- Typ=1 Len=13 CharacterSet=AL32UTF8: 46,61,74,69,6d,61,20,53,68,61,72,6d,61
 SELECT COUNT(*) FROM customer WHERE INSTR(full_name, CHR(146)) > 0;   -- 0
 ```
+
+### Correction — 2026-09-10: `CHR(146)` does not return NULL
+
+An earlier revision of this file said `CHR(146)` returns NULL and that
+`full_name || NULL` is therefore `full_name`. **That mechanism is wrong**, though
+the conclusion — defect 7 was never seeded — is right. Re-measured directly:
+
+```sql
+SELECT CASE WHEN CHR(146) IS NULL THEN 'NULL' ELSE 'NOT NULL' END,  -- NOT NULL
+       LENGTH(CHR(146)), LENGTHB(CHR(146)),                         -- 1 char, 1 byte
+       DUMP(CHR(146), 1016)          -- Typ=1 Len=1 CharacterSet=AL32UTF8: 92
+FROM dual;
+```
+
+`CHR(146)` returns a one-byte value holding `0x92`. What actually happens is
+that the invalid byte is **dropped during concatenation**:
+
+```sql
+SELECT DUMP('abc' || CHR(146), 1016) FROM dual;
+-- Typ=1 Len=3 CharacterSet=AL32UTF8: 61,62,63     <- the 0x92 is gone
+```
+
+So the result is a genuine no-op, `INSTR(...) > 0` finds nothing, and DQ-003
+cannot fire — but because the byte is discarded on concatenation, not because
+`CHR(146)` is NULL. The distinction matters for anyone re-deriving this: testing
+`CHR(146) IS NULL` returns false and would wrongly suggest the seed had worked.
 
 **To seed it properly**, use the character cp1252 `0x92` actually maps to —
 U+2019 RIGHT SINGLE QUOTATION MARK:

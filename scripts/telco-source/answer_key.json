@@ -1,0 +1,155 @@
+[
+  {
+    "defect": 1,
+    "title": "Reserved-word identifiers",
+    "object": "Table \"SESSION\" with columns \"COMMENT\", \"LEVEL\", \"DATE\"",
+    "expected_severity": "HIGH",
+    "match_rules": [
+      "RDS-001",
+      "RDS-002"
+    ],
+    "match_object_like": "SESSION",
+    "note": "Different reserved words from the DBMIG_APP estate's \"ORDER\", and the column-level case is seeded three times over."
+  },
+  {
+    "defect": 2,
+    "title": "No primary key on a high-volume table",
+    "object": "usage_staging (250,000 rows)",
+    "expected_severity": "CRITICAL",
+    "match_rules": [
+      "DQ-001"
+    ],
+    "match_object_like": "USAGE_STAGING",
+    "note": "The DBMIG_APP equivalent had 2 rows. This one carries real volume, so DMS CDC genuinely cannot replicate it. PERF-002 should also fire -- the table has no indexes at all."
+  },
+  {
+    "defect": 3,
+    "title": "Unindexed foreign key",
+    "object": "support_ticket.assigned_cell_id -> network_cell",
+    "expected_severity": "MEDIUM",
+    "match_rules": [
+      "PERF-001"
+    ],
+    "match_object_like": "SUPPORT_TICKET"
+  },
+  {
+    "defect": 4,
+    "title": "ENABLE NOVALIDATE constraint hiding orphans",
+    "object": "invoice.fk_invoice_sub, 40 orphaned rows",
+    "expected_severity": "HIGH",
+    "match_rules": [
+      "DQ-004"
+    ],
+    "match_object_like": "INVOICE",
+    "note": "40 orphans rather than the single row in the DBMIG_APP estate, so the rule cannot pass by dismissing one row as noise."
+  },
+  {
+    "defect": 5,
+    "title": "Duplicate should-be-unique value",
+    "object": "subscriber.national_id = '000000001' on 500 rows",
+    "expected_severity": "MEDIUM",
+    "match_rules": [
+      "DQ-002"
+    ],
+    "match_object_like": "NATIONAL_ID"
+  },
+  {
+    "defect": 6,
+    "title": "Unconstrained NUMBER and FLOAT",
+    "object": "subscriber.loyalty_points (NUMBER), subscriber.risk_factor (FLOAT)",
+    "expected_severity": "MEDIUM",
+    "match_rules": [
+      "DQ-006"
+    ],
+    "match_object_like": "LOYALTY_POINTS"
+  },
+  {
+    "defect": 7,
+    "title": "Non-standard characters",
+    "object": "subscriber.full_name on subscriber_id 3, 7, 11",
+    "expected_severity": "LOW",
+    "match_rules": [
+      "DQ-003"
+    ],
+    "match_object_like": "FULL_NAME",
+    "note": "Seeded with UNISTR, which is character-set independent -- U+2019, U+00E9/U+00E7 and U+20AC. The DBMIG_APP estate used CHR(146): that returns a 1-byte 0x92 value (NOT NULL), but AL32UTF8 drops the invalid byte during concatenation, so nothing was ever seeded there. See docs/04-defects.md. This one is verified present by an ASCIISTR comparison in the seed script."
+  },
+  {
+    "defect": 8,
+    "title": "Invalid object with stored compilation errors",
+    "object": "sp_rate_cdr_broken",
+    "expected_severity": "HIGH",
+    "match_rules": [
+      "SEC-001",
+      "OPS-004"
+    ],
+    "match_object_like": "SP_RATE_CDR_BROKEN",
+    "note": "OPS-004 (stored compilation errors in USER_ERRORS) was never exercised by the DBMIG_APP estate."
+  },
+  {
+    "defect": 9,
+    "title": "Unusable and invisible indexes",
+    "object": "ix_payment_ref (UNUSABLE), ix_invoice_status (INVISIBLE)",
+    "expected_severity": "MEDIUM",
+    "match_rules": [
+      "PERF-004"
+    ],
+    "match_object_like": "IX_",
+    "note": "NOT PRESENT in the DBMIG_APP estate -- PERF-004 has never fired before. An unusable index stops being maintained silently; an invisible one is maintained but ignored."
+  },
+  {
+    "defect": 10,
+    "title": "Disabled constraint with violating data",
+    "object": "device.ck_device_stat, one row with device_status = 'ZZ_INVALID'",
+    "expected_severity": "MEDIUM",
+    "match_rules": [
+      "DQ-005"
+    ],
+    "match_object_like": "CK_DEVICE_STAT",
+    "note": "NOT PRESENT in the DBMIG_APP estate -- DQ-005 has never fired before."
+  },
+  {
+    "defect": 11,
+    "title": "Column contains only NULLs",
+    "object": "invoice_line.legacy_tariff_ref",
+    "expected_severity": "LOW",
+    "match_rules": [
+      "DQ-008"
+    ],
+    "match_object_like": "LEGACY_TARIFF_REF",
+    "note": "NOT PRESENT in the DBMIG_APP estate -- DQ-008 has never fired before. Requires the dataprofile probe to have real row access, so it also tests the collector's grants."
+  },
+  {
+    "defect": 12,
+    "title": "Byte-length character semantics",
+    "object": "support_ticket.agent_note, support_ticket.agent_locale",
+    "expected_severity": "LOW",
+    "match_rules": [
+      "DQ-009"
+    ],
+    "match_object_like": "AGENT_NOTE",
+    "note": "NOT PRESENT in the DBMIG_APP estate -- DQ-009 has never fired before. VARCHAR2(n BYTE) truncates multi-byte characters mid-character, which defect 7 makes a live hazard rather than a theoretical one."
+  },
+  {
+    "defect": 13,
+    "title": "Redundant index on the same leading column",
+    "object": "ix_device_sub vs ix_device_sub_status, both leading on subscriber_id",
+    "expected_severity": "LOW",
+    "match_rules": [
+      "PERF-008"
+    ],
+    "match_object_like": "DEVICE",
+    "note": "NOT PRESENT in the DBMIG_APP estate -- PERF-008 has never fired before. Key matches on DEVICE, not on an index name: PERF-008 identifies the finding as 'DEVICE (SUBSCRIBER_ID)' -- the table plus the shared leading column -- because the redundancy is a property of the pair, not of either index alone."
+  },
+  {
+    "defect": 14,
+    "title": "Sensitive columns without encryption",
+    "object": "subscriber.bank_account_no, credit_card_hash, passport_number",
+    "expected_severity": "MEDIUM",
+    "match_rules": [
+      "SEC-007"
+    ],
+    "match_object_like": "SUBSCRIBER",
+    "note": "national_id already existed; these names are unmistakable, so a miss here is a rule gap rather than a judgement call."
+  }
+]

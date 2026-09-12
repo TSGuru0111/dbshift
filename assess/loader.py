@@ -90,10 +90,25 @@ def _load(conn: sqlite3.Connection, run_dir: Path) -> dict:
                 if key not in seen:
                     seen.append(key)
         if not seen:
-            # A dataset can be legitimately empty -- nothing profilable, or the
-            # privilege was missing. Rules must still parse against it, so fall
-            # back to the declared schema rather than a bare stub.
-            seen = EMPTY_DATASET_COLUMNS.get(table, ["collector_run_id"])
+            # A dataset can be legitimately empty -- nothing profilable, the
+            # privilege was missing, or the estate simply has no scheduler jobs.
+            # Rules must still parse against it, so fall back to a declared
+            # schema rather than a bare stub.
+            #
+            # Preference order matters. The collector now records the columns its
+            # query returned (writer.py "columns"), which is authoritative and
+            # needs no maintenance here. EMPTY_DATASET_COLUMNS is the fallback
+            # for runs collected before that existed, and the bare
+            # collector_run_id stub is the last resort.
+            #
+            # The hardcoded map alone was not enough: it covered 5 datasets, and
+            # on an estate with no jobs, queues, XML schemas or extra roles, four
+            # uncovered datasets came back empty and 5 rules died with
+            # "no such column". Those rules were correct; the table had no
+            # columns to reference.
+            seen = payload.get("columns") or EMPTY_DATASET_COLUMNS.get(
+                table, ["collector_run_id"]
+            )
 
         cols = ", ".join(f'"{c}"' for c in seen)
         conn.execute(f'CREATE TABLE "{table}" ({cols})')

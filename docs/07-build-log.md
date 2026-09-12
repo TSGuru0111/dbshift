@@ -225,9 +225,13 @@ whole owner `no_select_privilege` rather than failing per table.
 
 The engine reported it missing; direct inspection showed it is **not in the
 database**. `04_seed_defects.sql` appends `CHR(146)`, but in AL32UTF8 byte
-`0x92` is a bare continuation byte, so `CHR(146)` yields NULL and the
-concatenation is a no-op. The UPDATE reported success having changed nothing —
-the same silent-failure class as the Phase 0 substitution-variable incident.
+`0x92` is an invalid lead byte and is dropped during concatenation, so the
+result is a no-op. The UPDATE reported success having changed nothing — the
+same silent-failure class as the Phase 0 substitution-variable incident.
+
+(Corrected 2026-09-10: this entry previously said `CHR(146)` yields NULL. It
+does not — it returns a 1-byte `0x92` value. The concatenation is where the byte
+is lost. See `04-defects.md`.)
 
 Full detail and the `UNISTR('\2019')` fix are in `04-defects.md`. The engine
 now reports it as `N/A — not present in source` and **excludes it from the

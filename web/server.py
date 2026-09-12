@@ -26,7 +26,7 @@ if __package__ in (None, ""):
     __package__ = "web"
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from assess import engine as assess_engine
@@ -34,6 +34,9 @@ from assess import loader as assess_loader
 from assess import scoring as assess_scoring
 from collector import config as collector_config
 from collector import run as collector_run
+from convert import inventory as convert_inventory
+from convert import plan as convert_plan
+from convert import target as convert_target
 from cutover import run as cutover_run
 from blocker import gate as blocker_gate
 from blocker import policy as blocker_policy
@@ -48,6 +51,8 @@ from provision import verify as provision_verify
 from validate import context as validate_context
 from validate import run as validate_run
 from remediate import plan as remediate_plan
+from report import build as report_build
+from report import render as report_render
 from sizing import run as sizing_run
 from sizing import utilization as sizing_utilization
 from collector.db import in_binds  # noqa: F401  (kept for custom probe authors)
@@ -82,6 +87,9 @@ class State:
     remediation: dict | None = None
     rehearsal_dsn: str | None = None
     rehearsal: Any = None
+    conversion: dict | None = None
+    pg_target: Any = None          # convert.target.PgTarget; password in memory only
+    pg_dsn: str | None = None
     gate: dict | None = None
     waivers: list = field(default_factory=list)
     provision: dict | None = None
@@ -227,6 +235,8 @@ def get_state():
         "has_assessment": STATE.assessment is not None,
         "has_sizing": STATE.sizing is not None,
         "has_remediation": STATE.remediation is not None,
+        "has_conversion": STATE.conversion is not None,
+        "pg_dsn": STATE.pg_dsn,
         "has_gate": STATE.gate is not None,
         "has_provision": STATE.provision is not None,
         "waivers": STATE.waivers,
@@ -704,6 +714,101 @@ def remediation():
     if not STATE.remediation:
         raise HTTPException(409, "no remediation plan yet")
     return STATE.remediation
+
+
+class PgTargetRequest(BaseModel):
+    dsn: str = "localhost:5432/dbshift"
+    user: str = "dbshift"
+    password: str = ""
+
+
+@app.post("/api/pgtarget")
+def set_pg_target(req: PgTargetRequest):
+    """Register the PostgreSQL the compile gate creates into (and rolls back
+    out of). Proven reachable before it is accepted, for the same reason the
+    rehearsal copy is: a registered-but-unreachable target would let the gate
+    look configured while every conversion silently blocked."""
+    if not req.dsn.strip():
+        STATE.pg_target = None
+        STATE.pg_dsn = None
+        return {"ok": True, "pg_dsn": None}
+    try:
+        target = convert_target.PgTarget.parse(req.dsn, req.user.strip(), req.password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    check = convert_target.check_target(target)
+    if not check["ok"]:
+        raise HTTPException(400, check["detail"])
+    STATE.pg_target = target
+    STATE.pg_dsn = target.dsn
+    return {"ok": True, "pg_dsn": target.dsn, "detail": check["detail"]}
+
+
+@app.get("/api/convert")
+def convert():
+    """Phase 4b. Needs only the discovery run -- it reads the PL/SQL text and the
+    catalogues Phase 1 collected. Compiles on the registered PostgreSQL, if any,
+    and applies nothing anywhere."""
+    if not STATE.run_dir:
+        raise HTTPException(409, "no discovery run yet")
+
+    def work(emit):
+        inv = convert_inventory.load(STATE.run_dir)
+        result = convert_plan.build(
+            inv,
+            # Static stand-ins, never "live", for the same reason as Phase 4.
+            model_mode="static",
+            pg_target=STATE.pg_target,
+            on_event=emit,
+        )
+        STATE.conversion = result
+        convert_plan.write(result)
+        emit({
+            "event": "complete",
+            "totals": result["totals"],
+            "blockers": result["what_is_in_the_way"],
+            "pg": result["pg_target"],
+        })
+
+    return _stream(work)
+
+
+@app.get("/api/conversion")
+def conversion():
+    if not STATE.conversion:
+        raise HTTPException(409, "no conversion plan yet")
+    return STATE.conversion
+
+
+def _report_data() -> dict:
+    """Phase 10. The migration assessment report -- SCT-style conversion
+    assessment plus DMS pre-migration assessment -- built from the records this
+    console holds, on every request, so it can never drift from them."""
+    if not STATE.assessment:
+        raise HTTPException(409, "run the assessment first; the report is built from its findings")
+    objects = []
+    if STATE.run_dir and (STATE.run_dir / "objects.json").exists():
+        objects = json.loads((STATE.run_dir / "objects.json").read_text(encoding="utf-8"))["rows"]
+    return report_build.build(
+        assessment=STATE.assessment, conversion=STATE.conversion, sizing=STATE.sizing, gate=STATE.gate,
+        objects=objects, provision=STATE.provision,
+        validation=report_build._load("validate/output/validation_report.json"),
+        certificate=report_build._load("cutover/output/certificate.json"),
+        migration=report_build._load("migrate/output/migration_run.json"),
+    )
+
+
+@app.get("/api/report", response_class=HTMLResponse)
+def report():
+    """The printable report, as a page of its own."""
+    return report_render.render(_report_data())
+
+
+@app.get("/api/report.json")
+def report_json():
+    """The same report as data, for the Phase 10 screen in the console. One
+    builder feeds both, so the screen can never disagree with the page."""
+    return _report_data()
 
 
 class WaiverRequest(BaseModel):

@@ -35,9 +35,17 @@ def write_dataset(
     source_queries: list[str],
     source: dict,
     collected_at: str,
+    columns: list[str] | None = None,
 ) -> dict:
     """One file per dataset. The row list is what a later push step POSTs verbatim."""
     stamped = [{"collector_run_id": run_id, **row} for row in rows]
+    # `columns` is the shape the query returned, which an empty dataset cannot
+    # convey through `rows` alone. Consumers that build a table from a dataset
+    # (assess/loader.py) need it, or an estate with no scheduler jobs produces a
+    # jobs table with no columns and every rule against it fails to parse.
+    declared = list(columns or [])
+    if declared and "collector_run_id" not in declared:
+        declared = ["collector_run_id"] + declared
     envelope = {
         "collector_run_id": run_id,
         "dataset": dataset,
@@ -46,6 +54,7 @@ def write_dataset(
         "probe": probe,
         "source_queries": source_queries,
         "source": source,
+        "columns": declared,
         "row_count": len(stamped),
         "rows": stamped,
     }

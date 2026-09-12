@@ -1,5 +1,16 @@
 NAME = "features"
 
+# Datasets whose feeding query is labelled differently from the dataset name.
+# Consulted only when the dataset comes back empty, to recover its column list.
+# system_metrics is empty on every XE instance by design -- v$sysmetric is not
+# populated there -- so without this its table would have no columns at all.
+QUERY_LABELS = {
+    "source_inventory.system_metrics": "features.sysmetric",
+    "source_inventory.os_statistics": "features.osstat",
+    "source_inventory.feature_usage": "features.usage_statistics",
+    "source_inventory.awr_coverage": "features.awr_snapshots",
+}
+
 # Drives the SE2-vs-EE verdict. Not optional -- an assumed feature list is the
 # difference between a licence estimate and a licence guess.
 EDITION_FORCING = (

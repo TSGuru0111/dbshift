@@ -1,6 +1,19 @@
 # Phase 9 — Cutover
 
-> **Latest update — 2026-09-12. Built; the certificate correctly refuses to
+> **Latest update — 2026-09-12 (later): cut over.** With the local phases
+> re-run for the target's own collector run (`6e48d16a`), the certificate met
+> every requirement but the gate; the operator started the stopped instance,
+> **accepted `OPS-001` and `OPS-002` by name** (`guru.ts@ganitinc.com`, 07:11 UTC,
+> reason recorded in `cutover/output/approvals.jsonl`), and the one target-side
+> step ran: `DBMS_SCHEDULER.ENABLE('DBMIG_APP.JOB_REFRESH_LOAN_SUMMARY')` —
+> **applied 1, failed 0**, recorded in `cutover/output/cutovers.jsonl` as
+> `cut_over`. The instance was stopped again immediately after. The
+> declared gaps stand: no application is repointed, the database link is dead,
+> the source profile was not copied, and the source remains authoritative.
+> The earlier not-ready runs are kept in `cutover/output/runs/` — a demo can
+> show the refusal and then the certificate.
+>
+> **Previous — 2026-09-12. Built; the certificate correctly refuses to
 > issue.** Phase 9 produces a **readiness certificate**: eight requirements, each
 > *met*, *waived* by a named person, *not applicable* with the reason, or *unmet*
 > with what would clear it. Against the current estate it comes back **not
@@ -117,6 +130,15 @@ python -m cutover.selftest                               # 39 offline checks
 and the execute box only when the certificate is otherwise ready.
 
 ## Change log
+
+**2026-09-12 (later) — cut over.** Requirement 1 was cleared exactly as this
+file prescribed: `assess.run --run 6e48d16a`, then sizing, remediate (dry-run
+gate live on `DBMIG_REHEARSAL`, 2 fixes `AUTO_APPLY`), convert, blocker and
+report for that run. `--approve` refused nothing (every other requirement was
+met) and recorded the approver from the caller identity; `--execute --confirm
+106325261146` ran the single allow-listed statement and wrote the cutover
+record. Total billable window: the instance ran about 25 minutes. Nothing on
+the source changed.
 
 **2026-09-12 — built.** `cutover/requirements.py` (the eight requirements),
 `cutover/run.py` (certificate, approval, execution, CLI),

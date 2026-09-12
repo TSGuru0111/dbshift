@@ -42,13 +42,14 @@ When you make a change:
 | 1 | Discover | ✅ built | [phase-01-discover.md](phase-01-discover.md) |
 | 2 | Assess | ✅ built | [phase-02-assess.md](phase-02-assess.md) |
 | 3 | Size & Edition | ✅ built | [phase-03-size-edition.md](phase-03-size-edition.md) |
-| 4 | Detect & Remediate | ◐ plans only | [phase-04-remediate.md](phase-04-remediate.md) |
+| 4 | Detect & Remediate | ◐ plans only; 2 fixes proven on the rehearsal copy | [phase-04-remediate.md](phase-04-remediate.md) |
+| 4b | Convert PL/SQL | ✅ built 2026-09-12 — 6/6 convertible objects compile on PostgreSQL 16, both estates, nothing applied | [phase-04b-convert.md](phase-04b-convert.md) |
 | 5 | Blocker gate | ✅ built | [phase-05-blocker-gate.md](phase-05-blocker-gate.md) |
 | 6 | Provision | ✅ built, deployed and verified 2026-09-11 | [phase-06-provision.md](phase-06-provision.md) |
 | 7 | Migrate | ✅ built and run 2026-09-11 — full load, 11/11 tables match | [phase-07-migrate.md](phase-07-migrate.md) |
-| 8 | Validate | ◐ built; first run pending | [phase-08-validate.md](phase-08-validate.md) |
-| 9 | Cutover | ◐ built; certificate refuses (run-id mismatch, gate blocks) | [phase-09-cutover.md](phase-09-cutover.md) |
-| 10 | Report | ◐ partial — the HTML report covers 1–3 | — |
+| 8 | Validate | ✅ validated 2026-09-12 — 5 levels, 5.4M rows a side, 0 mismatches | [phase-08-validate.md](phase-08-validate.md) |
+| 9 | Cutover | ✅ cut over 2026-09-12 — blockers accepted by a named approver, 1 step applied, 0 failed; applications not repointed by design | [phase-09-cutover.md](phase-09-cutover.md) |
+| 10 | Report | ✅ built 2026-09-12 — SCT-style conversion assessment + DMS pre-migration assessment, from records; the older `assess.report` still covers 1–3 in depth | [phase-10-report.md](phase-10-report.md) |
 
 `docs/02-architecture.md` holds the cross-phase design and the scope decisions.
 These files hold the detail of each phase in isolation.

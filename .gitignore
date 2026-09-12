@@ -33,5 +33,14 @@ aws_session*
 # Phase 4 planner output
 remediate/output/
 
+# Phase 4b conversion output (plan, generated PL/pgSQL, model audit rows)
+convert/output/
+
+# Phase 10 report output
+report/output/
+
 # Phase 5 gate output
 blocker/output/
+
+# Second-estate run artifacts (scripts/telco-source/run_phases.ps1)
+telco-output/

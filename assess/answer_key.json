@@ -4,7 +4,10 @@
     "title": "Reserved-word identifier",
     "object": "Table and column both named \"ORDER\"",
     "expected_severity": "HIGH",
-    "match_rules": ["RDS-001", "RDS-002"],
+    "match_rules": [
+      "RDS-001",
+      "RDS-002"
+    ],
     "match_object_like": "ORDER"
   },
   {
@@ -12,7 +15,9 @@
     "title": "No primary key",
     "object": "audit_scratch",
     "expected_severity": "CRITICAL",
-    "match_rules": ["DQ-001"],
+    "match_rules": [
+      "DQ-001"
+    ],
     "match_object_like": "AUDIT_SCRATCH"
   },
   {
@@ -20,7 +25,9 @@
     "title": "Unindexed foreign key",
     "object": "collateral_note.loan_id",
     "expected_severity": "MEDIUM",
-    "match_rules": ["PERF-001"],
+    "match_rules": [
+      "PERF-001"
+    ],
     "match_object_like": "COLLATERAL_NOTE"
   },
   {
@@ -28,7 +35,9 @@
     "title": "Orphaned FK reference",
     "object": "payment_hist, constraint is ENABLE NOVALIDATE",
     "expected_severity": "HIGH",
-    "match_rules": ["DQ-004"],
+    "match_rules": [
+      "DQ-004"
+    ],
     "match_object_like": "PAYMENT_HIST"
   },
   {
@@ -36,7 +45,9 @@
     "title": "Duplicate should-be-unique value",
     "object": "customer.national_id",
     "expected_severity": "MEDIUM",
-    "match_rules": ["DQ-002"],
+    "match_rules": [
+      "DQ-002"
+    ],
     "match_object_like": "NATIONAL_ID"
   },
   {
@@ -44,7 +55,9 @@
     "title": "Unconstrained NUMBER",
     "object": "loan.legacy_score",
     "expected_severity": "MEDIUM",
-    "match_rules": ["DQ-006"],
+    "match_rules": [
+      "DQ-006"
+    ],
     "match_object_like": "LEGACY_SCORE"
   },
   {
@@ -52,17 +65,21 @@
     "title": "Non-standard character",
     "object": "customer.full_name, CHR(146)",
     "expected_severity": "LOW",
-    "match_rules": ["DQ-003"],
+    "match_rules": [
+      "DQ-003"
+    ],
     "match_object_like": "FULL_NAME",
     "not_present_in_source": true,
-    "note": "Seeding silently failed. 04_seed_defects.sql line 52 appends CHR(146), but this database is AL32UTF8 where byte 0x92 is a bare UTF-8 continuation byte, so CHR(146) yields NULL and the concatenation is a no-op. DUMP() on customer_id=3 shows pure ASCII and a CHR(146) search returns 0 rows. Re-seed with UNISTR('\\2019') -- the U+2019 smart quote that cp1252 0x92 actually maps to -- then this becomes detectable."
+    "note": "Seeding silently failed. 04_seed_defects.sql line 52 appends CHR(146), but this database is AL32UTF8 where byte 0x92 is a bare UTF-8 continuation byte. CHR(146) itself is NOT NULL -- it is a 1-byte value holding 0x92 -- but the byte is dropped during concatenation, so full_name is unchanged and the UPDATE reported a row modified having changed nothing. DUMP() on customer_id=3 shows pure ASCII and a CHR(146) search returns 0 rows. Re-seed with UNISTR('\\2019') -- the U+2019 smart quote that cp1252 0x92 actually maps to -- then this becomes detectable. See docs/04-defects.md for the measurement."
   },
   {
     "defect": 8,
     "title": "Invalid object",
     "object": "sp_broken_demo",
     "expected_severity": "HIGH",
-    "match_rules": ["SEC-001"],
+    "match_rules": [
+      "SEC-001"
+    ],
     "match_object_like": "SP_BROKEN_DEMO"
   }
 ]

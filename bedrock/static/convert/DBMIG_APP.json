@@ -1,0 +1,19 @@
+{
+  "estate": "DBMIG_APP",
+  "authored_on": "2026-09-12",
+  "what_this_is": "Hand-written stand-ins for reasoning-tier PL/SQL conversions, used while Bedrock InvokeModel is blocked on this account. NOT model output. An entry is keyed on owner, object_type and object_name and is written against the source object's SHA-256 ('written_against'); if the live source differs, convert/model.py refuses the entry as stale and the object goes to a person. Every entry passes the same five gates the rule tier does.",
+  "not_model_output": true,
+  "why_empty": "Every PL/SQL object on DBMIG_APP is inside the deterministic tier's subset (convert/constructs.json), so on this estate the model tier had nothing to do and no stand-in was needed. That is the result, not a gap. An entry belongs here only when the rules decline a real object on this estate.",
+  "entry_shape": {
+    "owner": "DBMIG_APP",
+    "object_type": "FUNCTION",
+    "object_name": "SOME_FUNCTION",
+    "written_against": "<source_sha256 from plsql_source>",
+    "statements": ["CREATE OR REPLACE FUNCTION dbmig_app.some_function(...) ... $$;"],
+    "constructs": [{"oracle": "<id>", "handling": "translated|not_translated", "postgres": "...", "note": "..."}],
+    "explain": "...",
+    "caveat": "...",
+    "evidence": "what was checked on the source when this was written"
+  },
+  "outputs": []
+}

@@ -27,15 +27,18 @@ HARD_EE_FEATURES = {
 # Detected, but NOT edition-forcing on their own. Each needs a threshold or a
 # context that raw feature-usage statistics do not carry.
 #
-# Multitenant is the one that matters here: Oracle XE and RDS both run as a
-# container database with a single PDB, which is included in every edition.
-# DBA_FEATURE_USAGE_STATISTICS records that as "Oracle Multitenant" used. Reading
-# it naively flips the licence verdict on an estate that owes nothing.
+# Multitenant is the one that matters here: Oracle XE runs as a container
+# database with a single PDB, which is included in every edition, and the RDS
+# target Phase 6 actually created is non-CDB (v$database.cdb = NO, from
+# provision.verify on 2026-09-11) and so uses no Multitenant at all.
+# DBA_FEATURE_USAGE_STATISTICS records the source as "Oracle Multitenant" used.
+# Reading it naively flips the licence verdict on an estate that owes nothing.
 CONTEXTUAL_FEATURES = {
     "Oracle Multitenant": (
-        "A single PDB is included in every edition, and RDS for Oracle runs a "
-        "container database with one PDB by default. Only PDB counts above the "
-        "included allowance require the Multitenant option."
+        "A single PDB is included in every edition, and a non-CDB target uses "
+        "no Multitenant at all; RDS for Oracle 19c creates a non-CDB instance. "
+        "Only PDB counts above the included allowance require the Multitenant "
+        "option."
     ),
     "Oracle Spatial and Graph": (
         "Locator functionality is included in all editions; only full Spatial "

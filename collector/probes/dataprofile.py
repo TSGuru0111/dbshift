@@ -115,7 +115,6 @@ def collect(s, owners):
     sample_target = _sample_target()
     table_profile: list[dict] = []
     column_profile: list[dict] = []
-    unreadable: set[str] = set()
 
     for t in tables:
         owner, table = t["owner"], t["table_name"]
@@ -127,8 +126,6 @@ def collect(s, owners):
             skip = "materialized_view_container"
         elif (owner, table) in external:
             skip = "external_table"
-        elif owner in unreadable:
-            skip = "no_select_privilege"
 
         if skip:
             table_profile.append(
@@ -183,12 +180,24 @@ def collect(s, owners):
         result = s.fetch(f"dataprofile.scan.{owner}.{table}", sql)
         if not result:
             error = s.query_log[-1].error or ""
-            # ORA-00942 here means SELECT_CATALOG_ROLE without data access: the
-            # account can read metadata about the table but not its rows. Stop
-            # scanning this owner rather than emitting one failure per table.
+            # ORA-00942 here means the account can read metadata about the table
+            # but not its rows.
+            #
+            # It is NOT safe to conclude the whole owner is unreadable. Grants
+            # are commonly per-table -- which is exactly what a least-privilege
+            # collector account looks like -- so a single ungranted table would
+            # otherwise poison every table after it in alphabetical order.
+            #
+            # That is not hypothetical: on DBMIG_TELCO one ungranted table
+            # ("SESSION") caused SUBSCRIBER, SUPPORT_TICKET and USAGE_STAGING to
+            # be skipped unattempted, and the two data-quality defects living in
+            # SUBSCRIBER were reported as engine misses rather than as data the
+            # collector never looked at.
+            #
+            # Each table is now judged on its own attempt. The cost of being
+            # wrong the other way is one cheap failed query per table, which is
+            # far cheaper than silently profiling nothing.
             reason = "no_select_privilege" if "ORA-00942" in error else "scan_failed"
-            if reason == "no_select_privilege":
-                unreadable.add(owner)
             table_profile.append(
                 {
                     "owner": owner,

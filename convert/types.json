@@ -1,0 +1,41 @@
+{
+  "what_this_is": "Oracle to PostgreSQL scalar type mapping, as data. NUMBER(p,0) is mapped to the smallest exact integer type that holds p digits, by the thresholds below; NUMBER(p,s) keeps its precision as NUMERIC(p,s); bare NUMBER stays NUMERIC. Anything in 'unmappable' has no safe mapping and routes the object to a person. Types owned by a system schema are never mapped.",
+  "number_integer_thresholds": [[5, "SMALLINT"], [10, "INTEGER"], [19, "BIGINT"]],
+  "scalar": {
+    "NUMBER": {"postgres": "NUMERIC", "note": "unconstrained NUMBER keeps arbitrary precision"},
+    "INTEGER": {"postgres": "INTEGER"},
+    "INT": {"postgres": "INTEGER"},
+    "SMALLINT": {"postgres": "SMALLINT"},
+    "PLS_INTEGER": {"postgres": "INTEGER"},
+    "BINARY_INTEGER": {"postgres": "INTEGER"},
+    "NATURAL": {"postgres": "INTEGER", "note": "the non-negative constraint is not carried"},
+    "POSITIVE": {"postgres": "INTEGER", "note": "the positive constraint is not carried"},
+    "BOOLEAN": {"postgres": "BOOLEAN"},
+    "VARCHAR2": {"postgres": "VARCHAR"},
+    "VARCHAR": {"postgres": "VARCHAR"},
+    "NVARCHAR2": {"postgres": "VARCHAR"},
+    "CHAR": {"postgres": "CHAR"},
+    "NCHAR": {"postgres": "CHAR"},
+    "DATE": {"postgres": "TIMESTAMP(0)", "note": "Oracle DATE carries time to the second; PostgreSQL DATE does not"},
+    "CLOB": {"postgres": "TEXT"},
+    "NCLOB": {"postgres": "TEXT"},
+    "LONG": {"postgres": "TEXT"},
+    "BLOB": {"postgres": "BYTEA"},
+    "LONG RAW": {"postgres": "BYTEA"},
+    "RAW": {"postgres": "BYTEA"},
+    "FLOAT": {"postgres": "DOUBLE PRECISION"},
+    "BINARY_DOUBLE": {"postgres": "DOUBLE PRECISION"},
+    "BINARY_FLOAT": {"postgres": "REAL"},
+    "XMLTYPE": {"postgres": "XML", "note": "XML type only; no schema validation on the target"},
+    "INTERVAL DAY TO SECOND": {"postgres": "INTERVAL"},
+    "INTERVAL YEAR TO MONTH": {"postgres": "INTERVAL"}
+  },
+  "unmappable": {
+    "ROWID": "no stable row address in PostgreSQL (ctid moves on update)",
+    "UROWID": "no stable row address in PostgreSQL",
+    "ANYDATA": "no equivalent; a decision, not a mapping",
+    "BFILE": "an external file locator has no equivalent",
+    "SYS_REFCURSOR": "refcursor exists but calling conventions differ; model tier"
+  },
+  "system_owners": ["SYS", "XDB", "MDSYS", "CTXSYS", "ORDSYS", "OLAPSYS", "WMSYS", "DBSNMP", "SYSTEM", "PUBLIC"]
+}
