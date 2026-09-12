@@ -90,6 +90,25 @@ def collect(s, owners):
                 FROM dba_types WHERE owner IN ({frag}) ORDER BY owner, type_name""",
             binds,
         ),
+        # Oracle Text indexes, with the one fact that says whether they hold
+        # anything: idx_docid_count. A CONTEXT index created before its table was
+        # populated reports INDEXED and VALID while indexing nothing, and every
+        # application search against it silently returns no rows -- seen on this
+        # estate, where DBMIG_APP.IX_COMM_NOTES_TEXT covers 0 of 400,000 rows.
+        #
+        # CTXSYS.CTX_INDEXES needs its own grant (scripts/oracle-source/
+        # 07_grant_collector_text.sql). Without it this query fails with
+        # ORA-00942, the dataset comes back empty, and RDS-016 simply does not
+        # fire -- discovery carries on, and the failure is in the query log.
+        "source_inventory.text_indexes": s.fetch(
+            "programmatic.text_indexes",
+            f"""SELECT idx_owner AS owner, idx_name AS index_name, idx_table_owner AS table_owner,
+                       idx_table AS table_name, idx_status AS status, idx_docid_count AS docid_count,
+                       idx_sync_type AS sync_type, idx_sync_interval AS sync_interval
+                FROM ctxsys.ctx_indexes WHERE idx_owner IN ({frag})
+                ORDER BY idx_owner, idx_name""",
+            binds,
+        ),
         "source_inventory.xml_schemas": s.fetch(
             "programmatic.xml_schemas",
             f"""SELECT owner, schema_url, local, int_objname

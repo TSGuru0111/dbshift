@@ -448,5 +448,14 @@
     "title": "Estate size drives the migration window",
     "rationale": "Total segment size sets the floor on load time and the target storage allocation. It is the number every migration plan is built on.",
     "sql": "SELECT owner, 'TOTAL_SEGMENT_SIZE' AS object_name, 'ESTATE' AS object_type, CAST(ROUND(SUM(bytes)/1073741824.0, 3) AS TEXT) || ' GB across ' || CAST(COUNT(*) AS TEXT) || ' segments' AS detail FROM segments GROUP BY owner HAVING SUM(bytes) > 0"
+  },
+  {
+    "rule_id": "RDS-016",
+    "category": "rds_compatibility",
+    "severity": "HIGH",
+    "remediation_level": "L2",
+    "title": "Oracle Text index contains no documents",
+    "rationale": "A CONTEXT index created before its table was populated, or never synced after a load, reports INDEXED and VALID while indexing nothing. Searches against it return no rows and raise no error, so the fault survives migration unnoticed and is blamed on the migration. Rebuilding it on the target is cheap; discovering it after cutover is not.",
+    "sql": "SELECT ti.owner, ti.index_name AS object_name, 'INDEX' AS object_type, 'Text index holds ' || ti.docid_count || ' document(s) but ' || ti.table_name || ' has ' || t.num_rows || ' row(s); searches return nothing until it is rebuilt or synced' AS detail FROM text_indexes ti JOIN tables t ON t.owner = ti.table_owner AND t.table_name = ti.table_name WHERE COALESCE(ti.docid_count, 0) = 0 AND COALESCE(t.num_rows, 0) > 0"
   }
 ]

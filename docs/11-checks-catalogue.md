@@ -183,7 +183,7 @@ proves there is no data access.
 
 ---
 
-# Part 2 — Assessment: the 50 rules
+# Part 2 — Assessment: the 51 rules
 
 Each rule is **a row in a table**, not code: an id, a category, a severity, a
 remediation level, a SQL predicate and a rationale. The engine runs the
@@ -191,7 +191,7 @@ predicate; every returned row becomes a finding carrying that rule's severity.
 **Nothing is judged at runtime**, which is why the same estate always scores
 identically and why a model cannot quietly change a verdict.
 
-Adding rule 51 is inserting a row in `assess/rules.json`.
+Adding rule 52 is inserting a row in `assess/rules.json`.
 
 ### Severity and what it costs
 
@@ -215,7 +215,7 @@ Adding rule 51 is inserting a row in `assess/rules.json`.
 The level is a property of the rule. A model returning 99% confidence on a
 business-logic rewrite still lands in L3.
 
-## RDS compatibility — 15 rules
+## RDS compatibility — 16 rules
 
 Will this object work on Amazon RDS for Oracle at all?
 
@@ -236,6 +236,17 @@ Will this object work on Amazon RDS for Oracle at all?
 | RDS-013 | HIGH | **L4** | Partitioned table **requires Enterprise Edition** | 1 |
 | RDS-014 | LOW | L2 | Synonym resolves to something outside migration scope | 0 |
 | RDS-015 | INFO | L2 | Source character set — the target must be created to match | 1 |
+| RDS-016 | HIGH | L2 | **Oracle Text index holds no documents** — searches return nothing, silently | 1 |
+
+`RDS-016` was written on 2026-09-12 after Phase 8 found
+`DBMIG_APP.IX_COMM_NOTES_TEXT` indexing **0 of 400,000 rows** while reporting
+`INDEXED` and `VALID` with nothing pending sync: it was created before the data
+was generated and never synced. It needs one extra grant,
+`scripts/oracle-source/07_grant_collector_text.sql`, because the proof
+(`CTXSYS.CTX_INDEXES.IDX_DOCID_COUNT`) is not readable by the collector
+otherwise — `dba_tables.num_rows` for the `DR$` token tables is `NULL`, and
+firing on a missing statistic would flag every estate whose internals are simply
+unanalysed. Without the grant the dataset is empty and the rule does not fire.
 
 ## Data quality — 11 rules
 
