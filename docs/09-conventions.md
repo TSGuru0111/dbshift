@@ -21,6 +21,19 @@
 - Credentials from environment or keychain, never from a file in git.
 - Structured logging: SQL executed and row counts, never data or credentials.
 
+## Windows
+
+- **Keep `--output-dir` short.** The collector externalises stored code to
+  `<run_dir>/plsql_source/<sha256>.txt`, and that tail alone is a 36-character
+  run id plus a 68-character filename. A deeply nested output directory pushes
+  the total past Windows' 260-character `MAX_PATH` and discovery dies partway
+  with `FileNotFoundError` on a file it just created the directory for — which
+  reads like a code bug and is not one. Hit on 2026-09-12 with a 308-character
+  path under the session scratch folder; the same run into `C:\dbshift-tmp\c1`
+  succeeded. `LongPathsEnabled` is `0` on this machine.
+- The repo lives under OneDrive. It syncs while you work, so an occasional
+  `git` operation fails on a locked `.git/index`; retrying works.
+
 ## Metadata
 
 - Nine schemas: `migration_control`, `source_inventory`, `target_inventory`,
