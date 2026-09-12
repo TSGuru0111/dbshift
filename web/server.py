@@ -44,6 +44,8 @@ from provision import deploy as provision_deploy
 from provision import policy as provision_policy
 from provision import run as provision_run
 from provision import verify as provision_verify
+from validate import context as validate_context
+from validate import run as validate_run
 from remediate import plan as remediate_plan
 from sizing import run as sizing_run
 from sizing import utilization as sizing_utilization
@@ -980,6 +982,36 @@ def migrate(resolve_external: bool = False, fresh_export: bool = False, from_ste
         rec = migrate_run.execute(_aws_session(), opts, on_event=emit)
         emit({"event": "complete", "status": rec["status"], "stopped_at": rec.get("stopped_at"),
               "reason": rec.get("reason")})
+
+    return _stream(work)
+
+
+# --------------------------------------------------------------------------- phase 8
+
+
+@app.get("/api/validate/plan")
+def validate_plan():
+    from validate.levels import LEVELS
+    return {"levels": [{"level": n, "title": t, "why": w} for n, t, w, _ in LEVELS],
+            "last": validate_run.last_report(), "migration_runs": migrate_run.runs()}
+
+
+@app.get("/api/validate")
+def validate(checksum: bool = True):
+    """Phase 8. Read-only on both databases: every statement is a SELECT."""
+    import os
+
+    opts = validate_context.Options(
+        collector_password=(STATE.password if STATE.connected else None)
+        or os.environ.get("DBSHIFT_COLLECTOR_PASSWORD"),
+        collector_user=STATE.user or "dbmig_collector",
+        source_dsn=STATE.dsn or collector_config.DEFAULT_DSN,
+        checksum=checksum)
+
+    def work(emit):
+        report = validate_run.execute(_aws_session(), opts, on_event=emit)
+        emit({"event": "complete", "status": report.get("status"), "reason": report.get("reason"),
+              "mismatches": report.get("mismatches", 0)})
 
     return _stream(work)
 

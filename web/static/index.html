@@ -657,6 +657,32 @@ tr:last-child td{border-bottom:none}
       it is CREATE_COMPLETE.</div></div>
   </section>
 
+  <!-- ============ 9. VALIDATE ============ -->
+  <section class="view" id="view-validate">
+    <div class="head">
+      <h2>Validate</h2>
+      <p>Five levels, from <i>it exists</i> to <i>it behaves</i>. Every finding is marked
+         <b>match</b>, <b>expected difference</b> with the reason it is correct, <b>mismatch</b>, or
+         <b>not comparable</b> when one side cannot be read — which is never counted as a match.
+         Only mismatches fail the phase. Nothing is written to either database: every statement is
+         a SELECT.</p>
+    </div>
+
+    <div class="panel pad" id="valControls">
+      <div class="eyebrow">Before it runs</div>
+      <p id="valEstate" style="font-size:12.5px;color:var(--ink-2);margin-bottom:10px"></p>
+      <label class="chk"><input type="checkbox" id="vChecksum" checked>
+        <span><b>Compare every row's values (level 4).</b> Reads all rows on both databases and
+        compares checksums, so equal counts cannot hide changed data. Slower on large tables.</span></label>
+      <div class="spread"><button class="btn" id="btnValidate">Run validation</button>
+        <span class="mono" id="valMeta" style="font-size:12px;color:var(--ink-3)"></span></div>
+    </div>
+
+    <div id="valLevels" class="mt"></div>
+    <div id="valEmpty" class="panel mt"><div class="empty">Migrate first. Validation compares the target
+      against the estate it was built from.</div></div>
+  </section>
+
   <!-- ============ CATALOGUE ============ -->
   <section class="view" id="view-catalogue">
     <div class="head">
@@ -743,12 +769,13 @@ const STAGES = [
   {id:'gate',      label:'Blocker gate',   n:5},
   {id:'provision', label:'Provision',      n:6},
   {id:'migrate',   label:'Migrate',        n:7},
+  {id:'validate',  label:'Validate',       n:8},
 ];
-const IDLE_STAGES = {connect:'active', discover:'idle', assess:'idle',
-                     target:'idle', remediate:'idle', gate:'idle', provision:'idle', migrate:'idle'};
+const IDLE_STAGES = {connect:'active', discover:'idle', assess:'idle', target:'idle',
+                     remediate:'idle', gate:'idle', provision:'idle', migrate:'idle', validate:'idle'};
 let current = 'connect';
 let stageState = {...IDLE_STAGES};
-let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:'', migrate:''};
+let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:'', migrate:'', validate:''};
 let ISSUES = [], sevFilter = new Set(), catFilter = new Set();
 
 function renderRail(){
@@ -781,7 +808,7 @@ function renderPageNav(){
     ${next ? `<button class="btn sm" ${nextLocked ? 'disabled' : ''}
                 onclick="show('${next.id}')"
                 title="${nextLocked ? 'Finish this stage first' : ''}">${esc(nextLabel)} &rarr;</button>`
-           : '<span class="mono" style="font-size:11.5px;color:var(--ink-3)">Phase 8 onward is not built</span>'}`;
+           : '<span class="mono" style="font-size:11.5px;color:var(--ink-3)">Phase 9 onward is not built</span>'}`;
 }
 function show(id){
   const previous = current;
@@ -949,7 +976,7 @@ $('#btnDisconnect').onclick = async () => {
   $('#checks').innerHTML = '<div class="empty">Connect to run the preflight checks.</div>';
   $('#btnDiscover').disabled = true;
   stageState = {...IDLE_STAGES};
-  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:'', migrate:''};
+  stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', gate:'', provision:'', migrate:'', validate:''};
   renderRail();
 };
 
@@ -988,7 +1015,11 @@ $('#btnDiscover').onclick = () => {
     } else if (d.event === 'complete') {
       es.close();
       setStage('discover', 'done', `${d.datasets} datasets · ${fmt(d.total_rows)} rows`);
-      setStage('assess', stageState.assess === 'idle' ? 'active' : stageState.assess);
+      // Target only needs the collector run, so discovery unlocks it too --
+      // matching the reload path, which enables #btnSize off has_discovery.
+      for (const id of ['assess', 'target']) {
+        if (stageState[id] === 'idle') setStage(id, 'active');
+      }
       $('#discMeta').textContent =
         `run ${d.run_id.slice(0,8)} · ${(d.elapsed_ms/1000).toFixed(1)}s` +
         (d.failed && d.failed.length ? ` · ${d.failed.length} failed queries` : '');
@@ -1066,7 +1097,13 @@ $('#btnAssess').onclick = () => {
       es.close();
       if (last) last.className = 'tick done';
       setStage('assess', 'done', `${d.issues} issues · score ${d.overall}`);
-      setStage('target', stageState.target === 'idle' ? 'active' : stageState.target);
+      // The same three stages the reload path unlocks, for the same reason.
+      // Enabling only the Run buttons left Remediate and Gate 'idle', and both
+      // navigation routes refuse an idle stage -- so the screens had an armed
+      // Run button that nothing could reach. Unlock the stage, not just the button.
+      for (const id of ['target', 'remediate', 'gate']) {
+        if (stageState[id] === 'idle') setStage(id, 'active');
+      }
       $('#btnRemediate').disabled = false;
       $('#btnGate').disabled = false;
       $('#remEmpty').querySelector('.empty').textContent = 'Plan remediations for these findings.';
@@ -1855,6 +1892,11 @@ $('#btnMigrate').onclick = async () => {
       $('#migMeta').textContent = d.status + (d.stopped_at ? ` at ${d.stopped_at}` : '');
       setStage('migrate', d.status.startsWith('completed') ? 'done' : 'active',
         d.status.startsWith('completed') ? d.status.replace(/_/g, ' ') : `stopped at ${d.stopped_at}`);
+      // There is something to validate once data has moved.
+      if (d.status.startsWith('completed') && stageState.validate === 'idle') {
+        setStage('validate', 'active');
+        renderValidatePlan();
+      }
     } else if (d.event === 'error') {
       es.close(); btn.disabled = false;
       $('#migMeta').textContent = 'error — ' + d.message;
@@ -1862,6 +1904,95 @@ $('#btnMigrate').onclick = async () => {
     }
   };
   es.onerror = () => { es.close(); btn.disabled = false; setStage('migrate', 'active', 'connection lost'); };
+};
+
+/* ---------------- validate (Phase 8) ---------------- */
+const VERDICT = {
+  match:               {cls:'pass', mark:'✓', word:'match'},
+  expected_difference: {cls:'warn', mark:'=', word:'expected difference'},
+  mismatch:            {cls:'fail', mark:'×', word:'mismatch'},
+  not_comparable:      {cls:'warn', mark:'?', word:'not comparable'},
+};
+
+function levelCard(l){
+  return `<div class="panel pad mt" id="vl-${l.level}">
+    <div class="spread"><div class="eyebrow" style="margin:0">Level ${l.level} — ${esc(l.title)}</div>
+      <span class="mono" id="vlc-${l.level}" style="font-size:12px;color:var(--ink-3)">pending</span></div>
+    <p style="font-size:12.5px;color:var(--ink-2);margin:6px 0 10px">${esc(l.why)}</p>
+    <div class="checks" id="vlf-${l.level}"></div></div>`;
+}
+
+function findingRow(f){
+  const v = VERDICT[f.verdict] || VERDICT.not_comparable;
+  const ev = f.evidence && Object.keys(f.evidence).length ? JSON.stringify(f.evidence, null, 2) : '';
+  return `<div class="check ${v.cls}"><span class="mark">${v.mark}</span>
+    <div style="min-width:0;flex:1">
+      <div class="name">${esc(f.check)} <span class="who">${esc(v.word)}</span></div>
+      <div class="detail">${esc(f.detail)}</div>
+      ${f.why ? `<div class="remedy">${esc(f.why)}</div>` : ''}
+      ${ev ? `<details class="steplog"><summary>evidence</summary><pre>${esc(ev)}</pre></details>` : ''}
+    </div></div>`;
+}
+
+async function renderValidatePlan(){
+  const r = await fetch('/api/validate/plan');
+  if (!r.ok) return;
+  const p = await r.json();
+  $('#valEmpty').style.display = 'none';
+  $('#valLevels').innerHTML = p.levels.map(levelCard).join('');
+  const last = p.last;
+  if (last) {
+    $('#valEstate').textContent = `Last run compared collector run ${String(last.run_id || '').slice(0, 8)} `
+      + `(${last.estate || ''}) — the run the target was built from, read from its own tag.`;
+    for (const l of last.levels || []) applyLevel({...l, findings: (last.findings || []).filter(f => f.level === l.level)});
+    $('#valMeta').textContent = `${last.status}${last.mismatches ? ` · ${last.mismatches} mismatch(es)` : ''}`;
+  }
+}
+
+function applyLevel(d){
+  const counts = [];
+  for (const [k, v] of Object.entries(VERDICT)) {
+    if (d[k]) counts.push(`${d[k]} ${v.word}${d[k] > 1 && k !== 'match' ? 's' : ''}`);
+  }
+  const el = $(`#vlc-${d.level}`);
+  if (el) el.textContent = counts.join(' · ') + (d.elapsed_ms != null ? ` · ${(d.elapsed_ms / 1000).toFixed(1)} s` : '');
+  const box = $(`#vlf-${d.level}`);
+  if (box) box.innerHTML = (d.findings || []).map(findingRow).join('');
+}
+
+$('#btnValidate').onclick = () => {
+  const btn = $('#btnValidate');
+  btn.disabled = true;
+  $('#valEmpty').style.display = 'none';
+  setStage('validate', 'busy', 'validating');
+  const es = new EventSource(`/api/validate?checksum=${$('#vChecksum').checked}`);
+  es.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (d.event === 'estate') {
+      $('#valEstate').textContent = `Comparing collector run ${String(d.run_id).slice(0, 8)} (${d.estate}) — `
+        + `the run the target was built from, read from its own tag. Target is ${d.status}.`;
+    } else if (d.event === 'level_start') {
+      const el = $(`#vlc-${d.level}`); if (el) el.textContent = 'running…';
+      $(`#vl-${d.level}`)?.scrollIntoView({block:'nearest'});
+      setStage('validate', 'busy', `level ${d.level}: ${d.title.toLowerCase()}`);
+    } else if (d.event === 'log') {
+      const el = $(`#vlc-${d.level}`); if (el) el.textContent = d.line.slice(0, 60);
+    } else if (d.event === 'level_done') {
+      applyLevel(d);
+    } else if (d.event === 'complete') {
+      es.close();
+      btn.disabled = false;
+      $('#valMeta').textContent = d.status + (d.reason ? ` — ${d.reason}` : '')
+        + (d.mismatches ? ` · ${d.mismatches} mismatch(es)` : '');
+      setStage('validate', d.status === 'validated' ? 'done' : 'active',
+        d.status === 'validated' ? 'validated' : (d.status || 'stopped'));
+    } else if (d.event === 'error') {
+      es.close(); btn.disabled = false;
+      $('#valMeta').textContent = 'error — ' + d.message;
+      setStage('validate', 'active', 'error');
+    }
+  };
+  es.onerror = () => { es.close(); btn.disabled = false; setStage('validate', 'active', 'connection lost'); };
 };
 
 /* ---------------- catalogue ---------------- */

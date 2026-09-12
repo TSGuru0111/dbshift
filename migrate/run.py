@@ -112,8 +112,27 @@ def _save(record: dict, events: list[dict]) -> dict:
     record["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
     record["log"] = [e for e in events if e["event"] == "step_log"][-2000:]
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    # Every run keeps its own record. Writing only to migration_run.json lost the
+    # record of a successful migration -- approvals included -- when a later run
+    # stopped at the gate two hours afterwards and overwrote it.
+    (OUTPUT / "runs").mkdir(exist_ok=True)
+    stamp = record["started_at_utc"].replace(":", "").replace("-", "")[:15]
+    (OUTPUT / "runs" / f"{stamp}-{record.get('status', 'unknown')}.json").write_text(
+        json.dumps(record, indent=2, default=str), encoding="utf-8")
     RECORD.write_text(json.dumps(record, indent=2, default=str), encoding="utf-8")
     return record
+
+
+def runs() -> list[dict]:
+    """Every run kept, newest first: id, when, status and approvals."""
+    folder = OUTPUT / "runs"
+    out = []
+    for path in sorted(folder.glob("*.json"), reverse=True) if folder.exists() else []:
+        d = json.loads(path.read_text(encoding="utf-8"))
+        out.append({"file": path.name, "started_at_utc": d.get("started_at_utc"),
+                    "status": d.get("status"), "stopped_at": d.get("stopped_at"),
+                    "collector_run_id": d.get("collector_run_id"), "approvals": d.get("approvals", [])})
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:

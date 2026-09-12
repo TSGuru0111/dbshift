@@ -46,7 +46,7 @@ When you make a change:
 | 5 | Blocker gate | ✅ built | [phase-05-blocker-gate.md](phase-05-blocker-gate.md) |
 | 6 | Provision | ✅ built, deployed and verified 2026-09-11 | [phase-06-provision.md](phase-06-provision.md) |
 | 7 | Migrate | ✅ built and run 2026-09-11 — full load, 11/11 tables match | [phase-07-migrate.md](phase-07-migrate.md) |
-| 8 | Validate | ⬜ not started | — |
+| 8 | Validate | ◐ built; first run pending | [phase-08-validate.md](phase-08-validate.md) |
 | 9 | Cutover | ⬜ not started | — |
 | 10 | Report | ◐ partial — the HTML report covers 1–3 | — |
 
