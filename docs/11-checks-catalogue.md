@@ -248,6 +248,13 @@ otherwise — `dba_tables.num_rows` for the `DR$` token tables is `NULL`, and
 firing on a missing statistic would flag every estate whose internals are simply
 unanalysed. Without the grant the dataset is empty and the rule does not fire.
 
+**Proven on 2026-09-12.** With the grant in place, discovery collects 48 datasets
+instead of 47, and the rule reports: *"Text index holds 0 document(s) but
+COMM_LOG has 400000 row(s); searches return nothing until it is rebuilt or
+synced."* 51 rules ran with no rule errors, and recall stayed 7/7 with severity
+exact. The same view shows `DBMIG_REHEARSAL.IX_COMM_NOTES_TEXT` at 400,000
+documents — the same index, rebuilt at import, works.
+
 ## Data quality — 11 rules
 
 Is the data itself fit to move?
