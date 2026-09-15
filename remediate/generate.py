@@ -28,18 +28,97 @@ class GenerationUnavailable(RuntimeError):
     """No source could produce a fix for this finding."""
 
 
-def bedrock_fix(finding: dict, model_tier: str = "reasoning") -> dict:
-    """Not reachable yet. Present so the seam is explicit rather than implied.
+FIX_PROMPT = """You are proposing a remediation for one finding on an Oracle
+database that is about to be migrated to Amazon RDS.
 
-    When it is wired it must return the same shape a template does -- sql,
-    rollback_sql, explain, caveat -- and it passes exactly the same five gates.
-    A model-authored fix gets no shortcut.
+FINDING
+{finding}
+
+Write the SQL that fixes it on the source database, and the SQL that undoes
+that fix. You are proposing, not applying: every statement you write is checked
+against a policy allow-list, parsed, run against a rehearsal copy, and approved
+by a named person before it touches anything. Nothing you return is trusted.
+
+Reply with JSON only, no prose and no code fence:
+{{"sql": "one or more statements, semicolon-separated",
+  "rollback_sql": "the statements that undo it",
+  "explain": "one or two sentences on what this does and why it fixes the finding",
+  "caveat": "what a reviewer must check before approving, or the empty string"}}
+
+Hard rules. Breaking any of these makes the fix useless, because the policy
+gate will reject it and the finding goes to a person anyway:
+- Never DROP, TRUNCATE or DELETE. A remediation that destroys data is not a
+  remediation.
+- Never GRANT or REVOKE. Privileges are a security decision, not a fix.
+- Never write DDL against a table you were not told about.
+- If the finding cannot be fixed safely in SQL, return an empty "sql" and say
+  why in "explain". That is a correct answer, not a failure.
+"""
+
+
+def bedrock_fix(finding: dict, model_tier: str = "reasoning", client=None) -> dict:
+    """Ask the model for a fix. It gets no shortcut through the gates.
+
+    Returns the same shape a template does -- sql, rollback_sql, explain,
+    caveat -- and the caller runs it through exactly the same five gates:
+    static check, policy allow-list, syntax, dry run on the rehearsal copy, and
+    a named approval. A model-authored fix that fails any of them is rejected
+    the way a template's would be.
+
+    Raises GenerationUnavailable when the model cannot answer or answers with
+    something unusable, so the finding routes to a person rather than to a
+    guess.
     """
-    raise GenerationUnavailable(
-        "Bedrock generation is not wired. InvokeModel is currently blocked on this account "
-        "by an AWS Marketplace subscription gap -- see docs/05-aws-services.md. Findings "
-        "without a template are routed to a human until it is available."
-    )
+    import json
+
+    from bedrock.client import BedrockClient, BedrockError
+
+    detail = {
+        "rule_id": finding.get("rule_id"),
+        "title": finding.get("title"),
+        "severity": finding.get("severity"),
+        "remediation_level": finding.get("remediation_level"),
+        "object": finding.get("object_name"),
+        "object_type": finding.get("object_type"),
+        "owner": finding.get("owner"),
+        "detail": finding.get("detail"),
+        "recommendation": finding.get("recommendation"),
+    }
+
+    client = client or BedrockClient()
+    try:
+        reply = client.complete(
+            model_tier, FIX_PROMPT.format(finding=json.dumps(detail, indent=2)),
+            max_tokens=900)
+    except BedrockError as exc:
+        raise GenerationUnavailable(f"the model could not answer: {exc}") from exc
+
+    text = (reply.get("text") or "").strip()
+    if text.startswith("```"):
+        text = text.split("```")[1] if "```" in text[3:] else text[3:]
+        text = text.removeprefix("json").strip()
+    try:
+        parsed = json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except (ValueError, KeyError) as exc:
+        raise GenerationUnavailable(
+            f"the model's reply was not usable JSON: {str(exc)[:80]}") from exc
+
+    sql = (parsed.get("sql") or "").strip()
+    if not sql:
+        # A model saying "this cannot be fixed in SQL" is a correct answer, and
+        # routing it to a person is the right outcome -- not an error to hide.
+        raise GenerationUnavailable(
+            "the model found no safe SQL fix: " + str(parsed.get("explain") or "")[:200])
+
+    return {
+        "sql": sql,
+        "rollback_sql": (parsed.get("rollback_sql") or "").strip() or None,
+        "explain": str(parsed.get("explain") or "").strip()[:600],
+        "caveat": str(parsed.get("caveat") or "").strip()[:600] or None,
+        "source": "bedrock",
+        "model_id": reply.get("model_id"),
+        "tokens": {"in": reply.get("input_tokens"), "out": reply.get("output_tokens")},
+    }
 
 
 MODEL_MODES = ("off", "static", "live")

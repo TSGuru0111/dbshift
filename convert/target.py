@@ -105,7 +105,10 @@ def _column_type(col: dict, owner: str, known_types: set[str]) -> tuple[str, str
     dt = (col.get("data_type") or "").upper()
     if col.get("data_type_owner"):
         if col["data_type_owner"].upper() == owner.upper() and dt in known_types:
-            return f"{owner.lower()}.{dt.lower()}", None
+            # Inside the shadow, a user-defined type column must reference the
+            # shadow's copy: the estate's own type may not exist yet, or may be
+            # a different version from a previous apply.
+            return f"{shadow_schema(owner)}.{dt.lower()}", None
         if col["data_type_owner"].upper() == owner.upper():
             return "TEXT", f"{dt} is not converted in this run, so the shadow has no such type; TEXT placeholder"
         return "TEXT", f"{dt} owned by {col['data_type_owner']} has no shadow; TEXT placeholder"
@@ -125,7 +128,8 @@ def _column_type(col: dict, owner: str, known_types: set[str]) -> tuple[str, str
         return "TEXT", f"{dt}: {exc}; TEXT placeholder"
 
 
-def shadow_statements(inv: dict, owner: str, tables: set[str], type_statements: list[str]) -> tuple[list[str], list[str]]:
+def shadow_statements(inv: dict, owner: str, tables: set[str], type_statements: list[str],
+                      schema: str | None = None) -> tuple[list[str], list[str]]:
     """DDL for the shadow: schema, the converted types, then each referenced table.
 
     A column may only take a user-defined type the shadow itself creates -- the
@@ -138,7 +142,10 @@ def shadow_statements(inv: dict, owner: str, tables: set[str], type_statements: 
         for stmt in type_statements
         for m in re.finditer(r'CREATE\s+(?:TYPE|DOMAIN)\s+(?:"?\w+"?\.)?"?(\w+)"?', stmt, re.IGNORECASE)
     }
-    stmts = [f"CREATE SCHEMA IF NOT EXISTS {owner.lower()}"]
+    # Default to the shadow namespace rather than the estate's own, so a compile
+    # never touches -- or collides with -- what an apply created.
+    schema = schema or shadow_schema(owner)
+    stmts = [f"CREATE SCHEMA IF NOT EXISTS {schema}"]
     stmts += type_statements
     notes: list[str] = []
     for tbl in sorted(tables):
@@ -156,7 +163,7 @@ def shadow_statements(inv: dict, owner: str, tables: set[str], type_statements: 
                 notes.append(f"{tbl}.{c['column_name']}: {note}")
             null = "" if (c.get("nullable") or "Y") == "Y" else " NOT NULL"
             defs.append(f"  {c['column_name'].lower()} {pg}{null}")
-        stmts.append(f"CREATE TABLE {owner.lower()}.{tbl.lower()} (\n" + ",\n".join(defs) + "\n)")
+        stmts.append(f"CREATE TABLE {schema}.{tbl.lower()} (\n" + ",\n".join(defs) + "\n)")
     return stmts, notes
 
 
@@ -186,6 +193,39 @@ def _plpgsql_check(cur, schema: str, created: list[str], trigger_table: str | No
     return {"ran": True, "findings": findings}
 
 
+# The shadow lives in its own namespace, never the estate's.
+#
+# It used to use the estate's schema name, which worked only because nothing was
+# ever applied: the transaction rolled back and the name was free again. With an
+# apply path, the shadow's CREATE TABLE now collides with the real table, and
+# every object is reported BLOCKED -- which reads as "the conversion broke" when
+# the conversion in fact succeeded and was applied.
+#
+# Converted code refers to tables unqualified, so the search_path is what makes
+# them resolve; the shadow schema simply has to be first on it.
+SHADOW_PREFIX = "dbshift_shadow_"
+
+
+def shadow_schema(owner: str) -> str:
+    return SHADOW_PREFIX + owner.lower()
+
+
+def to_shadow(statements: list[str], owner: str) -> list[str]:
+    """Point statements at the shadow schema instead of the estate's own.
+
+    A converted statement says `CREATE TYPE dbmig_app.ty_address ...` because
+    that is where it will really be created. The compile gate must not create it
+    *there*: after an apply, the object already exists and the gate would report
+    a working conversion as REJECTED with "already exists".
+
+    A plain textual qualifier swap is enough here because `rules.py` emits the
+    qualifier itself, in one form, always lower-cased -- these are not
+    arbitrary user SQL.
+    """
+    needle, replacement = owner.lower() + ".", shadow_schema(owner) + "."
+    return [stmt.replace(needle, replacement) for stmt in statements]
+
+
 def compile_all(t: PgTarget, owner: str, shadow: list[str], conversions: list[tuple[str, list[str], list[str]]],
                 type_conversions: list[tuple[str, list[str], list[str]]]) -> dict:
     """Run everything inside one transaction and roll it back.
@@ -195,7 +235,7 @@ def compile_all(t: PgTarget, owner: str, shadow: list[str], conversions: list[tu
     tables with it; then the shadow tables; then everything else in order, so
     a trigger can bind to a function converted just before it."""
     results: dict[str, dict] = {}
-    schema = owner.lower()
+    schema = shadow_schema(owner)
     conn = t.connect()
     try:
         cur = conn.cursor()
@@ -216,6 +256,9 @@ def compile_all(t: PgTarget, owner: str, shadow: list[str], conversions: list[tu
                 cur.execute("SET LOCAL check_function_bodies = on")
 
         def run_one(key, statements, created, trigger_table=None):
+            statements = to_shadow(statements, owner)
+            if trigger_table:
+                trigger_table = trigger_table.replace(owner.lower() + ".", schema + ".")
             cur.execute("SAVEPOINT obj")
             for i, stmt in enumerate(statements, 1):
                 try:

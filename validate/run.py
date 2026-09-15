@@ -137,13 +137,18 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="DBShift Phase 8 -- validate. Read-only.")
     ap.add_argument("--no-checksum", action="store_true", help="skip level 4")
     ap.add_argument("--profile", default=provision_run.DEFAULT_PROFILE)
+    ap.add_argument("--target-engine", default="oracle", choices=["oracle", "postgresql"],
+                    help="which engine the target runs. Must match the Phase 3 decision: it "
+                         "decides how every comparison is built.")
     args = ap.parse_args(argv)
 
     import boto3
     opts = C.Options(collector_password=os.environ.get("DBSHIFT_COLLECTOR_PASSWORD"),
                      collector_user=os.environ.get("DBSHIFT_COLLECTOR_USER", "dbmig_collector"),
                      source_dsn=os.environ.get("DBSHIFT_DSN", "localhost:1521/XEPDB1"),
-                     checksum=not args.no_checksum)
+                     checksum=not args.no_checksum,
+                     target_engine=args.target_engine.upper(),
+                     target_password=os.environ.get("DBSHIFT_PG_PASSWORD"))
 
     def show(e):
         if e["event"] == "estate":

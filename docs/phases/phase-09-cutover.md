@@ -129,7 +129,39 @@ python -m cutover.selftest                               # 39 offline checks
 `validated`. One row per requirement, the approval box only when the gate blocks,
 and the execute box only when the certificate is otherwise ready.
 
+## The CDC lag requirement
+
+> **Added 2026-09-14.** This is the requirement that makes a short outage
+> possible. With replication running, the window is roughly the measured
+> latency plus the time to switch applications over, instead of the time to
+> copy the whole estate.
+
+`requirements.cdc_lag` reads the Phase 7 DMS record and reaches one of five
+answers, each of which refuses to hand out a pass it did not earn:
+
+| Situation | Verdict |
+|---|---|
+| CDC blocked by the gate (archivelog, supplemental logging, keys) | **not applicable** — a full-outage cutover, and it says so |
+| No replication task started | **unmet** |
+| The task is full-load only | **not applicable**, and it says a low-downtime cutover needs `full-load-and-cdc` |
+| Replicating, but CloudWatch has published no latency yet | **unmet** — *never* a pass on an unmeasured lag |
+| Latency past the threshold | **unmet**, naming the seconds and the threshold |
+| Latency inside the threshold | **met**, with the measurement kept as evidence |
+
+A blocked gate wins over any measurement: no latency figure makes CDC possible
+on a source that cannot produce it.
+
+**On `DBMIG_APP` this is `not applicable`** — the source is in NOARCHIVELOG with
+no supplemental logging and two keyless tables, so the cutover needs a full
+outage window. That is the estate's answer, not a gap in the phase.
+
 ## Change log
+
+**2026-09-14 — CDC lag measured, not deferred.** `cdc_lag` previously returned
+"this phase cannot measure replication lag yet" whenever CDC was unblocked. It
+now reads `dms/output/dms_run.json` and measures. Twelve checks added to the
+self-test (39 → 51), covering every way it could wrongly report ready.
+
 
 **2026-09-12 (later) — cut over.** Requirement 1 was cleared exactly as this
 file prescribed: `assess.run --run 6e48d16a`, then sizing, remediate (dry-run

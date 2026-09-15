@@ -92,8 +92,13 @@ def _report(r: dict) -> None:
         for e in with_sql:
             print(f"\n  [{e['status']}] {e['rule_id']} - {e['owner']}.{e['object_name']} "
                   f"({e['remediation_level']}, {e['source']})")
-            print(f"    fix      : {e['sql'][:104]}")
-            print(f"    rollback : {e['rollback_sql'][:104]}")
+            print(f"    fix      : {(e.get('sql') or '')[:104]}")
+            # A fix without a rollback is a real answer, not a bug: the model
+            # may propose something it cannot undo, and a gate then judges it.
+            # Printing it as "none" beats crashing the whole phase on a
+            # missing key, which is what happened the first time a live model
+            # returned one.
+            print(f"    rollback : {(e.get('rollback_sql') or 'none proposed')[:104]}")
             failed = [g for g in e["gates"] if g["status"] != "pass"]
             for g in failed:
                 print(f"    {g['gate']:<9}: {g['status'].upper()} -- {g['detail'][:90]}")

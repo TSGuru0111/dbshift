@@ -1,5 +1,18 @@
 # Phase 8 — Validate
 
+> **Latest update — 2026-09-14 (cross-engine comparison).** Validation now
+> works against a **PostgreSQL** target as well as an Oracle one.
+> `validate/crossengine.py` reduces each row to a **canonical text form** on
+> both sides before hashing, so trailing zeros, CHAR padding, timestamp zones
+> and Oracle's empty-string-is-NULL stop producing false mismatches on data
+> that moved perfectly. Both engines compute the same MD5 over that text — no
+> `ORA_HASH` anywhere. **Proven against the real PostgreSQL**: the generated SQL
+> runs, and the checksum matches Oracle's rendering computed independently in
+> Python. Self-test `validate/selftest_crossengine.py` **32/32**.
+>
+> **Levels 2 and 5 do not run across engines**, and say so rather than
+> reporting differences that are all expected.
+
 > **Latest update — 2026-09-12 (validated).** With the security group pointed at
 > the current operator address, all five levels ran against the live target:
 > **50 named objects present; 72 columns matching on type, length, precision,
@@ -128,6 +141,31 @@ card per level, each finding marked with its verdict, its reason, and its
 evidence.
 
 ## Change log
+
+**2026-09-14 — cross-engine comparison.** `validate/crossengine.py` added:
+canonical text expressions per engine, a shared MD5 checksum, the list of
+differences that are *correct*, and the columns no text form can compare.
+`context.Options` gained `target_engine` and `target_password`; `Ctx` gained
+`cross_engine` and a PostgreSQL connection; `Ctx.both` gained `target_sql` and
+**refuses** a cross-engine call without it, because sending Oracle SQL to
+PostgreSQL turns a syntax error into an apparent data difference.
+
+**What each level does across engines:**
+
+| Level | Oracle target | PostgreSQL target |
+|---|---|---|
+| 1 Objects | every object matched by name | **tables** matched by name; everything else counted, because a package becomes one function per member and DMS migrates no sequences |
+| 2 Structure | columns, constraints, indexes | **not comparable** — the types are deliberately different |
+| 3 Row counts | exact counts | exact counts, target names lower-cased |
+| 4 Data content | `ORA_HASH` both sides | **canonical text, MD5 both sides** |
+| 5 Behaviour | invalid objects, grants, sequences | **not comparable** — Oracle catalogue concepts; Phase 7's residue covers the equivalent |
+
+One bug found by running the SQL rather than reading it: the PostgreSQL numeric
+expression used `to_char` with an `FM` mask, which leaves a **trailing decimal
+point** on a whole number (`10.` for `10`) where Oracle's `TM9` does not. Every
+integer column would have mismatched. A plain `::text` cast after `trim_scale`
+produces exactly what `TM9` does.
+
 
 **2026-09-12 — validated, and a vacuous check found a source defect.** Full run
 as summarised at the top: five levels, zero mismatches, six expected differences.

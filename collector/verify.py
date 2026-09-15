@@ -15,13 +15,46 @@ from .db import Session, connect
 
 # Ground truth from docs/03-source-estate.md, checked against the live database
 # rather than trusted. A mismatch is reported as drift, not silently accepted.
-DOCUMENTED_OBJECTS = 90
-DOCUMENTED_CONSTRAINTS = 51  # post-defect-seeding; "ORDER" adds an inline PK
+# The counts are ground truth for DBMIG_APP only. A second estate has different
+# objects, so comparing it against these numbers reports drift that is not drift
+# -- and a verify that cries wolf on a correct run is worse than no verify.
+# DBSHIFT_DOCUMENTED_OBJECTS / _CONSTRAINTS override them; unset on a non-default
+# estate, the comparison is reported as "not applicable" rather than failed.
+DOCUMENTED_OBJECTS = int(os.environ.get("DBSHIFT_DOCUMENTED_OBJECTS") or 90)
+DOCUMENTED_CONSTRAINTS = int(os.environ.get("DBSHIFT_DOCUMENTED_CONSTRAINTS") or 51)
+
+# Whether those counts describe the estate being verified at all.
+REFERENCE_ESTATE = "DBMIG_APP"
 
 # The reference estate this ships against. Override for any other database --
 # the counts above are ground truth for that estate only, so they are reported
 # as drift rather than treated as universal expectations.
 PRIMARY_SCHEMA = os.environ.get("DBSHIFT_PRIMARY_SCHEMA", "DBMIG_APP")
+
+# True when the documented counts apply: either this is the reference estate, or
+# somebody supplied counts for the one being run.
+COUNTS_APPLY = (
+    PRIMARY_SCHEMA == REFERENCE_ESTATE
+    or bool(os.environ.get("DBSHIFT_DOCUMENTED_OBJECTS"))
+)
+
+
+def _estate_of(run_dir: Path) -> str | None:
+    """Which schema a run collected, from its own manifest."""
+    import json as _json
+    path = run_dir / "manifest.json"
+    if not path.exists():
+        return None
+    manifest = _json.loads(path.read_text(encoding="utf-8"))
+    schemas = (manifest.get("schemas") or {}).get("present") or []
+    return schemas[0] if schemas else None
+
+
+def _recent_runs_for(output_dir: Path, estate: str, count: int) -> list[Path]:
+    """The most recent `count` runs that collected `estate`, oldest first."""
+    everything = _recent_runs(output_dir, 10_000)
+    matching = [d for d in everything if _estate_of(d) == estate]
+    return matching[-count:]
 
 
 def _load(run_dir: Path, name: str) -> dict:
@@ -47,9 +80,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.runs:
         run_dirs = [cfg.output_dir / r for r in args.runs]
     else:
-        run_dirs = _recent_runs(cfg.output_dir, 2)
+        # The two most recent runs **of the same estate**. Taking the last two
+        # unconditionally compares a telco run against a DBMIG_APP one and
+        # reports every difference as drift -- which looks like a broken
+        # collector and is really two different databases.
+        run_dirs = _recent_runs_for(cfg.output_dir, PRIMARY_SCHEMA, 2)
     if len(run_dirs) < 2:
-        raise SystemExit(f"need two runs to compare, found {len(run_dirs)} in {cfg.output_dir}")
+        raise SystemExit(
+            f"need two runs of {PRIMARY_SCHEMA} to compare, found {len(run_dirs)} in "
+            f"{cfg.output_dir}. Run the collector twice against the same estate, or name "
+            "both runs with --run.")
 
     first, second = run_dirs[-2], run_dirs[-1]
     manifests = [json.loads((d / "manifest.json").read_text(encoding="utf-8")) for d in (first, second)]

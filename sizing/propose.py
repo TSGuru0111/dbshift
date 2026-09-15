@@ -82,15 +82,119 @@ def heuristic_proposal(facts: dict) -> dict:
     }
 
 
-def bedrock_proposal(facts: dict, model_id: str) -> dict:
-    """Not reachable yet -- no AWS account. Present so the seam is explicit."""
-    raise NotImplementedError(
-        "Bedrock proposer requires an AWS account and bedrock:InvokeModel. "
-        "Run with the heuristic proposer until then; see docs/05-aws-services.md."
-    )
+PROMPT = """You are sizing an Oracle database for migration to Amazon RDS.
+
+Propose an edition, an instance class and storage. You are proposing, not
+deciding: a deterministic rules engine checks every value you give and overrides
+you where the evidence disagrees. Say what the evidence supports and no more.
+
+EVIDENCE
+{evidence}
+
+INSTANCE CLASSES AVAILABLE
+{classes}
+
+Reply with JSON only, no prose and no code fence:
+{{"edition": "EE" or "SE2",
+  "apparent_forcing_features": ["exact feature names from the evidence that you
+      believe force Enterprise Edition; [] if none"],
+  "instance_class": "one of the classes listed above",
+  "storage_gb": integer,
+  "rationale": "two or three sentences: what the numbers are and what they imply"}}
+
+Rules you must follow:
+- Cite a feature as edition-forcing only if it appears in the evidence.
+- Do not invent an instance class. Choose from the list.
+- Storage must cover the current segment size with room to grow.
+"""
 
 
-def propose(facts: dict, use_bedrock: bool = False, model_id: str | None = None) -> dict:
+def bedrock_proposal(facts: dict, model_id: str, client=None) -> dict:
+    """Ask the model to size the target. The rules engine still decides.
+
+    This is the one place in the project where a model makes a judgement call
+    rather than narrating a computed fact, and the whole design around it
+    exists to bound that: `sizing/validate.py` recomputes every value from the
+    evidence and records each disagreement as an OVERRIDE. A wrong answer here
+    is caught and logged, never silently used.
+
+    Anything the model gets structurally wrong -- a class that does not exist,
+    a malformed reply -- falls back to the heuristic rather than failing the
+    phase, and the fallback is visible in `source`.
+    """
+    import json
+
+    from bedrock.client import BedrockClient, BedrockError
+
+    evidence = {
+        "segment_gb": facts["segment_gb"],
+        "table_count": facts["table_count"],
+        "object_count": facts.get("object_count"),
+        "character_set": facts.get("character_set"),
+        "features_currently_used": [f["name"] for f in facts.get("features_detected", [])
+                                    if f.get("currently_used") == "TRUE"],
+        "structural": facts.get("structural"),
+        "utilization": {"basis": (facts.get("utilization") or {}).get("basis"),
+                        "reason": (facts.get("utilization") or {}).get("reason")},
+    }
+    catalogue = [f"{i['class']} ({i['vcpu']} vCPU, {i['memory_gib']} GiB)"
+                 for i in instances.CATALOGUE]
+
+    client = client or BedrockClient()
+    tier = "reasoning"
+    try:
+        reply = client.complete(
+            tier,
+            PROMPT.format(evidence=json.dumps(evidence, indent=2),
+                          classes="\n".join(catalogue)),
+            max_tokens=700)
+    except BedrockError as exc:
+        out = heuristic_proposal(facts)
+        out["source"] = "heuristic_after_model_error"
+        out["model_error"] = str(exc)[:200]
+        return out
+
+    # complete() returns a record, not a string: the text plus the model id and
+    # token counts, so the proposal can say which model actually answered.
+    text = (reply.get("text") or "").strip()
+    # A model sometimes wraps JSON in a fence however firmly it is told not to.
+    if text.startswith("```"):
+        text = text.split("```")[1] if "```" in text[3:] else text[3:]
+        text = text.removeprefix("json").strip()
+    try:
+        parsed = json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except (ValueError, KeyError) as exc:
+        out = heuristic_proposal(facts)
+        out["source"] = "heuristic_after_unparseable_reply"
+        out["model_error"] = f"reply was not JSON: {str(exc)[:80]}"
+        return out
+
+    # Structural validation only. Whether the *answer* is right is validate.py's
+    # job, and it is better at it than any check here would be.
+    known = {i["class"] for i in instances.CATALOGUE}
+    if parsed.get("instance_class") not in known:
+        out = heuristic_proposal(facts)
+        out["source"] = "heuristic_after_unknown_class"
+        out["model_error"] = f"proposed {parsed.get('instance_class')!r}, which is not a class"
+        return out
+
+    pick = instances.get(parsed["instance_class"])
+    return {
+        "source": "bedrock",
+        "model_id": reply.get("model_id"),
+        "tokens": {"in": reply.get("input_tokens"), "out": reply.get("output_tokens")},
+        "edition": parsed.get("edition") if parsed.get("edition") in ("EE", "SE2") else "SE2",
+        "apparent_forcing_features": list(parsed.get("apparent_forcing_features") or []),
+        "instance_class": pick["class"],
+        "storage_gb": int(parsed.get("storage_gb") or policy.storage_floor_gb(facts["segment_bytes"])),
+        "sizing_basis": {"basis": (facts.get("utilization") or {}).get("basis"),
+                         "percentile": None, "headroom": None},
+        "rationale": str(parsed.get("rationale") or "").strip()[:800],
+    }
+
+
+def propose(facts: dict, use_bedrock: bool = False, model_id: str | None = None,
+            client=None) -> dict:
     if use_bedrock:
-        return bedrock_proposal(facts, model_id or "")
+        return bedrock_proposal(facts, model_id or "", client=client)
     return heuristic_proposal(facts)

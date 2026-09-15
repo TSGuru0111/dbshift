@@ -142,8 +142,15 @@ def build(inv: dict, *, model_mode: str = "static", pg_target: target_mod.PgTarg
                               for e in group if e["object_type"] == "TYPE"]
                 other = [(_key(e), e["conversion"]["statements"], e["conversion"]["creates"])
                          for e in group if e["object_type"] != "TYPE"]
+                # The type DDL is rewritten onto the shadow schema before the
+                # shadow tables are built from it, so a column typed as
+                # `dbmig_app.ty_address` becomes the shadow's own copy. Without
+                # this the shadow table references a type that the compile gate
+                # deliberately did not create in that schema.
                 shadow, notes = target_mod.shadow_statements(
-                    inv, owner, referenced, [s for _, stmts, _ in type_convs for s in stmts])
+                    inv, owner, referenced,
+                    target_mod.to_shadow(
+                        [s for _, stmts, _ in type_convs for s in stmts], owner))
                 shadow_notes += notes
                 try:
                     compile_results.update(target_mod.compile_all(pg_target, owner, shadow, other, type_convs))
@@ -201,6 +208,11 @@ def build(inv: dict, *, model_mode: str = "static", pg_target: target_mod.PgTarg
         "model_generation_enabled": model_mode == "live",
         "static_outputs_used": sum(1 for e in entries if e["source"] == "static_fixture"),
         "rule_version": rules.RULE_VERSION,
+        # Who approved this conversion. The approval gate already uses it per
+        # object, but the plan itself must carry it too: the apply path reads it
+        # to record who approved what was applied, and an apply under a
+        # different identity than the approval is a fact worth keeping.
+        "approved_by": approved_by,
         "pg_target": pg_info,
         "shadow_notes": shadow_notes,
         "totals": totals,

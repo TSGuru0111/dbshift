@@ -15,6 +15,7 @@ if __package__ in (None, ""):
 from assess import loader
 
 from . import facts as facts_mod
+from . import target as target_mod
 from . import propose as propose_mod
 from . import utilization as utilization_mod
 from . import validate as validate_mod
@@ -42,8 +43,17 @@ def execute(
     use_bedrock: bool = False,
     model_id: str | None = None,
     on_event=None,
+    engine: str | None = None,
+    chosen_by: str | None = None,
+    conversion: dict | None = None,
 ) -> dict:
-    """Produce the size and edition decision for one collector run.
+    """Produce the target and sizing decision for one collector run.
+
+    Two paths are possible -- RDS for Oracle and RDS for PostgreSQL -- and the
+    client chooses between them. This function assesses both from evidence,
+    then sizes whichever was chosen. With no `engine` it sizes for Oracle, the
+    homogeneous default, while still publishing the assessment of both, so the
+    choice can be made from the output rather than before it.
 
     Shared by the CLI and the console so both take the same path. `on_event`
     receives stage dicts, which drive the live view in the UI.
@@ -71,12 +81,25 @@ def execute(
         f"utilization {facts['utilization']['basis']}",
     )
 
+    emit("target", "assessing both migration paths against the estate")
+    assessment = target_mod.assess(facts, conversion=conversion)
+    pg = assessment["paths"][target_mod.POSTGRESQL]
+    emit("target_done",
+         ("PostgreSQL blocked by " + ", ".join(b["subject"] for b in pg["blockers"]))
+         if not pg["possible"] else
+         f"both paths open; PostgreSQL carries {pg['effort_points']} effort point(s)")
+
+    chosen = target_mod.choose(engine or target_mod.ORACLE, assessment, chosen_by=chosen_by)
+    emit("target_chosen", f"{chosen['label']}"
+         + ("" if chosen["agreed_with_recommendation"] is not False
+            else " (differs from the recommendation)"))
+
     emit("propose", "proposing edition, instance class and storage")
     proposal = propose_mod.propose(facts, use_bedrock=use_bedrock, model_id=model_id)
     emit("proposed", f"{proposal['edition']} / {proposal['instance_class']} ({proposal['source']})")
 
     emit("validate", "running the rules engine against the proposal")
-    decision = validate_mod.validate(proposal, facts)
+    decision = validate_mod.validate(proposal, facts, engine=chosen["target"])
     emit(
         "validated",
         f"{decision['override_count']} override(s), {decision['warning_count']} warning(s)",
@@ -86,6 +109,8 @@ def execute(
         "collector_run_id": loaded["collector_run_id"],
         "decided_at_utc": datetime.now(timezone.utc).isoformat(),
         "facts": facts,
+        "target_assessment": assessment,
+        "target": chosen,
         "proposal": proposal,
         "decision": decision,
     }
@@ -115,6 +140,20 @@ def main(argv: list[str] | None = None) -> int:
         help="CSV of measured utilization (AWS OLA / DB OLA, Migration Evaluator, AWR, "
         "vendor monitoring). See sizing/samples/utilization_example.csv",
     )
+    parser.add_argument(
+        "--engine", type=str, default=None, choices=[t.lower() for t in target_mod.TARGETS],
+        help="migration target: oracle (RDS for Oracle, homogeneous) or postgresql "
+             "(RDS for PostgreSQL, heterogeneous). Default oracle. Both paths are "
+             "assessed either way; this decides which one is sized.")
+    parser.add_argument(
+        "--chosen-by", type=str, default=None,
+        help="who chose the target. A target decides what every later phase provisions "
+             "and migrates into, so a non-default choice should name a person.")
+    parser.add_argument(
+        "--conversion", type=Path, default=None,
+        help="convert/output/conversion_plan.json from Phase 4b. Supplies measured "
+             "stored-code conversion effort to the PostgreSQL assessment instead of "
+             "leaving it unknown.")
     parser.add_argument("--bedrock", action="store_true", help="use the Bedrock proposer")
     parser.add_argument("--model-id", type=str, default=None)
     parser.add_argument("--quiet", action="store_true")
@@ -126,6 +165,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     run_dir = args.collector_output / args.run if args.run else _latest_run(args.collector_output)
+
+    conversion = None
+    if args.conversion:
+        if not args.conversion.exists():
+            raise SystemExit(f"no conversion plan at {args.conversion}")
+        conversion = json.loads(args.conversion.read_text(encoding="utf-8"))
 
     measured = None
     if args.utilization:
@@ -147,6 +192,9 @@ def main(argv: list[str] | None = None) -> int:
         measured=measured,
         use_bedrock=args.bedrock,
         model_id=args.model_id,
+        engine=args.engine.upper() if args.engine else None,
+        chosen_by=args.chosen_by,
+        conversion=conversion,
     )
 
     _report(out)
@@ -162,6 +210,26 @@ def _report(out: dict) -> None:
           f"({f['total_table_count']} incl. internals), {f['object_count']} objects, "
           f"{f['character_set']}")
 
+    a = out.get("target_assessment")
+    if a:
+        print("\nMIGRATION PATHS  (rules only; the client chooses)")
+        for name in target_mod.TARGETS:
+            path = a["paths"][name]
+            head = "OPEN " if path["possible"] else "BLOCK"
+            print(f"  [{head}] {path['label']}"
+                  + (f"  -- {path['effort_points']} effort point(s)" if path["possible"] else ""))
+            for b in path["blockers"]:
+                print(f"          blocker: {b['subject']} -- {b['detail']}")
+            for e in path["effort"]:
+                print(f"          effort:  {e['subject']}")
+        rec = a["recommended"]
+        print(f"  recommended    : {rec['target'] or 'no recommendation'} ({rec['confidence']})")
+        print(f"                   {rec['reason']}")
+        t = out["target"]
+        print(f"  chosen         : {t['label']}"
+              + (f" by {t['chosen_by']}" if t["chosen_by"] else "")
+              + ("" if t["agreed_with_recommendation"] is not False
+                 else "  [differs from the recommendation]"))
     print(f"\nPROPOSAL  (source: {p['source']}{', model ' + p['model_id'] if p['model_id'] else ''})")
     print(f"  edition        : {p['edition']}")
     print(f"  instance       : {p['instance_class']}")
@@ -174,8 +242,11 @@ def _report(out: dict) -> None:
         print(f"  [{mark}] {c['check']}")
         print(f"         {c['detail']}")
 
-    print(f"\nDECISION")
-    print(f"  edition        : {d['edition']} ({d['licence_model']})")
+    print(f"\nDECISION  ({d.get('engine_label', 'Amazon RDS for Oracle')})")
+    if d.get("edition"):
+        print(f"  edition        : {d['edition']} ({d['licence_model']})")
+    else:
+        print("  edition        : none -- PostgreSQL is open source, nothing to license")
     print(f"  instance       : {d['instance_class']}  {d['vcpu']} vCPU / {d['memory_gib']} GiB")
     print(f"  storage        : {d['storage_gb']} GB {d['storage_type']}")
     print(f"  character set  : {d['character_set']}  (target must be created with this)")

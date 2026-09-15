@@ -38,7 +38,18 @@ def gate_allows(gate: dict) -> dict:
     return _c("gate_allows_provision", PASS, f"verdict {gate['verdict']}; provision clear")
 
 
-def version_direction(facts: dict) -> dict:
+def version_direction(facts: dict, engine: str = "oracle-ee") -> dict:
+    """Whether the target runs an older major version than the source.
+
+    Only meaningful on the homogeneous path. Oracle 21c to Oracle 19c is a
+    downgrade with real consequences for the export; Oracle 19c to PostgreSQL 16
+    is not a version comparison at all -- the engines have unrelated numbering,
+    and Phase 4b's compile is what proves the code fits.
+    """
+    if engine == policy.PG_ENGINE:
+        return _c("version_direction", PASS,
+                  f"target is PostgreSQL {policy.PG_TARGET_MAJOR}; source and target versions are "
+                  "not comparable across engines. Phase 4b's compile is the real check.")
     src = (facts.get("version") or "").split(".")[0]
     if not src:
         return _c("version_direction", WARN, "source version unknown", "Re-run discovery.")
@@ -61,7 +72,8 @@ def aws_checks(session, *, engine: str, licence: str, instance_class: str, stora
         checks.append(_c("aws_identity", PASS, f"account {ident['Account']} as {ident['Arn'].split('/')[-1]}"))
     except Exception as exc:  # noqa: BLE001
         checks.append(_c("aws_identity", BLOCKED, str(exc).splitlines()[0],
-                         "Refresh the session credentials in the dbshift-static profile."))
+                         f"Refresh the session credentials in the "
+                         f"{session.profile_name or 'default'} profile."))
         for n in ("engine_version", "network", "quota", "stack_name_free", "budget"):
             checks.append(_c(n, BLOCKED, "no valid credentials"))
         return checks, resolved
@@ -71,6 +83,7 @@ def aws_checks(session, *, engine: str, licence: str, instance_class: str, stora
     ec2 = session.client("ec2", region_name=region)
 
     # engine version: latest orderable, standard patch line only
+    major = policy.PG_TARGET_MAJOR if engine == policy.PG_ENGINE else policy.TARGET_MAJOR
     try:
         versions = set()
         for page in rds.get_paginator("describe_orderable_db_instance_options").paginate(
@@ -78,7 +91,7 @@ def aws_checks(session, *, engine: str, licence: str, instance_class: str, stora
             for o in page["OrderableDBInstanceOptions"]:
                 v = o["EngineVersion"]
                 # .spb is the Spatial Patch Bundle line -- a specialised build, not the default.
-                if o.get("StorageType") == storage_type and v.startswith(policy.TARGET_MAJOR + ".") \
+                if o.get("StorageType") == storage_type and v.startswith(major + ".") \
                         and ".spb" not in v:
                     versions.add(v)
         if versions:
@@ -88,7 +101,7 @@ def aws_checks(session, *, engine: str, licence: str, instance_class: str, stora
                              f"latest {resolved['engine_version']} ({len(versions)} versions)"))
         else:
             checks.append(_c("engine_version", FAIL,
-                             f"no {policy.TARGET_MAJOR}c version orderable for {instance_class} "
+                             f"no major {major} version orderable for {instance_class} "
                              f"{engine} {licence} on {storage_type} in {region}",
                              "Pick another class in Phase 3, or another region."))
     except Exception as exc:  # noqa: BLE001

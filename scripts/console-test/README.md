@@ -10,9 +10,10 @@ npm install                                   # once; pulls playwright-core
 $env:DBSHIFT_COLLECTOR_PASSWORD = '...'       # the read-only collector account
 $env:DBSHIFT_PG_PASSWORD = 'dbshift-local-only'  # the Docker PostgreSQL, if not default
 npm test                                      # console must be up on 127.0.0.1:8765
+node drive_paths.js                           # the Phase 3 two-path chooser
 ```
 
-Screenshots land in `shots/`. Set `DBSHIFT_URL` to point at another port.
+Screenshots land in `shots/` and `shots-paths/`. Set `DBSHIFT_URL` to point at another port.
 
 The same browser is available interactively to Claude Code through the
 Playwright MCP server registered in the repo's `.mcp.json`

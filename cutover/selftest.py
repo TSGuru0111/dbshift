@@ -134,6 +134,49 @@ def main() -> int:
     check("cdc without blockers is unmet, not a free pass",
           R.cdc_lag({"by_phase": {}})["status"], R.UNMET)
 
+    # --- CDC lag measured from a real DMS run -----------------------------------
+    # This is the requirement that makes a short outage possible, so every way it
+    # could wrongly say "ready" is worth a check.
+    open_gate = {"by_phase": {}}
+
+    def dms(migration_type="full-load-and-cdc", cdc=None, task=True):
+        rec = {"plan": {"migration_type": migration_type}}
+        if task:
+            rec["task_arn"] = "arn:aws:dms:...:task/x"
+        if cdc is not None:
+            rec["cdc"] = cdc
+        return rec
+
+    caught_up = R.cdc_lag(open_gate, dms(cdc={"worst_seconds": 4, "threshold_seconds": 30,
+                                             "source_seconds": 4, "target_seconds": 2}))
+    check("lag inside the threshold is met", caught_up["status"], R.MET)
+    check("the measured lag is stated", "4s behind" in caught_up["detail"], True)
+    check("the lag is kept as evidence", caught_up["evidence"]["latency_seconds"], 4)
+
+    behind = R.cdc_lag(open_gate, dms(cdc={"worst_seconds": 120, "threshold_seconds": 30}))
+    check("lag past the threshold refuses", behind["status"], R.UNMET)
+    check("it says how far behind", "120s behind" in behind["detail"], True)
+    check("it explains what the lag means", "data the target does not have" in behind["remedy"], True)
+
+    check("no replication task at all is unmet",
+          R.cdc_lag(open_gate, None)["status"], R.UNMET)
+    check("a full-load-only task is not applicable",
+          R.cdc_lag(open_gate, dms(migration_type="full-load"))["status"], R.NOT_APPLICABLE)
+    check("and it says a low-downtime cutover needs CDC",
+          "full-load-and-cdc" in R.cdc_lag(open_gate, dms(migration_type="full-load"))["remedy"],
+          True)
+
+    no_metric = R.cdc_lag(open_gate, dms(cdc={}))
+    check("replicating but unmeasured is unmet, never met", no_metric["status"], R.UNMET)
+    check("and it refuses to cut over on an unmeasured lag",
+          "do not cut over on an unmeasured lag" in no_metric["remedy"], True)
+
+    # A blocked gate still wins: no amount of measured latency makes CDC possible
+    # on a source that cannot produce it.
+    check("a blocked gate overrides any measurement",
+          R.cdc_lag(recs["gate"], dms(cdc={"worst_seconds": 1, "threshold_seconds": 30}))["status"],
+          R.NOT_APPLICABLE)
+
     # --- the target -------------------------------------------------------------
     check("stopped target refuses", R.target_ready({"status": "stopped"})["status"], R.UNMET)
     check("unknown target refuses", R.target_ready({"status": None})["status"], R.UNMET)

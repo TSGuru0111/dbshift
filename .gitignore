@@ -44,3 +44,4 @@ blocker/output/
 
 # Second-estate run artifacts (scripts/telco-source/run_phases.ps1)
 telco-output/
+dms/output/

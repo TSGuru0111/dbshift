@@ -44,30 +44,52 @@ carries rollback SQL or it is rejected at generation time.
 `static check -> policy check -> syntax check -> dry run on rehearsal sandbox
 -> approval -> production`
 
+## Two targets, chosen by the client
+
+**Decision 2026-09-14 — RDS for PostgreSQL is a supported target.** This
+reverses the earlier position that PostgreSQL was a capability only. There are
+now two paths, and Phase 3 makes the choice explicit:
+
+| Path | Target | Kind |
+|---|---|---|
+| Homogeneous | Amazon RDS for Oracle | Built, proven, cut over 2026-09-12 |
+| Heterogeneous | Amazon RDS for PostgreSQL | Phase 3 decides it; 4b converts the code; 6–9 in progress |
+
+**Aurora is still out of scope, and RDS for PostgreSQL is not Aurora.** They are
+different products. The heterogeneous path targets the plain managed instance.
+
+The consequences run through every later phase, and none of them is optional:
+
+- **Data movement changes engine.** Data Pump writes an Oracle-only format, so
+  the heterogeneous path cannot use it. DMS is the only route, and a
+  replication instance bills for as long as it runs.
+- **Table, index and constraint DDL must be converted.** Today the report says
+  truthfully that DBShift does not convert table DDL because DMS Schema
+  Conversion does it. With a real PostgreSQL target, that is a gap to close.
+- **Phase 4b must gain an apply path.** It compiles into a throwaway container
+  and rolls everything back, which was right when there was no target. With one,
+  applying converted code is a safety change that needs its own approval gate.
+- **Validation becomes cross-engine.** Comparing Oracle to PostgreSQL is not
+  comparing Oracle to Oracle: empty string versus NULL, date precision, number
+  scale and identifier casing all differ, so checksums need normalisation.
+
 ## Deliberately out of scope
 
 Do **not** re-add these without an explicit decision:
 
-- **Aurora PostgreSQL** — would reintroduce schema conversion
-- **Amazon Redshift** — source is OLTP; nothing to route
-- **Oracle Database@AWS** — no RAC/Exadata source to migrate
-- **DMS Schema Conversion** — same engine both sides converts nothing
+- **Aurora PostgreSQL / Aurora MySQL** — clustered products with their own
+  sizing and failover model; RDS for PostgreSQL covers the heterogeneous path
+- **Amazon Redshift** — source is OLTP; nothing to route. Redshift is for
+  analytical workloads only, detected by star schemas, fact tables and ETL
+  patterns — never recommended because a database is merely large
+- **Oracle Database@AWS** — no RAC/Exadata source to migrate. An estate that
+  depends on RAC blocks *both* supported paths, and `sizing/target.py` says so
+- **SQL Server as a source** — one source engine
 - **Bedrock Knowledge Base** — beta uses static prompt context instead
 
-Keep `assessment.object_mapping` in the metadata model even though nothing maps
-in a homogeneous migration. It costs nothing and is what allows a heterogeneous
-target to be added later without reworking the schema.
-
-**Decision 2026-09-12 — PL/SQL conversion is in scope as a capability, not as
-a target.** Aurora PostgreSQL stays off the list above: nothing provisions it,
-nothing migrates into it. But the one thing every heterogeneous path needs and
-AWS's own Oracle Modernization Accelerator lists as manual — stored procedures,
-functions, packages and triggers — is now built as **Phase 4b**
-(`docs/phases/phase-04b-convert.md`): PL/SQL to PL/pgSQL through the same
-rules-then-model-then-person seam as Phase 4, gated five ways including a real
-compile on PostgreSQL inside a rolled-back transaction. It is target-agnostic
-and applies nothing. Adding the target itself remains a separate, explicit
-decision.
+Keep `assessment.object_mapping` in the metadata model. On the heterogeneous
+path it is no longer theoretical: it is where source-to-target object mapping
+belongs.
 
 ## Known cost traps
 

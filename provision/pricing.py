@@ -46,12 +46,22 @@ def lookup(price_file: Path, *, region: str, engine: str, licence: str, instance
         # exactly why it has to be excluded by name rather than by price.
         if a.get("deploymentModel") == "Custom":
             continue
-        if (p.get("productFamily") == "Database Instance" and a.get("instanceType") == instance_class
-                and a.get("databaseEngine") == "Oracle" and a.get("databaseEdition") == EDITION[engine]
-                and a.get("licenseModel") == LICENCE[licence]):
+        # PostgreSQL has no edition and no licence model in the offer file --
+        # `licenseModel` is "No license required" -- so matching on EDITION and
+        # LICENCE the way the Oracle branch does would find nothing and the
+        # deploy would be refused for want of a price that is right there.
+        if engine == "postgres":
+            matches_engine = (a.get("databaseEngine") == "PostgreSQL"
+                              and not a.get("databaseEdition"))
+        else:
+            matches_engine = (a.get("databaseEngine") == "Oracle"
+                              and a.get("databaseEdition") == EDITION[engine]
+                              and a.get("licenseModel") == LICENCE[licence])
+        if (p.get("productFamily") == "Database Instance"
+                and a.get("instanceType") == instance_class and matches_engine):
             instance += [{**x, "sku": sku, "operation": a.get("operation")} for x in _on_demand(terms, sku)]
         elif (p.get("productFamily") == "Database Storage" and a.get("volumeType") == VOLUME[storage_type]
-              and a.get("databaseEngine") in ("Oracle", "Any")):
+              and a.get("databaseEngine") in ("Oracle", "PostgreSQL", "Any")):
             storage += [{**x, "sku": sku, "operation": a.get("operation")} for x in _on_demand(terms, sku)]
 
     # Storage is listed once per engine code. Keep the line for the same engine
@@ -66,7 +76,7 @@ def lookup(price_file: Path, *, region: str, engine: str, licence: str, instance
             "instance_matches": instance, "storage_matches": storage}
 
 
-def estimate(prices: dict, storage_gb: int) -> dict | None:
+def estimate(prices: dict, storage_gb: int, *, oracle: bool = True) -> dict | None:
     """Cost of running the target, or None when the price list was ambiguous."""
     inst = [m for m in prices["instance_matches"] if m["unit"] == "Hrs"]
     stor = [m for m in prices["storage_matches"] if m["unit"] == "GB-Mo"]
@@ -80,6 +90,9 @@ def estimate(prices: dict, storage_gb: int) -> dict | None:
         "per_hour_all_in": round(hourly + storage_month / 730, 4),
         "per_8h_day": round(hourly * 8 + storage_month / 30, 2),
         "if_left_running_30_days": round(hourly * 730 + storage_month, 2),
-        "excludes": "Oracle licences (BYOL: you hold them), data transfer, S3, backups beyond "
-                    "the free allowance",
+        # What the hourly rate does not cover, which differs by engine: on
+        # PostgreSQL there is no licence to exclude, and saying "Oracle licences"
+        # there reads as a cost the client does not have.
+        "excludes": (("Oracle licences (BYOL: you hold them), " if oracle else "")
+                     + "data transfer, S3, backups beyond the free allowance"),
     }

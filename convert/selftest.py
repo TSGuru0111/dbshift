@@ -180,7 +180,12 @@ def main() -> int:
     c("shadow: the placeholder is noted", any("HOME_ADDRESS" in n and "not converted" in n for n in notes))
     stmts, notes = target_mod.shadow_statements(sh_inv, OWNER, {"CUSTOMER"},
                                                 ["CREATE TYPE dbmig_app.ty_address AS (street VARCHAR(80));"])
-    c("shadow: converted type is used by the table", any("home_address dbmig_app.ty_address" in st for st in stmts) and not notes)
+    # The shadow qualifies with its *own* schema, not the estate's: once an
+    # apply has created the real type, reusing the estate name would collide and
+    # report a working conversion as REJECTED.
+    c("shadow: converted type is used by the table",
+      any("home_address dbshift_shadow_dbmig_app.ty_address" in st for st in stmts) and not notes,
+      next((st for st in stmts if "home_address" in st), ""))
     c("shadow: a failed scaffold blocks rather than rejects",
       gates.compile_check({"ok": False, "shadow_failed": True, "message": "type x does not exist"}, "pg")["status"] == gates.BLOCKED)
 

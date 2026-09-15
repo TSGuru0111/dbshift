@@ -24,7 +24,9 @@ if __package__ in (None, ""):
 from . import policy, preflight, pricing, records, render
 
 OUTPUT = Path(__file__).resolve().parent / "output"
-DEFAULT_PROFILE = os.environ.get("DBSHIFT_AWS_PROFILE", "dbshift-static")
+DEFAULT_PROFILE = (os.environ.get("DBSHIFT_AWS_PROFILE")
+                   or os.environ.get("AWS_PROFILE")
+                   or "dbshift-bedrock")
 # AWS's public RDS price list for the region, downloaded by hand. It lives in the
 # gitignored output folder: prices change, and a committed copy would go stale.
 PRICE_FILE = OUTPUT / f"rds_{policy.REGION}_prices.json"
@@ -54,12 +56,18 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
     run_id = recs["sizing"]["collector_run_id"]
     facts = records.source_facts(run_id)
     estate = records.estate_of(recs["assessment"])
-    stack = render.stack_name_for(estate)
-    engine, licence = policy.ENGINE[recs["sizing"]["decision"]["edition"]]
+    # stack name needs the engine, which is decided just below
     d = recs["sizing"]["decision"]
+    # Phase 3 decides the path. On PostgreSQL there is no edition to map, so the
+    # engine and licence come from policy directly rather than from an edition.
+    if d.get("engine") == "POSTGRESQL":
+        engine, licence = policy.PG_ENGINE, policy.PG_LICENCE
+    else:
+        engine, licence = policy.ENGINE[d["edition"]]
+    stack = render.stack_name_for(estate, engine)
 
     checks.append(preflight.gate_allows(recs["gate"]))
-    checks.append(preflight.version_direction(facts))
+    checks.append(preflight.version_direction(facts, engine))
     emit("gate", checks[-2]["detail"])
 
     resolved = {}
@@ -89,7 +97,14 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
         prices = pricing.lookup(price_file, region=policy.REGION, engine=engine, licence=licence,
                                 instance_class=d["instance_class"], storage_type=d["storage_type"],
                                 multi_az=policy.MULTI_AZ)
-        cost = {"prices": prices, "estimate": pricing.estimate(prices, d["storage_gb"])}
+        cost = {"prices": prices,
+                "estimate": pricing.estimate(prices, d["storage_gb"],
+                                             oracle=engine != policy.PG_ENGINE)}
+    elif rendered:
+        cost = {"prices": None, "estimate": None,
+                "unavailable": "No price file was supplied, so no estimate is shown. A deploy is "
+                               "never offered without a stated cost -- pass --price-file with the "
+                               "AWS offer file for this region."}
 
     plan = {
         "rendered_at_utc": now.isoformat(),
@@ -164,11 +179,16 @@ def _report(p: dict) -> None:
             print(f"  one 8-hour day  ${e['per_8h_day']}")
             print(f"  left running    ${e['if_left_running_30_days']} for 30 days")
             print(f"  excludes        {e['excludes']}")
+        elif c.get("unavailable"):
+            print("\nCOST: " + c["unavailable"])
         else:
             print(f"\nCOST: price list ambiguous -- {len(c['prices']['instance_matches'])} instance "
                   f"and {len(c['prices']['storage_matches'])} storage matches; not guessing")
     print(f"\nready to offer a deploy: {p['ready']}")
-    print(f"deploy: {p['deploy']}")
+    # `deploy` is only present once a plan is deployable; a refused plan has
+    # no command to print, and a KeyError hid the refusal behind a traceback.
+    if p.get("deploy"):
+        print(f"deploy: {p['deploy']}")
 
 
 if __name__ == "__main__":

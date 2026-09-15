@@ -102,6 +102,24 @@ main{max-width:1180px;margin:0 auto;padding:32px 24px 96px}
 .panel{background:var(--surface);border:1px solid var(--rule);border-radius:4px;box-shadow:var(--shadow)}
 .pad{padding:24px}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.pathpick{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pathopt{text-align:left;background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+  padding:13px 15px;cursor:pointer;font:inherit;color:inherit;transition:border-color .12s,box-shadow .12s}
+.pathopt:hover:not(:disabled){border-color:var(--accent)}
+.pathopt[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.pathopt:disabled{cursor:not-allowed;opacity:.62}
+.pathopt .n{font-family:Archivo,sans-serif;font-size:15px;font-weight:700;letter-spacing:-.01em}
+.pathopt .s{font-size:13px;color:var(--ink-2);margin-top:4px}
+.pathopt .m{font-size:12.5px;color:var(--ink-3);margin-top:7px}
+.pathopt .m b{color:var(--bad);font-weight:600}
+@media (max-width:720px){.pathpick{grid-template-columns:1fr}}
+/* The evidence list belongs to the option above it, so it gets a surface of
+   its own rather than inheriting the accordion's rule-coloured gap fill --
+   on a wide block that read as a disabled panel. */
+#pathEvidence .acc{border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+#pathEvidence .acc details{background:var(--surface)}
+#pathRec{margin-top:12px}
+#pathRec .note{margin-bottom:0}
 .split2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .split2 .field{margin-bottom:0}
 @media(max-width:860px){.split{grid-template-columns:1fr}.pad{padding:20px}}
@@ -284,6 +302,7 @@ tr:last-child td{border-bottom:none}
 .note.info{background:var(--accent-soft);color:var(--accent-ink)}
 .note.bad{background:var(--bad-soft);color:var(--bad)}
 .note.warn{background:var(--warn-soft);color:var(--warn)}
+.note.ok{background:var(--ok-soft);color:var(--ok)}
 .empty{padding:40px 24px;text-align:center;color:var(--ink-3);font-size:14px}
 /* Sits above the content: a long findings list should not require scrolling to
    the bottom to move on. */
@@ -420,10 +439,11 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-target">
     <div class="head">
       <h2>Target decision</h2>
-      <p>The one place a model is allowed a judgement call. A proposer suggests an edition,
-         instance class and storage; a deterministic rules engine then checks it and
-         <b>overrules it where they disagree</b> — and the disagreement is recorded rather than
-         quietly reconciled.</p>
+      <p>Two paths are possible and <b>the client chooses</b>. Keep Oracle on Amazon RDS, or
+         leave Oracle for PostgreSQL and end the licence. The rules assess both from the
+         estate's own evidence: what would <b>block</b> each path outright, and what would
+         <b>cost effort</b>. Then a proposer suggests an instance class and storage, and a
+         deterministic rules engine <b>overrules it where they disagree</b>.</p>
     </div>
 
     <div class="panel pad" style="margin-bottom:16px">
@@ -446,6 +466,18 @@ tr:last-child td{border-bottom:none}
       <div id="utilSample" style="display:none" class="mt-s"></div>
     </div>
 
+    <div class="panel pad" style="margin-bottom:16px">
+      <div class="eyebrow">Migration path</div>
+      <p style="font-size:13.5px;color:var(--ink-2);margin:6px 0 12px;max-width:80ch">
+        A <b>blocker</b> is a feature the target engine cannot express at all, so the path is
+        refused rather than warned about. <b>Effort</b> is work with a known shape. The
+        stored-code figure is the one that decides this in practice, and it is measured by
+        Phase 4b compiling the code for real — not estimated.</p>
+      <div class="pathpick" id="pathPick"></div>
+      <div id="pathEvidence" class="mt-s"></div>
+      <div id="pathRec" class="mt-s"></div>
+    </div>
+
     <div class="spread" style="margin-bottom:16px">
       <button class="btn" id="btnSize">Decide target</button>
       <span class="mono" id="sizeMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
@@ -453,10 +485,16 @@ tr:last-child td{border-bottom:none}
     <div id="sizeLive" style="display:none"><div class="ticker" id="sizeTicker"></div></div>
     <div id="sizeResult" style="display:none">
       <div class="panel pad mt">
-        <div class="eyebrow">Recommended target</div>
+        <div class="eyebrow">Chosen target</div>
         <div id="targetSpec"></div>
       </div>
-      <div class="split mt">
+      <div id="pgNote" style="display:none" class="mt">
+        <div class="note info">RDS for PostgreSQL has <b>no editions and no licence model</b>.
+          The Oracle feature usage that decides Enterprise versus Standard Edition 2 — and the
+          processor licences that follow from it — has no meaning here. That is the commercial
+          case for this path, and the cost of it is the stored code above.</div>
+      </div>
+      <div class="split mt" id="editionPanels">
         <div class="panel pad">
           <div class="eyebrow">What forced this edition</div>
           <div class="acc" id="forcedList"></div>
@@ -488,12 +526,12 @@ tr:last-child td{border-bottom:none}
       <div class="panel pad">
         <div class="eyebrow">Fix generation</div>
         <div class="status" id="genStatus"><span class="led"></span>
-          <span>Templates + static stand-ins — <b>not model output</b></span></div>
+          <span id="genStatusText">Templates first — a model only where judgement is needed</span></div>
         <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
           Findings with exactly one correct remedy are templated, where a model would add cost and
-          risk but no information. Where a model would answer, Bedrock <b>InvokeModel</b> is blocked
-          on this account, so hand-written static output stands in. Every such answer is marked
-          <span class="mono">static fixture</span> and passes the same gates a model's would.</p>
+          risk but no information. Anything needing judgement goes to the model tier, and every
+          answer is labelled with what produced it. Whatever wrote the statement, <b>the same gates
+          decide whether it may run</b> — a model proposes, it never approves.</p>
       </div>
       <div class="panel pad">
         <div class="eyebrow">Rehearsal database</div>
@@ -558,10 +596,10 @@ tr:last-child td{border-bottom:none}
           <span>Rules, then static stand-ins — <b>not model output</b></span></div>
         <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
           A construct with exactly one correct translation is rewritten by a rule and the reason is
-          recorded. Anything needing judgement goes to the model tier — and while Bedrock
-          <b>InvokeModel</b> is blocked on this account, only a labelled hand-written stand-in can
-          answer there. Anything PostgreSQL cannot express goes to a person. Whatever produced the
-          text, the same five gates decide whether it is ready.</p>
+          recorded. Anything needing judgement goes to the <b>model tier</b>, and what it writes is
+          labelled with the model that wrote it. Anything PostgreSQL cannot express goes to a person.
+          Whatever produced the text, the same five gates decide whether it is ready — a model
+          proposes, it never approves.</p>
       </div>
       <div class="panel pad">
         <div class="eyebrow">PostgreSQL compile target</div>
@@ -711,14 +749,72 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-migrate">
     <div class="head">
       <h2>Migrate</h2>
-      <p>Each step below is what the backend is about to do, in order. As it runs you see the exact
-         command or SQL it executes, its output, and the evidence it ends on — passwords masked.
-         Every step also says <b>who decided it</b>: a rule, the gate, Phase 4's advice, or you.
-         The path is Data Pump, which loads tables, then rows, then indexes and constraints, then code.</p>
+      <p>How the data moves depends on the target Phase 3 chose. <b>Oracle to Oracle</b> uses Data
+         Pump over S3: one dump, loaded directly. <b>Oracle to PostgreSQL</b> uses <b>AWS DMS</b>,
+         because Data Pump writes an Oracle-only format that PostgreSQL cannot read — and DMS is
+         also what makes change data capture, and so a short cutover, possible at all.</p>
     </div>
 
+    <!-- DMS: shown when Phase 3 chose PostgreSQL -->
+    <div id="dmsPanel" style="display:none">
+      <div class="panel pad" style="margin-bottom:16px">
+        <div class="spread">
+          <div>
+            <div class="eyebrow" style="margin:0">AWS Database Migration Service</div>
+            <p style="font-size:13.5px;color:var(--ink-2);margin:6px 0 0;max-width:80ch">
+              A replication instance reads the source and writes the target. <b>It bills by the
+              hour for as long as it exists</b>, whether or not a task is running — unlike Data
+              Pump, which finishes and stops. Planning below is free and creates nothing.</p>
+          </div>
+          <button class="btn ghost sm" id="btnDmsPlan">Plan</button>
+        </div>
+        <div class="mt-s" id="dmsMode"></div>
+        <div class="tiles mt-s" id="dmsTiles" style="display:none"></div>
+      </div>
+
+      <div id="dmsChecks" class="checks" style="margin-bottom:16px"></div>
+
+      <div class="split" style="margin-bottom:16px">
+        <div class="panel pad">
+          <div class="eyebrow">What DMS moves</div>
+          <p style="font-size:13.5px;color:var(--ink-2);margin:6px 0 10px">Tables and their rows,
+            and nothing else. Held-back tables are named, because a table missing from a migration
+            looks the same as a bug.</p>
+          <div class="acc" id="dmsTables"></div>
+        </div>
+        <div class="panel pad">
+          <div class="eyebrow">What it leaves behind</div>
+          <p style="font-size:13.5px;color:var(--ink-2);margin:6px 0 10px">Sequences, views and
+            anything whose data lives outside the database. Each is routed to a <b>rule</b>, the
+            <b>model</b>, or a <b>person</b> — and nothing here is applied.</p>
+          <div id="dmsResidueNote"></div>
+          <div class="acc" id="dmsResidue"></div>
+        </div>
+      </div>
+
+      <div class="panel pad" id="dmsRunPanel" style="display:none">
+        <div class="eyebrow">Run it — this starts billing</div>
+        <p style="font-size:13.5px;color:var(--ink-2);margin:6px 0 12px">
+          Creates the replication instance, both endpoints and the task, then starts it. Stop the
+          task when it is done, and <b>delete the instance</b> with the kill switch — a stopped
+          task does not stop the bill.</p>
+        <div class="row2">
+          <div class="field"><label for="dmsSourcePw">Source schema owner password</label>
+            <input id="dmsSourcePw" type="password" autocomplete="off" placeholder="held in memory only"></div>
+          <div class="field"><label for="dmsTargetPw">Target master password</label>
+            <input id="dmsTargetPw" type="password" autocomplete="off" placeholder="held in memory only"></div>
+        </div>
+        <div class="field"><label for="dmsConfirm">Type the AWS account id to confirm</label>
+          <input id="dmsConfirm" class="mono" placeholder="000000000000"></div>
+        <div class="spread"><button class="btn" id="btnDmsRun">Create and run</button>
+          <span class="mono" id="dmsMeta" style="font-size:12.5px;color:var(--ink-3)"></span></div>
+        <div class="checks mt-s" id="dmsLog"></div>
+      </div>
+    </div>
+
+    <div id="dataPumpPanel">
     <div class="panel pad" id="migDecide">
-      <div class="eyebrow">Before it runs</div>
+      <div class="eyebrow">Data Pump — before it runs</div>
       <label class="chk"><input type="checkbox" id="mResolve">
         <span><b>Resolve RDS-004 in this phase.</b> The external table's file moves to S3 and into an RDS
         directory of the same name, so the table works on the target. Recorded against your AWS login.
@@ -737,6 +833,7 @@ tr:last-child td{border-bottom:none}
     <div class="checks mt" id="migSteps"></div>
     <div id="migEmpty" class="panel mt"><div class="empty">Provision the target first. Migration opens when
       it is CREATE_COMPLETE.</div></div>
+    </div>
   </section>
 
   <!-- ============ 9. VALIDATE ============ -->
@@ -748,6 +845,18 @@ tr:last-child td{border-bottom:none}
          <b>not comparable</b> when one side cannot be read — which is never counted as a match.
          Only mismatches fail the phase. Nothing is written to either database: every statement is
          a SELECT.</p>
+    </div>
+
+    <div id="valCrossEngine" style="display:none">
+      <div class="note info"><b>Oracle and PostgreSQL do not store the same value the same way.</b>
+        Comparing raw bytes would report a failure on every numeric and every padded column of a
+        perfect migration. So each row is reduced to a <b>canonical text form</b> on both sides
+        first — trailing zeros stripped, CHAR padding trimmed, timestamps in UTC, and Oracle's
+        empty-string-is-NULL given the same marker as a PostgreSQL NULL — and the same MD5 is
+        computed over that. <b>Levels 2 and 5 do not run</b>: column types are deliberately
+        different, and invalid objects and grants are Oracle catalogue concepts. What survived is
+        measured by <b>levels 3 and 4</b>, which are the ones that answer whether the data is
+        intact.</div>
     </div>
 
     <div class="panel pad" id="valControls">
@@ -925,7 +1034,7 @@ const STAGES = [
   {id:'connect',   label:'Connect',        n:null},
   {id:'discover',  label:'Discover',       n:1},
   {id:'assess',    label:'Assess',         n:2},
-  {id:'target',    label:'Size & Edition', n:3},
+  {id:'target',    label:'Target & Sizing',n:3},
   {id:'remediate', label:'Remediate',      n:4},
   {id:'convert',   label:'Convert PL/SQL', n:'4b'},
   {id:'gate',      label:'Blocker gate',   n:5},
@@ -996,8 +1105,16 @@ function show(id){
     renderRail();
   }
   renderPageNav();
+  // The cutover certificate is built on demand and is worth reading even when it
+  // refuses -- an unmet requirement says what would clear it. It used to render
+  // only after a *clean* validation, so the one case where a person most needs
+  // to see why cutover is blocked showed an empty box until they found Rebuild.
+  if (id === 'cutover' && !cutoverRendered) { cutoverRendered = true; renderCutover(); }
   window.scrollTo({top:0, behavior:'smooth'});
 }
+// Fetched once per visit rather than on every navigation: the certificate is a
+// real build on the backend, not a cached read.
+let cutoverRendered = false;
 function setStage(id, state, sub){
   stageState[id] = state;
   if (sub !== undefined) stageSub[id] = sub;
@@ -1014,6 +1131,7 @@ async function loadState(){
   const s = await (await fetch('/api/state')).json();
   $('#netreq').innerHTML = s.network_requirements.map(r =>
     `<div><div class="t">${esc(r.title)}</div><div class="d">${esc(r.detail)}</div></div>`).join('');
+  if (s.engine) { ENGINE = s.engine; renderPaths(); showMigrationEngine(); }
   if (!s.connected) return;
   applyConnected(s.checks, s.facts);
 
@@ -1158,6 +1276,7 @@ $('#btnDisconnect').onclick = async () => {
   $('#btnDiscover').disabled = true;
   stageState = {...IDLE_STAGES};
   stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', convert:'', gate:'', provision:'', migrate:'', validate:'', cutover:'', report:''};
+  cutoverRendered = false;
   renderRail();
 };
 
@@ -1431,9 +1550,13 @@ $('#btnSize').onclick = () => {
     } else if (d.event === 'complete') {
       es.close();
       if (last) last.className = 'tick done';
-      setStage('target', 'done', `${esc(d.edition)} · ${esc(d.instance_class)}`);
+      // Edition and licence exist only on the Oracle path. On PostgreSQL both
+      // are null, and printing them produced a literal "null null".
+      const what = d.edition ? `${d.edition} ${d.licence_model}`
+                             : (d.engine_label || 'PostgreSQL');
+      setStage('target', 'done', `${esc(d.edition || 'PostgreSQL')} · ${esc(d.instance_class)}`);
       $('#sizeMeta').textContent =
-        `${d.edition} ${d.licence_model} · ${d.instance_class} · ${d.storage_gb} GB · ` +
+        `${what} · ${d.instance_class} · ${d.storage_gb} GB · ` +
         `${d.overrides} override${d.overrides === 1 ? '' : 's'} · sizing basis: ${d.basis}`;
       await renderSizing();
       btn.disabled = false;
@@ -1449,14 +1572,17 @@ $('#btnSize').onclick = () => {
 async function renderSizing(){
   const s = await (await fetch('/api/sizing')).json();
   const d = s.decision, p = s.proposal, f = s.facts;
-  const editionFull = d.edition === 'EE' ? 'Enterprise Edition' : 'Standard Edition 2';
+  const pg = d.engine === 'POSTGRESQL';
+  if (s.target_assessment) { PATHS = s.target_assessment; ENGINE = d.engine; renderPaths(); showMigrationEngine(); }
+  const editionFull = pg ? (d.engine_label || 'Amazon RDS for PostgreSQL')
+                         : (d.edition === 'EE' ? 'Enterprise Edition' : 'Standard Edition 2');
 
   $('#targetSpec').innerHTML = `
     <div style="font-family:Archivo,sans-serif;font-size:25px;font-weight:700;letter-spacing:-.02em">
       ${esc(editionFull)}
-      <span class="mono" style="font-size:12.5px;font-weight:500;color:var(--accent);
+      ${d.licence_model ? `<span class="mono" style="font-size:12.5px;font-weight:500;color:var(--accent);
         border:1px solid var(--accent);border-radius:2px;padding:2px 8px;margin-left:6px;
-        vertical-align:middle">${esc(d.licence_model)}</span></div>
+        vertical-align:middle">${esc(d.licence_model)}</span>` : ''}</div>
     <p style="font-size:13.5px;color:var(--ink-2);margin-top:8px">Proposed by the
       <b>${esc(p.source)}</b> proposer, then validated.
       ${d.agreed_with_proposal ? 'The rules engine confirmed it unchanged.'
@@ -1464,13 +1590,16 @@ async function renderSizing(){
     <div class="facts" style="grid-template-columns:repeat(4,1fr);margin-top:14px">
       ${[['Instance', d.instance_class, `${d.vcpu} vCPU · ${d.memory_gib} GiB`],
          ['Storage', d.storage_gb + ' GB', d.storage_type + ' · from ' + f.segment_gb + ' GB'],
-         ['Character set', d.character_set, 'target must match'],
-         ['Oracle licences', d.licence_model === 'BYOL' ? d.processor_licences + ' processor' : 'included',
-          'two vCPU = one processor']]
+         ['Character set', d.character_set, pg ? 'from ' + (d.source_character_set || '—') : 'target must match'],
+         pg ? ['Licences', 'none', 'the engine is open source']
+            : ['Oracle licences', d.licence_model === 'BYOL' ? d.processor_licences + ' processor' : 'included',
+               'two vCPU = one processor']]
         .map(([k,v,h]) => `<div><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>
           <div style="font-size:13.5px;color:var(--ink-2);margin-top:3px">${esc(h)}</div></div>`).join('')}
     </div>`;
 
+  $('#editionPanels').style.display = pg ? 'none' : '';
+  $('#pgNote').style.display = pg ? '' : 'none';
   $('#forcedList').innerHTML = (d.forced_by || []).map(x => `
     <details class="item"><summary><span class="title">${esc(x.feature)}</span><span></span>
       <span class="count">${esc(x.evidence)}</span></summary>
@@ -1595,6 +1724,20 @@ async function renderRemediation(){
   const p = await (await fetch('/api/remediation')).json();
   PLAN = p;
 
+  // What actually generated these fixes, taken from the run rather than assumed.
+  const gs = $('#genStatusText');
+  if (gs) {
+    // The entries carry the generator: 'bedrock' when the model wrote the SQL,
+    // and a model_id naming which model, so this counts what actually happened
+    // rather than what was configured.
+    const drafted = (p.entries || []).filter(e => e.source === 'bedrock').length;
+    const model = (p.entries || []).find(e => e.model_id)?.model_id || '';
+    gs.innerHTML = p.model_generation_enabled
+      ? `Templates, then the <b>model tier</b>`
+        + (drafted ? ` — ${drafted} fix(es) drafted by ${esc(model.split('.').pop() || 'a model')}` : '')
+      : 'Templates + labelled stand-ins — <b>no model ran</b>';
+  }
+
   const order = ['AUTO_APPLY','READY_TO_APPLY','BLOCKED','REJECTED','ADVICE_DRAFTED',
                  'MANUAL_ACTION_REQUIRED','NOT_A_FIX'];
   $('#remTiles').innerHTML = order.filter(s => p.totals[s]).map(s => `
@@ -1704,7 +1847,7 @@ const CONV_HINT = {
   READY_FOR_APPROVAL:'created and rolled back on PostgreSQL; a person must approve',
   BLOCKED:'the compile gate needs a PostgreSQL target',
   REJECTED:'a gate found a problem, shown on the object',
-  MODEL_REQUIRED:'outside the rules; Bedrock is blocked on this account',
+  MODEL_REQUIRED:'outside the rules; needs the model tier',
   MANUAL:'PostgreSQL has no equivalent; a decision, not a rewrite',
   EXCLUDED_BROKEN_ON_SOURCE:'has compile errors today; fix it before migrating it',
   ABSORBED_INTO_BODY:'a package specification; its body became the functions',
@@ -2449,6 +2592,229 @@ $('#btnCutExecute').onclick = async () => {
   btn.disabled = false;
 };
 
+/* ---------------- DMS (Phase 7, heterogeneous) ---------------- */
+// Which half of the Migrate screen applies is decided by Phase 3, not by a
+// toggle here: Data Pump cannot write to PostgreSQL and DMS is not worth its
+// hourly bill when both sides are Oracle.
+const DMS_STATUS_WORD = {
+  READY: 'ready', STATIC_FIXTURE: 'stand-in', MODEL_REQUIRED: 'needs the model', MANUAL: 'needs a person',
+};
+const DMS_STATUS_CLASS = {
+  READY: 'pass', STATIC_FIXTURE: 'warn', MODEL_REQUIRED: 'warn', MANUAL: 'warn',
+};
+let DMSPLAN = null;
+
+function showMigrationEngine(){
+  const pg = ENGINE === 'POSTGRESQL';
+  $('#dmsPanel').style.display = pg ? '' : 'none';
+  $('#dataPumpPanel').style.display = pg ? 'none' : '';
+  // Validation changes shape across engines too, and a reader needs to know
+  // why two of the five levels report 'not comparable' rather than a result.
+  $('#valCrossEngine').style.display = pg ? '' : 'none';
+}
+
+async function renderDmsPlan(){
+  const btn = $('#btnDmsPlan');
+  btn.disabled = true;
+  const type = $('#dmsType') ? $('#dmsType').value : 'full-load';
+  const r = await fetch('/api/dms/plan?migration_type=' + encodeURIComponent(type));
+  btn.disabled = false;
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    $('#dmsMode').innerHTML = `<div class="note bad">${esc(e.detail || 'could not plan')}</div>`;
+    return;
+  }
+  const d = await r.json();
+  DMSPLAN = d;
+
+  const held = (d.tables_excluded || []).filter(e => !e.included);
+  $('#dmsTiles').style.display = '';
+  $('#dmsTiles').innerHTML = `
+    <div class="tile"><div class="k">Tables moved</div><div class="v">${d.tables.length}</div>
+      <div class="h">${held.length} held back, each with a reason</div></div>
+    <div class="tile"><div class="k">Left to finish</div><div class="v">${d.residue.total}</div>
+      <div class="h">${d.residue.by_tier.RULE} by rule · ${d.residue.by_tier.MODEL} model · ${d.residue.by_tier.PERSON} person</div></div>
+    <div class="tile"><div class="k">Replication instance</div>
+      <div class="v" style="font-size:19px">${esc(d.instance.class)}</div>
+      <div class="h">${d.instance.storage_gb} GB · bills hourly while it exists</div></div>
+    <div class="tile"><div class="k">Migration type</div>
+      <div class="v" style="font-size:19px">${esc(d.migration_type)}</div>
+      <div class="h">${d.lowercase_names ? 'names folded to lower case' : 'names unchanged'}</div></div>`;
+
+  $('#dmsMode').innerHTML = d.lowercase_names
+    ? `<div class="note info"><b>Every schema, table and column name is folded to lower case.</b>
+       Oracle folds unquoted identifiers up, PostgreSQL folds them down. Carried across unchanged,
+       a table would need quoting to reach — and every function Phase 4b converted would fail to
+       find it.</div>` : '';
+
+  $('#dmsChecks').innerHTML = (d.checks || []).map(c => {
+    const cls = {pass:'pass', warn:'warn', fail:'fail', blocked:'warn'}[c.status] || 'warn';
+    const mark = {pass:'✓', warn:'!', fail:'×', blocked:'–'}[c.status] || '!';
+    return `<div class="check ${cls}"><span class="mark">${mark}</span>
+      <div><div class="name">${esc(c.name.replace(/_/g, ' '))}</div>
+      <div class="detail">${esc(c.detail)}</div>
+      ${c.remedy ? `<div class="remedy">${esc(c.remedy)}</div>` : ''}</div></div>`;
+  }).join('');
+
+  $('#dmsTables').innerHTML =
+    d.tables.map(t => `<details><summary>${esc(t)}</summary>
+      <div class="body"><p>Moved by DMS, rows only.</p></div></details>`).join('')
+    + (d.tables_excluded || []).map(e => `<details><summary>
+        <span class="mono" style="font-size:12.5px;color:var(--ink-3)">${esc(e.kind.replace(/_/g,' '))}</span>
+        &nbsp;${esc(e.table)}</summary>
+      <div class="body"><p>${esc(e.why)}</p></div></details>`).join('');
+
+  const res = d.residue;
+  $('#dmsResidueNote').innerHTML = res.model_available ? ''
+    : `<div class="note warn"><b>No model ran.</b> ${esc(res.model_note)}</div>`;
+  $('#dmsResidue').innerHTML = (res.items || []).map(i => `
+    <details><summary>
+      <span class="mono" style="font-size:12.5px;color:var(--ink-3)">${esc(DMS_STATUS_WORD[i.status] || i.status)}</span>
+      &nbsp;${esc(i.object_name)}
+      <span class="mono" style="font-size:12.5px;color:var(--ink-3)">${esc(i.kind.replace(/_/g,' '))}</span>
+    </summary>
+    <div class="body">
+      <p><b>${esc(i.what_is_needed)}</b></p>
+      <p>${esc(i.why)}</p>
+      ${i.detail ? `<p class="mono" style="font-size:12.5px;color:var(--ink-3)">${esc(i.detail)}</p>` : ''}
+      ${i.sql ? `<pre class="mono" style="font-size:12.5px;white-space:pre-wrap;background:var(--ink-soft,#F4F6F7);padding:10px;border-radius:3px;overflow-x:auto">${esc(i.sql)}</pre>` : ''}
+      ${i.source === 'static_fixture'
+        ? `<div class="note warn" style="margin:8px 0 0"><b>Hand-written stand-in, not model output.</b>
+           The model tier did not answer this one, so a person wrote it and it is labelled as such.
+           ${i.caveat ? esc(i.caveat) : ''}</div>` : ''}
+      ${i.status === 'MODEL_REQUIRED'
+        ? `<div class="note warn" style="margin:8px 0 0">Needs the model tier, which did not
+           answer this one. <b>Nothing was invented in its place.</b></div>` : ''}
+    </div></details>`).join('');
+
+  $('#dmsRunPanel').style.display = d.ready ? '' : 'none';
+  if (!d.ready) {
+    $('#dmsResidueNote').insertAdjacentHTML('afterbegin',
+      `<div class="note bad">Preflight refused: ${esc((d.refused_because || []).join(', '))}.
+       Nothing will be created.</div>`);
+  }
+}
+
+$('#btnDmsPlan').onclick = () => renderDmsPlan();
+
+$('#btnDmsRun').onclick = async () => {
+  const btn = $('#btnDmsRun');
+  btn.disabled = true;
+  $('#dmsLog').innerHTML = '';
+  $('#dmsMeta').textContent = 'creating…';
+  setStage('migrate', 'busy', 'DMS');
+  const r = await fetch('/api/dms/execute', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      confirm_account: $('#dmsConfirm').value.trim(),
+      migration_type: (DMSPLAN && DMSPLAN.migration_type) || 'full-load',
+      source_password: $('#dmsSourcePw').value,
+      target_password: $('#dmsTargetPw').value})});
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    btn.disabled = false;
+    $('#dmsMeta').textContent = 'refused — ' + (e.detail || r.status);
+    setStage('migrate', 'active', 'refused');
+    return;
+  }
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream:true});
+    const parts = buf.split('\n\n'); buf = parts.pop();
+    for (const part of parts) {
+      const line = part.split('\n').find(l => l.startsWith('data: '));
+      if (!line) continue;
+      const d = JSON.parse(line.slice(6));
+      if (d.event === 'step' || d.event === 'progress') {
+        $('#dmsLog').insertAdjacentHTML('beforeend',
+          `<div class="check"><span class="mark">›</span><div class="detail">${esc(d.detail)}</div></div>`);
+      } else if (d.event === 'refused' || d.event === 'error') {
+        $('#dmsMeta').textContent = d.event === 'refused' ? 'refused — nothing was created' : 'error';
+        $('#dmsLog').insertAdjacentHTML('beforeend',
+          `<div class="check fail"><span class="mark">×</span><div class="detail">${esc(d.message)}</div></div>`);
+        setStage('migrate', 'active', d.event);
+      } else if (d.event === 'complete') {
+        $('#dmsMeta').textContent = `${d.status} · ${d.tables} table(s)`
+          + (d.errored ? ` · ${d.errored} suspended` : '');
+        setStage('migrate', d.errored ? 'active' : 'done', d.status);
+      }
+    }
+  }
+  btn.disabled = false;
+};
+
+/* ---------------- migration path (Phase 3) ---------------- */
+// The choice decides which engine every later phase provisions, migrates into
+// and validates against, so it is held on the server, not in the page.
+let ENGINE = 'ORACLE', PATHS = null;
+
+const PATH_SUB = {
+  ORACLE: 'Homogeneous. PL/SQL, packages and types move unchanged.',
+  POSTGRESQL: 'Heterogeneous. Stored code is rewritten and compiled before it counts.',
+};
+
+function renderPaths(){
+  const el = $('#pathPick');
+  el.innerHTML = ['ORACLE', 'POSTGRESQL'].map(k => {
+    const p = PATHS && PATHS.paths[k];
+    const label = k === 'ORACLE' ? 'Amazon RDS for Oracle' : 'Amazon RDS for PostgreSQL';
+    let meta = 'assessed once sizing has run';
+    if (p) {
+      meta = p.possible
+        ? `${p.effort_points} effort point${p.effort_points === 1 ? '' : 's'} · ${p.effort.length} item(s)`
+        : `<b>blocked</b> — ${esc(p.blockers.map(b => b.subject).join(', '))}`;
+    }
+    const blocked = p && !p.possible;
+    return `<button class="pathopt" data-engine="${k}" aria-pressed="${ENGINE === k}"
+              ${blocked ? 'disabled title="The estate cannot run here as it stands"' : ''}>
+      <div class="n">${esc(label)}</div>
+      <div class="s">${esc(PATH_SUB[k])}</div>
+      <div class="m">${meta}</div></button>`;
+  }).join('');
+  el.querySelectorAll('.pathopt').forEach(b => b.onclick = () => chooseEngine(b.dataset.engine));
+  renderPathEvidence();
+}
+
+function renderPathEvidence(){
+  const p = PATHS && PATHS.paths[ENGINE];
+  if (!p) { $('#pathEvidence').innerHTML = ''; $('#pathRec').innerHTML = ''; return; }
+  const rows = [...p.blockers, ...p.effort];
+  $('#pathEvidence').innerHTML = rows.length ? `<div class="acc">` + rows.map(i => `
+    <details><summary><span class="mono" style="font-size:12.5px;color:${i.kind === 'blocker' ? 'var(--bad)' : 'var(--ink-3)'}">
+      ${i.kind === 'blocker' ? 'blocker' : 'effort'}</span>&nbsp; ${esc(i.subject)}</summary>
+      <div class="body"><p>${esc(i.detail)}</p>
+      <p class="mono" style="font-size:12.5px;color:var(--ink-3);margin-top:8px">from ${esc(i.evidence)}</p>
+      </div></details>`).join('') + `</div>`
+    : `<div class="note ok">Nothing stands in the way of this path on this estate.</div>`;
+
+  const r = PATHS.recommended;
+  const agreed = r.target === ENGINE;
+  $('#pathRec').innerHTML = `<div class="note ${r.target ? (agreed ? 'info' : 'warn') : 'warn'}">
+    <b>${r.target ? ('Rules recommend ' + esc(r.target === 'ORACLE' ? 'RDS for Oracle' : 'RDS for PostgreSQL'))
+                  : 'No recommendation'}</b>
+    <span class="mono" style="font-size:12.5px;color:var(--ink-3)">&nbsp;${esc(r.confidence)}</span>
+    <div style="margin-top:6px">${esc(r.reason)}</div></div>`;
+}
+
+async function chooseEngine(engine){
+  const r = await fetch('/api/engine', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({engine})});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { $('#pathRec').innerHTML = `<div class="note bad">${esc(d.detail || 'refused')}</div>`; return; }
+  ENGINE = d.engine;
+  renderPaths();
+  showMigrationEngine();
+  // The sizing on screen was computed for the previous engine, so it no longer
+  // describes what would be provisioned. Say so rather than leaving a stale
+  // edition and licence count looking current.
+  if (stageState.target === 'done') {
+    setStage('target', 'active', 'path changed — re-run');
+    $('#sizeMeta').textContent = 'path changed — decide the target again';
+  }
+}
+
 /* ---------------- report (Phase 10) ---------------- */
 // The server builds the report from its own records on every request; the
 // screen only asks for it. Two requests -- data for the tiles, the page for
@@ -2597,6 +2963,10 @@ $('#ruleForm').onsubmit = async e => {
 
 renderRail();
 renderPageNav();
+// The path chooser is meaningful before a connection: it says what the two
+// routes are, and the evidence fills in once sizing has assessed them.
+renderPaths();
+showMigrationEngine();
 loadState();
 </script>
 </body>

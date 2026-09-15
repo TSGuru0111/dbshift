@@ -253,8 +253,43 @@ def convert_declarations(decl: str, *, owner: str, known_types: set[str] | None)
         cs.append(_c("ORACLE_DECLARED_TYPES", "translated", "mapped by convert/types.json"))
     for cid, pat, pg in (("PERCENT_TYPE", r"%TYPE\b", "%TYPE"), ("PERCENT_ROWTYPE", r"%ROWTYPE\b", "%ROWTYPE")):
         if re.search(pat, body, I):
-            cs.append(_c(cid, "translated", pg, "same syntax; resolved against the shadow schema at creation"))
-    return "\n".join(lines), cs
+            cs.append(_c(cid, "translated", pg,
+                         "same syntax, with the table schema-qualified so it resolves at call "
+                         "time and not only where search_path happens to be set"))
+    out = _qualify_percent_type("\n".join(lines), owner)
+    return out, cs
+
+
+def _qualify_percent_type(text: str, owner: str) -> str:
+    """Schema-qualify the table in a %TYPE or %ROWTYPE declaration.
+
+    PostgreSQL resolves these when the body is first parsed at **run** time, not
+    when the function is created. An unqualified `customer.full_name%TYPE`
+    therefore compiles under the gate -- which puts the schema on search_path --
+    and then fails for any caller that has not done the same:
+
+        invalid type name "customer.full_name%TYPE"
+
+    Already-qualified references and quoted identifiers are left alone.
+    """
+    if not owner:
+        return text
+    schema = owner.lower()
+
+    def qualify(m: "re.Match") -> str:
+        table, column, suffix = m.group("table"), m.group("column"), m.group("suffix")
+        return f"{schema}.{table}.{column}{suffix}"
+
+    text = re.sub(
+        r"(?<![\w.])(?P<table>[a-z_][\w$#]*)\.(?P<column>[a-z_][\w$#]*)(?P<suffix>%TYPE\b)",
+        qualify, text, flags=I)
+
+    def qualify_row(m: "re.Match") -> str:
+        return f"{schema}.{m.group('table')}{m.group('suffix')}"
+
+    return re.sub(
+        r"(?<![\w.])(?P<table>[a-z_][\w$#]*)(?P<suffix>%ROWTYPE\b)",
+        qualify_row, text, flags=I)
 
 
 def _params(paramstr: str | None, *, owner: str, known_types: set[str] | None) -> tuple[str, list[dict], bool]:
@@ -376,7 +411,13 @@ def convert_subprogram(text: str, *, owner: str, known_types: set[str] | None,
         lines.append(f"RETURNS {pg_ret}")
     else:
         lines.append(f"CREATE OR REPLACE PROCEDURE {pg_name}({pg_params})")
+    # Oracle resolves unqualified names against the owning schema; PostgreSQL
+    # resolves them against the caller's search_path. Without this the body's
+    # `FROM customer` fails for any caller who has not set the path -- which is
+    # every application. A function-level SET reproduces Oracle's behaviour and
+    # is local to the call.
     lines.append("LANGUAGE plpgsql")
+    lines.append(f"SET search_path = {owner.lower()}, pg_temp")
     lines.append("AS $$")
     if pg_decl:
         lines.append("DECLARE")
@@ -473,7 +514,10 @@ def convert_trigger(text: str, *, owner: str, known_types: set[str] | None) -> d
 
     fn = _q(owner, f"{name}_fn")
     tbl = table.lower() if "." in table else _q(owner, table)
-    lines = [f"CREATE OR REPLACE FUNCTION {fn}()", "RETURNS trigger", "LANGUAGE plpgsql", "AS $$"]
+    # Same reason as a plain function: the body's unqualified names must resolve
+    # for whoever fires the trigger, not just for a caller with the right path.
+    lines = [f"CREATE OR REPLACE FUNCTION {fn}()", "RETURNS trigger", "LANGUAGE plpgsql",
+             f"SET search_path = {owner.lower()}, pg_temp", "AS $$"]
     if pg_decl:
         lines += ["DECLARE", pg_decl]
     lines += ["BEGIN", _indent(pg_body), "  " + ret, "END;", "$$;"]

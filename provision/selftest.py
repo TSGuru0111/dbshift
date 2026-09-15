@@ -24,6 +24,7 @@ import boto3
 from botocore.stub import ANY, Stubber
 
 from . import deploy as d
+from . import policy
 
 NOW = datetime(2026, 9, 11, 9, 0, tzinfo=timezone.utc)
 ARN = "arn:aws:sts::111122223333:assumed-role/AWSReservedSSO_DBA_x/approver@example.com"
@@ -98,9 +99,11 @@ def _stack(status, outputs=None):
 
 
 def _expect_create(sess, halt_tag=True):
-    tags = [{"Key": "dbshift-requested-by", "Value": "approver@example.com"}]
+    # Stack tags: the account's required tags plus who asked for the deploy.
+    extra = {"dbshift-requested-by": "approver@example.com"}
     if halt_tag:
-        tags.append({"Key": "dbshift-halt-acknowledged-by", "Value": "approver@example.com"})
+        extra["dbshift-halt-acknowledged-by"] = "approver@example.com"
+    tags = policy.as_tag_list(extra)
     sess.stubs["cloudformation"].add_response("create_stack", {"StackId": STACK_ID}, {
         "StackName": STACK, "TemplateBody": ANY,
         "Parameters": [{"ParameterKey": "VpcId", "ParameterValue": "vpc-1"},
@@ -138,7 +141,10 @@ def main() -> int:
     sess.stubs["ssm"].add_client_error("get_parameter", "ParameterNotFound", expected_params={"Name": PW_PARAM})
     sess.stubs["ssm"].add_response("put_parameter", {"Version": 1}, {
         "Name": PW_PARAM, "Type": "SecureString", "Value": ANY, "Overwrite": False,
-        "Description": ANY, "Tags": [{"Key": "project", "Value": "dbshift"}, {"Key": "estate", "Value": "DBMIG_APP"}]})
+        # The account's required tags come first -- Purpose=DMA -- so a resource
+        # created by this project can never be missing them.
+        "Description": ANY, "Tags": policy.as_tag_list(
+            {"project": "dbshift", "estate": "DBMIG_APP"})})
     _expect_create(sess)
     cfn = sess.stubs["cloudformation"]
     cfn.add_response("describe_stack_events", {"StackEvents": [_event("e1", STACK, "CREATE_IN_PROGRESS")]},

@@ -39,6 +39,11 @@ class Options:
     source_dsn: str = "localhost:1521/XEPDB1"
     checksum: bool = True          # level 4 reads every row on both sides
     max_checksum_rows: int | None = None   # skip tables above this, rather than run for hours
+    # Which engine the target runs. Set from the Phase 3 decision, not guessed:
+    # it decides how every comparison is built, because "the same data" is not
+    # the same bytes across engines.
+    target_engine: str = "ORACLE"
+    target_password: str | None = None     # PostgreSQL master password, memory only
 
 
 def finding(level: int, check: str, verdict: str, detail: str, why: str = "", **evidence) -> dict:
@@ -82,8 +87,20 @@ class Ctx:
     def log(self, line) -> None:
         self.emit({"event": "log", "level": self.level, "line": str(line)[:600]})
 
+    @property
+    def cross_engine(self) -> bool:
+        """True when source and target are different engines.
+
+        Everything downstream branches on this rather than on a connection
+        type, so a comparison cannot silently use Oracle rules against a
+        PostgreSQL target.
+        """
+        return self.opts.target_engine == "POSTGRESQL"
+
     # ---- connections ---------------------------------------------------------
     def target(self):
+        if self.cross_engine:
+            return self._postgres_target()
         if self._target is None:
             import oracledb
             pw = self.session.client("ssm", region_name=prov_policy.REGION).get_parameter(
@@ -92,6 +109,34 @@ class Ctx:
             self._target = oracledb.connect(user=prov_policy.MASTER_USERNAME, password=pw,
                                             dsn=f"{out['Endpoint']}:{out['Port']}/{prov_policy.DB_NAME}")
             self._normalise(self._target)
+        return self._target
+
+    def _postgres_target(self):
+        """The PostgreSQL target, when Phase 3 chose the heterogeneous path.
+
+        Separate from the Oracle path rather than a branch inside it: the
+        driver, the credential source and the session normalisation are all
+        different, and threading three `if`s through one function would hide
+        that.
+        """
+        if self._target is None:
+            import pg8000.dbapi
+            out = self.state["outputs"]
+            pw = self.opts.target_password
+            if not pw:
+                pw = self.session.client("ssm", region_name=prov_policy.REGION).get_parameter(
+                    Name=self.plan["rendered"]["password_parameter"],
+                    WithDecryption=True)["Parameter"]["Value"]
+            self._target = pg8000.dbapi.connect(
+                host=out["Endpoint"], port=int(out["Port"]),
+                database=prov_policy.PG_DB_NAME,
+                user=prov_policy.PG_MASTER_USERNAME, password=pw)
+            cur = self._target.cursor()
+            # The same reason the Oracle side normalises: a session-level
+            # format difference would make identical data hash differently.
+            cur.execute("SET TIME ZONE 'UTC'")
+            cur.execute("SET extra_float_digits = 0")
+            cur.close()
         return self._target
 
     def source(self):
@@ -123,15 +168,38 @@ class Ctx:
         got = self.rows(conn, sql, binds, quiet=quiet)
         return got[0][0] if got else None
 
-    def both(self, sql: str, binds: dict | None = None) -> tuple:
-        """The same query on both databases. Returns (source, target), where either
-        may be an error string -- a side that cannot be read is never guessed."""
+    def both(self, sql: str, binds: dict | None = None, *, target_sql: str | None = None) -> tuple:
+        """One query per side. Returns (source, target), where either may be an
+        error string -- a side that cannot be read is never guessed.
+
+        `target_sql` is how the heterogeneous path works: the same *question*
+        asked in the target's own dialect. Without it a cross-engine run would
+        send Oracle SQL to PostgreSQL and read the resulting syntax error as a
+        difference in the data.
+        """
+        if target_sql is None and self.cross_engine:
+            raise ValueError(
+                "a cross-engine comparison needs target_sql: Oracle SQL cannot be sent to "
+                "PostgreSQL, and a syntax error there is not evidence about the data")
         out = []
-        for conn in (self.source, self.target):
+        for conn, text in ((self.source, sql), (self.target, target_sql or sql)):
+            opened = None
             try:
-                out.append(self.rows(conn(), sql, binds))
+                opened = conn()
+                out.append(self.rows(opened, text, binds))
             except Exception as exc:  # noqa: BLE001
                 out.append(f"error: {str(exc).splitlines()[0]}")
+                # PostgreSQL refuses every later statement on a connection whose
+                # transaction failed ("current transaction is aborted"). Without
+                # this rollback one missing table turns the remaining questions
+                # into 25P02 errors, and they get reported under whatever cause
+                # the caller attributes to an unreadable side -- a guess, about
+                # tables that were never actually asked.
+                if opened is not None:
+                    try:
+                        opened.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
         return out[0], out[1]
 
     def close(self) -> None:

@@ -60,7 +60,16 @@ def certificate(session, *, on_event=None) -> dict:
     run = R.target_run(session, plan)
     emit({"event": "estate", **run})
     ack = approval_for(run.get("run_id"))
-    reqs = R.build(recs, plan, run, ack)
+    # The DMS record, when Phase 7 took the heterogeneous path. It carries the
+    # measured replication latency, which is what decides whether a short
+    # cutover window is possible at all.
+    dms_record = None
+    try:
+        from dms import run as dms_run
+        dms_record = dms_run.last_run()
+    except Exception:  # noqa: BLE001 -- no DMS run is an ordinary state
+        pass
+    reqs = R.build(recs, plan, run, ack, dms_record)
     for req in reqs:
         emit({"event": "requirement", **req})
     cert = {

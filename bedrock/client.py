@@ -13,6 +13,8 @@ problem but is a routing problem. See docs/05-aws-services.md.
 
 from __future__ import annotations
 
+import os
+
 import json
 import logging
 from pathlib import Path
@@ -62,7 +64,20 @@ class BedrockClient:
         if self._runtime is None:
             import boto3
 
-            session = self._session or boto3.Session()
+            # The model tier and the migration infrastructure live in different
+            # AWS accounts: Bedrock is enabled on one, and every RDS instance,
+            # bucket and DMS resource is on the other. So this takes its own
+            # profile rather than the ambient session -- otherwise a provision
+            # run would send its Bedrock calls to the account that cannot
+            # answer them, or a Bedrock profile would hide the real target.
+            #
+            # DBSHIFT_BEDROCK_PROFILE overrides it; unset and with no explicit
+            # session, the ambient credentials are used, which is correct when
+            # one account does both.
+            session = self._session
+            if session is None:
+                profile = os.environ.get("DBSHIFT_BEDROCK_PROFILE")
+                session = boto3.Session(profile_name=profile) if profile else boto3.Session()
             self._runtime = session.client("bedrock-runtime", region_name=self.region)
         return self._runtime
 

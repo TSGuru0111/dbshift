@@ -149,9 +149,16 @@ def gate_allows_cutover(gate: dict, acknowledgement: dict | None) -> dict:
         "--approve, which records who accepted what.", blocked_by=blocked)
 
 
-def cdc_lag(gate: dict) -> dict:
-    """The architecture's CDC lag check. It does not apply to a full-outage
-    cutover, and saying so beats a green tick nobody earned."""
+def cdc_lag(gate: dict, dms_record: dict | None = None) -> dict:
+    """How far behind the target is, and whether that is close enough to cut over.
+
+    This is the requirement that makes a short outage possible. With replication
+    running, the window is roughly this latency plus the time to switch the
+    applications over -- instead of the time to copy the whole estate.
+
+    It does not apply to a full-outage cutover, and saying so beats a green tick
+    nobody earned.
+    """
     cdc_blocked = (gate.get("by_phase", {}).get("migrate_cdc", {}).get("blocked_by")) or []
     if cdc_blocked:
         return requirement(
@@ -160,9 +167,44 @@ def cdc_lag(gate: dict) -> dict:
             "This is a one-time full load, so the cutover needs an outage window in which the "
             "source takes no writes. Everything written to the source after the export is not on "
             "the target.", blocked_by=cdc_blocked)
-    return requirement("cdc_lag", "Change data capture has caught up", UNMET,
-                       "CDC is not blocked, but this phase cannot measure replication lag yet",
-                       "Measure DMS latency before cutting over.")
+
+    if not dms_record or not dms_record.get("task_arn"):
+        return requirement("cdc_lag", "Change data capture has caught up", UNMET,
+                           "CDC is not blocked, but no replication task has been started",
+                           "Run Phase 7 with --migration-type full-load-and-cdc, let the full "
+                           "load finish, and leave replication running up to the cutover.")
+
+    status = (dms_record.get("plan") or {}).get("migration_type")
+    if status == "full-load":
+        return requirement("cdc_lag", "Change data capture has caught up", NOT_APPLICABLE,
+                           "the replication task is full-load only, so there is no ongoing "
+                           "replication to measure",
+                           "A low-downtime cutover needs full-load-and-cdc. As it stands the "
+                           "cutover needs an outage window covering the whole load.")
+
+    cdc = dms_record.get("cdc") or {}
+    worst = cdc.get("worst_seconds")
+    if worst is None:
+        return requirement("cdc_lag", "Change data capture has caught up", UNMET,
+                           "the task is replicating but CloudWatch has published no latency "
+                           "metric yet",
+                           "Latency appears a few minutes after the full load finishes. Wait, "
+                           "then rebuild the certificate -- do not cut over on an unmeasured lag.")
+
+    threshold = cdc.get("threshold_seconds", 30)
+    if worst > threshold:
+        return requirement(
+            "cdc_lag", "Change data capture has caught up", UNMET,
+            f"the target is {worst}s behind the source; the threshold is {threshold}s",
+            "Every second of lag is data the target does not have yet. Either wait for it to "
+            "catch up, or quiesce the source and let replication drain before switching over.",
+            latency_seconds=worst, threshold_seconds=threshold)
+
+    return requirement(
+        "cdc_lag", "Change data capture has caught up", MET,
+        f"the target is {worst}s behind the source, within the {threshold}s threshold",
+        latency_seconds=worst, threshold_seconds=threshold,
+        source_seconds=cdc.get("source_seconds"), target_seconds=cdc.get("target_seconds"))
 
 
 def target_ready(run: dict) -> dict:
@@ -236,12 +278,13 @@ def rollback_plan(plan: dict) -> dict:
                        "the source is untouched and authoritative", steps=steps)
 
 
-def build(recs: dict, plan: dict, run: dict, acknowledgement: dict | None) -> list[dict]:
+def build(recs: dict, plan: dict, run: dict, acknowledgement: dict | None,
+          dms_record: dict | None = None) -> list[dict]:
     return [
         records_match_target(recs, run.get("run_id")),
         validation_passed(run.get("run_id")),
         gate_allows_cutover(recs["gate"], acknowledgement),
-        cdc_lag(recs["gate"]),
+        cdc_lag(recs["gate"], dms_record),
         target_ready(run),
         outstanding_steps(recs["remediation"]),
         declared_gaps(recs, run.get("run_id")),

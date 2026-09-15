@@ -22,6 +22,7 @@ from collections import Counter, defaultdict
 
 from provision import policy as prov_policy
 
+from . import crossengine as ce
 from .context import EXPECTED, MATCH, MISMATCH, NOT_COMPARABLE, Ctx, finding, is_internal
 
 IDENT = re.compile(r"^[A-Z][A-Z0-9_$#]{0,127}$")
@@ -33,7 +34,72 @@ CHECKSUM_TYPES = ("VARCHAR2", "CHAR", "NVARCHAR2", "NCHAR", "NUMBER", "FLOAT", "
 
 # --------------------------------------------------------------------------- level 1
 
+PG_OBJECT_SQL = """
+SELECT CASE c.relkind WHEN 'r' THEN 'TABLE' WHEN 'p' THEN 'TABLE'
+                      WHEN 'v' THEN 'VIEW'  WHEN 'm' THEN 'MATERIALIZED VIEW'
+                      WHEN 'i' THEN 'INDEX' WHEN 'S' THEN 'SEQUENCE' ELSE upper(c.relkind::text) END,
+       upper(c.relname)
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = %s AND c.relkind IN ('r','p','v','m','i','S')
+UNION ALL
+SELECT 'FUNCTION', upper(p.proname)
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = %s
+"""
+
+
+def _cross_engine_objects(ctx: Ctx) -> list[dict]:
+    """What exists on a PostgreSQL target, compared honestly.
+
+    A name-for-name comparison is the wrong question here. Phase 4b flattens a
+    package into one function per member, DMS migrates no sequences at all, and
+    a view is a residue item -- so "PKG_LOAN_OPS is missing" would be true,
+    expected, and useless. Tables are the one class where a missing object is
+    unambiguously wrong, so those are compared by name and everything else is
+    reported as a count with the reason it cannot be matched.
+    """
+    owner, out = ctx.estate, []
+    try:
+        rows = ctx.rows(ctx.target(), PG_OBJECT_SQL, (owner.lower(), owner.lower()))
+    except Exception as exc:  # noqa: BLE001
+        return [finding(1, "objects present", NOT_COMPARABLE,
+                        f"the target catalogue could not be read: {str(exc).splitlines()[0]}")]
+    tgt = {(t, n) for t, n in rows}
+
+    src_tables = {o["object_name"] for o in ctx.data("objects")
+                  if o.get("owner") == owner and o.get("object_type") == "TABLE"
+                  and not is_internal(o["object_name"])}
+    tgt_tables = {n for t, n in tgt if t == "TABLE"}
+    missing = sorted(src_tables - tgt_tables)
+    if missing:
+        out.append(finding(1, "tables present", MISMATCH,
+                           f"{len(missing)} source table(s) are not on the target",
+                           why="Phase 7 holds some tables back deliberately -- Oracle internals, the "
+                               "materialized view, the external table -- and those are listed in its "
+                               "plan with a reason. Anything here that is not one of those is a "
+                               "migration failure.",
+                           evidence={"missing": missing}))
+    else:
+        out.append(finding(1, "tables present", MATCH,
+                           f"all {len(src_tables)} source tables exist on the target"))
+
+    src_counts = Counter(o["object_type"] for o in ctx.data("objects")
+                         if o.get("owner") == owner and not is_internal(o["object_name"]))
+    out.append(finding(1, "other objects", EXPECTED,
+                       "counted, not matched by name",
+                       why="Across engines the objects do not correspond one to one. A package "
+                           "becomes one function per member (Phase 4b), sequences are not migrated "
+                           "by DMS at all and are set by its residue step, and views are rewritten "
+                           "rather than copied. Matching these by name would report failures on a "
+                           "correct migration.",
+                       evidence={"source": dict(src_counts),
+                                 "target": dict(Counter(t for t, _ in tgt))}))
+    return out
+
+
 def objects(ctx: Ctx) -> list[dict]:
+    if ctx.cross_engine:
+        return _cross_engine_objects(ctx)
     owner = ctx.estate
     src = {(o["object_type"], o["object_name"]) for o in ctx.data("objects") if o.get("owner") == owner}
     tgt = {(t, n) for t, n in ctx.rows(ctx.target(),
@@ -80,6 +146,18 @@ def _user_tables(ctx: Ctx) -> list[str]:
 
 
 def structure(ctx: Ctx) -> list[dict]:
+    if ctx.cross_engine:
+        # Every query in this level reads dba_tab_columns, dba_constraints and
+        # dba_indexes. There is no PostgreSQL equivalent that would answer the
+        # same question: the column types are deliberately different, and the
+        # index set is whatever DMS and the converted DDL created. Saying so is
+        # better than a rewrite that reports differences which are all expected.
+        return [finding(2, "structure", NOT_COMPARABLE,
+                        "structure is not compared across engines",
+                        why="The target's column types are deliberately different -- NUMBER became "
+                            "NUMERIC, VARCHAR2 became VARCHAR -- so a definition comparison would "
+                            "report a difference for every column. What matters across engines is "
+                            "whether the values survived, which levels 3 and 4 measure.")]
     owner, out = ctx.estate, []
     tables = _user_tables(ctx)
 
@@ -179,7 +257,11 @@ def row_counts(ctx: Ctx) -> list[dict]:
     owner, out = ctx.estate, []
     matched, differ, unreadable = [], [], []
     for table in _user_tables(ctx):
-        src, tgt = ctx.both(f'SELECT COUNT(*) FROM "{owner}"."{table}"')
+        # Same question, each engine's own spelling. PostgreSQL holds the table
+        # under the lower-cased name Phase 7's mappings gave it.
+        target_sql = (f'SELECT COUNT(*) FROM "{owner.lower()}"."{ce.target_name(table)}"'
+                      if ctx.cross_engine else None)
+        src, tgt = ctx.both(f'SELECT COUNT(*) FROM "{owner}"."{table}"', target_sql=target_sql)
         s = src[0][0] if isinstance(src, list) else src
         t = tgt[0][0] if isinstance(tgt, list) else tgt
         if isinstance(s, int) and isinstance(t, int):
@@ -240,6 +322,17 @@ def content(ctx: Ctx) -> list[dict]:
                     key=lambda c: c.get("column_id") or 0):
         if c.get("user_generated") == "NO" or c.get("hidden_column") == "YES":
             continue
+        if ctx.cross_engine:
+            # Across engines the comparable set is wider in one direction and
+            # narrower in another: LOBs *can* be compared over a prefix, while
+            # ROWID and user-defined types have no shared text form at all.
+            keep, dropped = ce.comparable_columns([c])
+            if keep:
+                cols_by_table[c["table_name"]].append(c)
+            else:
+                skipped_cols[c["table_name"]].append(
+                    f'{c["column_name"]} ({c["data_type"]}) -- {dropped[0]["why_skipped"]}')
+            continue
         (cols_by_table if c["data_type"] in CHECKSUM_TYPES else skipped_cols)[c["table_name"]].append(
             c if c["data_type"] in CHECKSUM_TYPES else f'{c["column_name"]} ({c["data_type"]})')
 
@@ -249,9 +342,16 @@ def content(ctx: Ctx) -> list[dict]:
         if not cols:
             skipped.append(f"{table}: no column of a comparable type")
             continue
-        sql = _checksum_sql(owner, table, cols)
+        if ctx.cross_engine:
+            # Neither side runs the other's SQL. Both compute MD5 over the same
+            # canonical text, so equal data gives an equal number even though
+            # the engines render values differently -- see validate/crossengine.
+            sql = ce.oracle_checksum_sql(owner, table, cols)
+            target_sql = ce.postgres_checksum_sql(owner, table, cols)
+        else:
+            sql, target_sql = _checksum_sql(owner, table, cols), None
         started = time.monotonic()
-        src, tgt = ctx.both(sql)
+        src, tgt = ctx.both(sql, target_sql=target_sql)
         secs = time.monotonic() - started
         if not isinstance(src, list) or not isinstance(tgt, list):
             unreadable.append(f"{table}: source {src if not isinstance(src, list) else 'ok'}, "
@@ -265,12 +365,25 @@ def content(ctx: Ctx) -> list[dict]:
     if differ:
         out.append(finding(4, "data content", MISMATCH,
                            f"{len(differ)} table(s) hold different values", evidence={"differ": differ}))
+    why = "Counts can match while values differ; this compares the values themselves."
+    if ctx.cross_engine:
+        why += (" Across engines the comparison is over a canonical text form of each row, not raw "
+                "bytes: trailing zeros, CHAR padding and Oracle's empty-string-is-NULL are "
+                "normalised on both sides first, because they are rendering differences rather "
+                "than data differences.")
     out.append(finding(4, "data content",
                        NOT_COMPARABLE if not same else (MATCH if not differ else NOT_COMPARABLE),
                        f"{len(same)} table(s) match on a checksum of every row" if same
                        else "no table could be checksummed on both sides",
-                       why="Counts can match while values differ; this compares the values themselves.",
-                       evidence={"checked": same}))
+                       why=why, evidence={"checked": same}))
+    if ctx.cross_engine:
+        out.append(finding(4, "differences that are correct", EXPECTED,
+                           f"{len(ce.EXPECTED_DIFFERENCES)} known difference(s) between these engines "
+                           "are normalised rather than reported as data loss",
+                           why="A cross-engine validation that flagged every semantic difference "
+                               "would show failures on a perfect migration, and a person would stop "
+                               "reading it.",
+                           evidence={k: v for k, v in ce.EXPECTED_DIFFERENCES.items()}))
     if skipped_cols:
         out.append(finding(4, "columns not checksummed", EXPECTED,
                            f"{sum(len(v) for v in skipped_cols.values())} column(s) of types a checksum "
@@ -287,6 +400,17 @@ def content(ctx: Ctx) -> list[dict]:
 # --------------------------------------------------------------------------- level 5
 
 def behaviour(ctx: Ctx) -> list[dict]:
+    if ctx.cross_engine:
+        # invalid objects, grants, sequence values and materialized view
+        # staleness are all read from dba_* views. The equivalent questions on
+        # PostgreSQL are answered by Phase 7's residue, which already reports
+        # the sequences and the materialized view as work with a named owner.
+        return [finding(5, "behaviour", NOT_COMPARABLE,
+                        "behaviour is not compared across engines",
+                        why="Invalid objects, grants and sequence positions are Oracle catalogue "
+                            "concepts. On the heterogeneous path the equivalent is Phase 7's "
+                            "residue: sequences to reset, views to create, and anything DMS "
+                            "suspended -- each already listed there with who resolves it.")]
     owner, out = ctx.estate, []
 
     # invalid objects

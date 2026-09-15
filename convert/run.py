@@ -22,8 +22,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--model-mode", choices=["off", "static", "live"], default="static",
         help="where a conversion comes from when the rules decline: off (route to a person), static "
-             "(hand-written stand-ins in bedrock/static/convert/, labelled as such), live (Bedrock -- "
-             "invoke is blocked on this account)",
+             "(hand-written stand-ins in bedrock/static/convert/, labelled as such), live (Bedrock; "
+             "the five gates still decide, a model never approves its own output)",
     )
     parser.add_argument("--pg-dsn", type=str, default=None, help="host:5432/dbname (or DBSHIFT_PG_DSN)")
     parser.add_argument("--no-compile", action="store_true", help="skip the PostgreSQL compile gate")

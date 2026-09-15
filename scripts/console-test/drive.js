@@ -20,8 +20,13 @@ function log(name, ok, detail = '') {
   const page = await browser.newPage({ viewport: { width: 1360, height: 900 } });
   const errors = [];
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
-  page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
-  page.on('response', r => { if (r.status() >= 400) errors.push(`${r.status()} ${r.url()}`); });
+  page.on('console', m => { if (m.type() === 'error' && !/40\d \(/.test(m.text())) errors.push('console: ' + m.text()); });
+  // A 409 on a phase that has not run yet is the gate answering correctly
+  // ("not rendered yet", "no sizing run yet"), not a fault.
+  page.on('response', r => {
+    if (r.status() >= 400 && !(r.status() === 409 && /\/api\//.test(r.url())))
+      errors.push(`${r.status()} ${r.url()}`);
+  });
 
   const stageDone = (id, timeout) =>
     page.waitForSelector(`.stage[data-stage="${id}"].done`, { timeout });

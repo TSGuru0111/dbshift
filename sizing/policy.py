@@ -153,3 +153,32 @@ def storage_floor_gb(segment_bytes: int) -> int:
 
 def processor_licences(vcpu: int) -> int:
     return -(-vcpu // VCPU_PER_PROCESSOR_LICENCE)
+
+
+# --- PostgreSQL target -------------------------------------------------------
+# RDS for PostgreSQL has no edition and no licence model: the engine is open
+# source and AWS charges for the instance alone. Everything the Oracle path
+# computes about editions, options and processor licences is simply absent
+# here, which is the commercial argument for the heterogeneous path.
+
+PG_MIN_STORAGE_GB = 20        # RDS for PostgreSQL will not create an instance below this
+
+# PostgreSQL stores the same logical data differently: no segment-level
+# compression, 8 KB pages with their own fill factor, TOAST for large values,
+# and indexes that are usually larger than Oracle's for the same columns.
+# Oracle segment bytes are therefore not a like-for-like starting point.
+#
+# 1.2 is a deliberate over-estimate applied *before* the ordinary headroom
+# multiple. Under-provisioning storage on RDS is the expensive mistake: growing
+# it is online, but shrinking it is not possible at all without a rebuild.
+PG_SEGMENT_MULTIPLE = 1.2
+
+
+def pg_storage_floor_gb(segment_bytes: int) -> int:
+    """Storage for a PostgreSQL target, from Oracle segment bytes.
+
+    Applies the engine difference first, then the same free-space headroom the
+    Oracle path uses, so the two numbers stay comparable.
+    """
+    used = (segment_bytes / 1024**3) * PG_SEGMENT_MULTIPLE
+    return max(PG_MIN_STORAGE_GB, int(-(-(used * STORAGE_HEADROOM) // 1)))

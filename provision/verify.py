@@ -36,6 +36,20 @@ def _c(name, status, detail):
 
 
 def verify(session, deployed: dict, plan: dict) -> list[dict]:
+    """Ask the new target what it is, and compare with what the render said.
+
+    Branches on the engine the render recorded. The two databases answer the
+    same questions in entirely different ways -- `v$instance` against
+    `version()`, `nls_database_parameters` against `pg_encoding_to_char` -- and
+    the Oracle-only questions (container database, Oracle Text) have no
+    PostgreSQL counterpart at all.
+    """
+    if plan["rendered"].get("target") == "POSTGRESQL":
+        return _verify_postgres(session, deployed, plan)
+    return _verify_oracle(session, deployed, plan)
+
+
+def _verify_oracle(session, deployed: dict, plan: dict) -> list[dict]:
     import oracledb
 
     expect = {x["property"]: x["value"] for x in plan["rendered"]["provenance"]}
@@ -90,6 +104,83 @@ def verify(session, deployed: dict, plan: dict) -> list[dict]:
         text = one("SELECT status FROM dba_registry WHERE comp_id = 'CONTEXT'")
         checks.append(_c("oracle_text", PASS if text == "VALID" else FAIL,
                          f"CONTEXT component {text or 'not installed'} -- needed by IX_COMM_NOTES_TEXT (RDS-008)"))
+    return checks
+
+
+def _verify_postgres(session, deployed: dict, plan: dict) -> list[dict]:
+    """The same question -- "is this what the render said?" -- asked of PostgreSQL.
+
+    Three of the Oracle checks have no counterpart and are not faked:
+    S3_INTEGRATION is an Oracle option, `v$database.cdb` is a container-database
+    concept, and Oracle Text is an Oracle component. What replaces them is the
+    one thing that cannot be changed afterwards: the server encoding.
+    """
+    import pg8000.dbapi
+
+    expect = {x["property"]: x["value"] for x in plan["rendered"]["provenance"]}
+    stack = deployed["stack_name"]
+    checks: list[dict] = []
+
+    rds = session.client("rds", region_name=policy.REGION)
+    db = rds.describe_db_instances(DBInstanceIdentifier=stack)["DBInstances"][0]
+    for prop, actual in [("DBInstanceClass", db["DBInstanceClass"]),
+                         ("EngineVersion", db["EngineVersion"]),
+                         ("LicenseModel", db["LicenseModel"])]:
+        checks.append(_c(prop, PASS if actual == expect.get(prop) else FAIL,
+                         f"{actual} (rendered {expect.get(prop)})"))
+    checks.append(_c("engine", PASS if db["Engine"] == policy.PG_ENGINE else FAIL,
+                     f"{db['Engine']} (rendered {policy.PG_ENGINE})"))
+
+    ssm = session.client("ssm", region_name=policy.REGION)
+    password = ssm.get_parameter(Name=plan["rendered"]["password_parameter"],
+                                 WithDecryption=True)["Parameter"]["Value"]
+    endpoint = deployed["outputs"]["Endpoint"]
+    port = int(deployed["outputs"]["Port"])
+    try:
+        conn = pg8000.dbapi.connect(host=endpoint, port=port, database=policy.PG_DB_NAME,
+                                    user=policy.PG_MASTER_USERNAME, password=password, timeout=20)
+    except Exception as exc:  # noqa: BLE001
+        checks.append(_c("connect", FAIL, str(exc).splitlines()[0]))
+        return checks
+    finally:
+        password = None   # noqa: F841 -- drop the reference as soon as it is used
+
+    try:
+        cur = conn.cursor()
+
+        def one(sql):
+            cur.execute(sql)
+            row = cur.fetchone()
+            return row[0] if row else None
+
+        checks.append(_c("connect", PASS, f"logged in as {policy.PG_MASTER_USERNAME}"))
+        version = one("SHOW server_version")
+        checks.append(_c("version",
+                         PASS if str(version).startswith(policy.PG_TARGET_MAJOR + ".") else FAIL,
+                         f"PostgreSQL {version}"))
+
+        # Encoding is fixed at creation and cannot be changed afterwards, which
+        # makes it the PostgreSQL equivalent of Oracle's character set check.
+        encoding = one("SELECT pg_encoding_to_char(encoding) FROM pg_database "
+                       "WHERE datname = current_database()")
+        checks.append(_c("Encoding", PASS if encoding == policy.PG_ENCODING else FAIL,
+                         f"{encoding} (rendered {policy.PG_ENCODING})"))
+
+        checks.append(_c("database", PASS if one("SELECT current_database()") == policy.PG_DB_NAME
+                         else FAIL, f"current_database() = {one('SELECT current_database()')}"))
+
+        # Phase 4b compiles against a local PostgreSQL that may have extensions
+        # this one does not. Reporting what is actually here avoids a surprise
+        # at apply time.
+        cur.execute("SELECT extname FROM pg_extension ORDER BY 1")
+        exts = ", ".join(r[0] for r in cur.fetchall())
+        checks.append(_c("extensions", INFO, exts or "none beyond the defaults"))
+        checks.append(_c("plpgsql_check", INFO,
+                         "installed" if "plpgsql_check" in exts
+                         else "not installed -- the compile gate falls back to "
+                              "check_function_bodies, which is what it does locally too"))
+    finally:
+        conn.close()
     return checks
 
 

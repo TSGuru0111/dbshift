@@ -80,7 +80,8 @@ def _dataset(run_dir: Path | None, name: str) -> list[dict]:
 def build(*, assessment: dict, conversion: dict | None = None, sizing: dict | None = None,
           gate: dict | None = None, objects: list[dict] | None = None, provision: dict | None = None,
           validation: dict | None = None, certificate: dict | None = None,
-          migration: dict | None = None) -> dict:
+          migration: dict | None = None, ddl: dict | None = None,
+          dms_record: dict | None = None) -> dict:
     run_id = assessment["collector_run_id"]
     findings = assessment.get("findings") or []
     issues = assessment.get("issues") or []
@@ -88,6 +89,9 @@ def build(*, assessment: dict, conversion: dict | None = None, sizing: dict | No
     estate = (conversion or {}).get("estate") or (owners.most_common(1)[0][0] if owners else None)
     objects = [o for o in (objects or []) if o.get("owner") == estate
                and not o["object_name"].upper().startswith(INTERNAL_PREFIXES)]
+    # Which path this is. Everything that differs between the two -- what
+    # converted the DDL, what moved the data -- reads this rather than assuming.
+    heterogeneous = ((sizing or {}).get("decision") or {}).get("engine") == "POSTGRESQL"
 
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -95,8 +99,11 @@ def build(*, assessment: dict, conversion: dict | None = None, sizing: dict | No
         "estate": estate,
         "provenance": _provenance(assessment, conversion, sizing, gate),
         "target_decision": _target(sizing),
-        "schema_conversion": _schema_conversion(objects, findings, issues, conversion),
-        "dms_assessment": _dms(issues, findings, gate, objects, migration),
+        "target_engine": "POSTGRESQL" if heterogeneous else "ORACLE",
+        "schema_conversion": _schema_conversion(objects, findings, issues, conversion,
+                                                heterogeneous, ddl),
+        "dms_assessment": _dms(issues, findings, gate, objects, migration,
+                               heterogeneous, dms_record),
         "status": _status(gate, provision, validation, certificate, run_id),
         "scores": assessment.get("scores"),
         "recall": assessment.get("answer_key"),
@@ -132,6 +139,8 @@ def build_from_disk(run_dir: Path | None = None, root: Path | None = None) -> di
         validation=_record(root, "validate", "validation_report.json"),
         certificate=_record(root, "cutover", "certificate.json"),
         migration=_record(root, "migrate", "migration_run.json"),
+        ddl=_record(root, "convert", "schema_ddl.json"),
+        dms_record=_record(root, "dms", "dms_run.json"),
     )
 
 
@@ -170,7 +179,37 @@ def _target(sizing) -> dict | None:
     }
 
 
-def _schema_conversion(objects, findings, issues, conversion) -> dict:
+def _storage_note(heterogeneous: bool, ddl: dict | None) -> str:
+    """What happened to table, index and constraint DDL -- which differs by path.
+
+    On the homogeneous path nothing converts it because nothing needs to. On the
+    heterogeneous path Phase 4c generates it, and saying otherwise would
+    understate what was done and send a reader looking for work already finished.
+    """
+    if not heterogeneous:
+        return ("Table, index and constraint DDL is not converted on this path and does not need "
+                "to be: the target is the same engine, so Data Pump moves the definitions "
+                "unchanged. The action items against these objects are what a person must handle "
+                "either way.")
+    if ddl and ddl.get("counts"):
+        c = ddl["counts"]
+        note = (f"Table, index and constraint DDL **is** converted, by Phase 4c: {c['tables']} table(s), "
+                f"{c['primary_unique']} primary/unique key(s), {c['foreign']} foreign key(s), "
+                f"{c['check']} check constraint(s) and {c['indexes']} index(es), generated from "
+                "discovery and proven by running every statement on PostgreSQL inside a "
+                "transaction that was rolled back.")
+        if c.get("notes_warn") or c.get("notes_error"):
+            note += (f" {c.get('notes_error', 0)} error(s) and {c.get('notes_warn', 0)} warning(s) "
+                     "need a person -- reserved words, virtual columns, function-based indexes and "
+                     "check constraints written in Oracle SQL.")
+        return note
+    return ("Table, index and constraint DDL is not converted in this run. On a heterogeneous path "
+            "either Phase 4c generates it or DMS Schema Conversion does; run `python -m "
+            "convert.ddl_run --compile` to produce and prove it.")
+
+
+def _schema_conversion(objects, findings, issues, conversion, heterogeneous=False, ddl=None) -> dict:
+    storage_note = _storage_note(heterogeneous, ddl)
     by_type = Counter(o["object_type"] for o in objects)
     fcount = defaultdict(Counter)   # object_type -> rule_id -> n
     for f in findings:
@@ -258,13 +297,11 @@ def _schema_conversion(objects, findings, issues, conversion) -> dict:
         "storage_objects": storage, "partitions": partitions,
         "code_objects": code, "code_summary": summary,
         "action_items": items, "by_complexity": {k: by_complexity.get(k, 0) for k in COMPLEXITY_ORDER},
-        "storage_note": ("Table, index and constraint DDL is not converted by DBShift: on a heterogeneous "
-                         "path DMS Schema Conversion produces it. The action items against these objects "
-                         "are what a person must handle either way."),
+        "storage_note": storage_note,
     }
 
 
-def _dms(issues, findings, gate, objects, migration) -> dict:
+def _dms(issues, findings, gate, objects, migration, heterogeneous=False, dms_record=None) -> dict:
     by_rule = {i["rule_id"]: i for i in issues}
     blocks_by_rule = defaultdict(list)
     for name, ph in ((gate or {}).get("by_phase") or {}).items():
@@ -312,7 +349,21 @@ def _dms(issues, findings, gate, objects, migration) -> dict:
                         if cdc_blocked else "Change data capture is possible; a low-downtime cutover can be planned."),
         "used": None,
     }
-    if migration:
+    if dms_record:
+        mt = (dms_record.get("plan") or {}).get("migration_type", "full-load")
+        status = dms_record.get("status")
+        path["used"] = (
+            f"Phase 7 moved this estate with AWS DMS ({mt}), because the target is PostgreSQL and "
+            "Data Pump writes an Oracle-only format that PostgreSQL cannot read. "
+            + (f"The task finished as {status}. " if status else "")
+            + "A replication instance bills by the hour for as long as it exists, unlike a Data "
+              "Pump export, which finishes and stops.")
+    elif heterogeneous:
+        path["used"] = (
+            "No data has been moved yet. On this path it must be AWS DMS: Data Pump writes an "
+            "Oracle-only format that PostgreSQL cannot read, so there is no alternative, and DMS "
+            "is also what makes change data capture and a short cutover possible.")
+    elif migration:
         path["used"] = ("Phase 7 moved this estate with Data Pump over S3, not DMS: at this size it loads in "
                         "minutes and needs no replication instance. DMS is the path when CDC is required or "
                         "the estate is too large to load inside a window.")

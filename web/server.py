@@ -13,6 +13,7 @@ written to disk, logged, or returned to the browser.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import sys
 import threading
@@ -44,6 +45,8 @@ from botocore.exceptions import ClientError
 from killswitch import run as killswitch_run
 from migrate import run as migrate_run
 from migrate import steps as migrate_steps
+from dms import policy as dms_policy
+from dms import run as dms_run
 from provision import deploy as provision_deploy
 from provision import policy as provision_policy
 from provision import run as provision_run
@@ -54,6 +57,7 @@ from remediate import plan as remediate_plan
 from report import build as report_build
 from report import render as report_render
 from sizing import run as sizing_run
+from sizing import target as sizing_target
 from sizing import utilization as sizing_utilization
 from collector.db import in_binds  # noqa: F401  (kept for custom probe authors)
 from collector.probes import PROBES
@@ -83,6 +87,8 @@ class State:
     manifest: dict | None = None
     assessment: dict | None = None
     sizing: dict | None = None
+    engine: str = sizing_target.ORACLE   # which target every later phase acts on
+    engine_chosen_by: str | None = None
     utilization: dict | None = None
     remediation: dict | None = None
     rehearsal_dsn: str | None = None
@@ -234,6 +240,9 @@ def get_state():
         "has_discovery": STATE.manifest is not None,
         "has_assessment": STATE.assessment is not None,
         "has_sizing": STATE.sizing is not None,
+        "engine": STATE.engine,
+        "engine_label": sizing_target.LABEL[STATE.engine],
+        "engine_chosen_by": STATE.engine_chosen_by,
         "has_remediation": STATE.remediation is not None,
         "has_conversion": STATE.conversion is not None,
         "pg_dsn": STATE.pg_dsn,
@@ -599,6 +608,43 @@ def utilization_sample():
     }
 
 
+class EngineRequest(BaseModel):
+    engine: str
+
+
+@app.post("/api/engine")
+def set_engine(req: EngineRequest):
+    """Choose the migration target.
+
+    Validated against the assessment when one exists, so a path the estate
+    blocks cannot be selected. Before sizing has run there is nothing to
+    validate against; the choice is still refused at sizing time, because
+    `sizing.target.choose` checks again there.
+    """
+    engine = req.engine.upper()
+    if engine not in sizing_target.TARGETS:
+        raise HTTPException(400, f"unknown target {req.engine!r}")
+    if STATE.sizing and STATE.sizing.get("target_assessment"):
+        try:
+            sizing_target.choose(engine, STATE.sizing["target_assessment"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    STATE.engine = engine
+    # Taken from the AWS identity where credentials exist, never typed into the
+    # browser. Unlike a cutover approval this is not an authorisation, so it
+    # does not *require* credentials -- a target may be chosen while offline,
+    # and the record then says the choice was unattributed rather than naming
+    # someone who did not make it.
+    STATE.engine_chosen_by = None
+    try:
+        ident = _aws_session().client("sts").get_caller_identity()
+        STATE.engine_chosen_by = provision_deploy.identity_name(ident["Arn"])
+    except Exception:  # noqa: BLE001 -- no credentials is an ordinary state here
+        pass
+    return {"ok": True, "engine": engine, "label": sizing_target.LABEL[engine],
+            "chosen_by": STATE.engine_chosen_by}
+
+
 @app.get("/api/size")
 def size():
     if not STATE.manifest:
@@ -611,11 +657,19 @@ def size():
             Path(__file__).resolve().parent.parent / "sizing" / "output",
             measured=measured,
             on_event=emit,
+            engine=STATE.engine,
+            chosen_by=STATE.engine_chosen_by,
+            # Phase 4b measures the real cost of the heterogeneous path. Where it
+            # has run, the assessment uses those compile results instead of
+            # reporting the effort as unknown.
+            conversion=STATE.conversion,
         )
         STATE.sizing = out
         d = out["decision"]
         emit({
             "event": "complete",
+            "engine": d["engine"],
+            "engine_label": d["engine_label"],
             "edition": d["edition"],
             "licence_model": d["licence_model"],
             "instance_class": d["instance_class"],
@@ -640,6 +694,28 @@ class RehearsalRequest(BaseModel):
     user: str = "dbmig_rehearsal"
     password: str = ""
     schema_name: str = "DBMIG_REHEARSAL"
+
+
+def _model_mode() -> str:
+    """Whether the model tier can answer right now.
+
+    Checked rather than assumed: the console used to hardcode "static" because
+    Bedrock invoke was blocked on the old account, and that claim then outlived
+    the account. DBSHIFT_MODEL_MODE forces it either way for a demo.
+    """
+    forced = os.environ.get("DBSHIFT_MODEL_MODE")
+    if forced in ("off", "static", "live"):
+        return forced
+    # `verified` is set only from a passing `python -m bedrock.verify`, i.e. an
+    # actual invocation. Trusting it here avoids billing for a model call just to
+    # decide a label on every page load. A tier that is bound but unverified is
+    # treated as unavailable rather than tried and failed mid-phase.
+    try:
+        from bedrock.client import load_config
+        tiers = load_config().get("tiers") or {}
+        return "live" if tiers.get("reasoning", {}).get("verified") else "static"
+    except Exception:  # noqa: BLE001
+        return "static"
 
 
 def _rehearsal_target():
@@ -686,9 +762,11 @@ def remediate():
     def work(emit):
         result = remediate_plan.build(
             STATE.assessment,
-            # Static stand-ins, never "live": Bedrock invoke is blocked, and a
-            # static fixture reports model_id=None so nothing claims a model ran.
-            model_mode="static",
+            # The model proposes; the gates still decide. Nothing reaches the
+            # database because a model wrote it -- a model-authored fix goes
+            # through the same screens as any other, and is labelled with the
+            # model id so a reviewer knows what produced the text.
+            model_mode=_model_mode(),
             rehearsal_target=_rehearsal_target(),
             on_event=emit,
         )
@@ -756,8 +834,8 @@ def convert():
         inv = convert_inventory.load(STATE.run_dir)
         result = convert_plan.build(
             inv,
-            # Static stand-ins, never "live", for the same reason as Phase 4.
-            model_mode="static",
+            # Live for the same reason as Phase 4, and with the same gates.
+            model_mode=_model_mode(),
             pg_target=STATE.pg_target,
             on_event=emit,
         )
@@ -795,6 +873,8 @@ def _report_data() -> dict:
         validation=report_build._load("validate/output/validation_report.json"),
         certificate=report_build._load("cutover/output/certificate.json"),
         migration=report_build._load("migrate/output/migration_run.json"),
+        ddl=report_build._load("convert/output/schema_ddl.json"),
+        dms_record=report_build._load("dms/output/dms_run.json"),
     )
 
 
@@ -1070,6 +1150,87 @@ def migrate_plan():
     return {"steps": migrate_run.plan(), "last_run": migrate_run.last_run()}
 
 
+# --- Phase 7, heterogeneous path: AWS DMS ------------------------------------
+# Data Pump writes an Oracle-only format, so a PostgreSQL target cannot use it.
+# DMS is not an alternative engine for the same job -- it is the only route, and
+# it is the one that makes change data capture (and so a short cutover) possible.
+
+@app.get("/api/dms/plan")
+def dms_plan(migration_type: str = dms_policy.FULL_LOAD):
+    """Everything knowable without creating anything. Free, and creates nothing."""
+    if migration_type not in dms_policy.MIGRATION_TYPES:
+        raise HTTPException(400, f"unknown migration type {migration_type!r}")
+    try:
+        session = _aws_session()
+    except Exception:  # noqa: BLE001 -- planning works offline; only the billing check needs AWS
+        session = None
+    try:
+        return dms_run.plan(session, migration_type=migration_type)
+    except FileNotFoundError as exc:
+        raise HTTPException(409, f"a record this phase needs is missing: {exc}") from exc
+
+
+@app.get("/api/dms/status")
+def dms_status():
+    """Where a running task stands. Read-only."""
+    out = dms_run.status(_aws_session())
+    if out is None:
+        raise HTTPException(409, "no DMS task has been started from this console")
+    return out
+
+
+class DmsExecute(BaseModel):
+    confirm_account: str
+    migration_type: str = dms_policy.FULL_LOAD
+    source_password: str = ""
+    target_password: str = ""
+    source_host: str = "localhost"
+    source_port: int = 1521
+    source_database: str = "XEPDB1"
+
+
+@app.post("/api/dms/execute")
+def dms_execute(req: DmsExecute):
+    """Create the replication instance, endpoints and task, then run it.
+
+    **This bills**, and unlike an RDS instance a replication instance bills for
+    as long as it exists whether or not a task is running. The account id is
+    typed back for the same reason a deploy asks for it.
+    """
+    if req.migration_type not in dms_policy.MIGRATION_TYPES:
+        raise HTTPException(400, f"unknown migration type {req.migration_type!r}")
+    plan = dms_run.plan(None, migration_type=req.migration_type)
+    estate = plan["estate"]
+
+    source = {"engine": "oracle", "host": req.source_host, "port": req.source_port,
+              "user": estate,
+              "password": req.source_password
+              or os.environ.get("DBSHIFT_SOURCE_OWNER_PASSWORD", ""),
+              "database": req.source_database}
+    target = {"engine": "postgres" if plan["heterogeneous"] else "oracle",
+              "host": "", "port": 5432 if plan["heterogeneous"] else 1521,
+              "user": "dbshiftadm",
+              "password": req.target_password or os.environ.get("DBSHIFT_PG_PASSWORD", ""),
+              "database": "dbshift"}
+    if not source["password"] or not target["password"]:
+        raise HTTPException(400, "both the source owner and target passwords are needed; "
+                                 "they are held in memory only and never written down")
+
+    def work(emit):
+        try:
+            rec = dms_run.execute(_aws_session(), confirm_account=req.confirm_account,
+                                  migration_type=req.migration_type, source=source,
+                                  target=target, on_event=emit)
+        except (PermissionError, ValueError) as exc:
+            emit({"event": "refused", "message": str(exc)})
+            return
+        emit({"event": "complete", "status": rec["status"],
+              "tables": len(rec.get("tables") or []),
+              "errored": rec.get("tables_errored", 0)})
+
+    return _stream(work)
+
+
 @app.get("/api/migrate")
 def migrate(resolve_external: bool = False, fresh_export: bool = False, from_step: str = ""):
     """Phase 7. Streams every step's start, backend log lines and result."""
@@ -1112,7 +1273,17 @@ def validate(checksum: bool = True):
         or os.environ.get("DBSHIFT_COLLECTOR_PASSWORD"),
         collector_user=STATE.user or "dbmig_collector",
         source_dsn=STATE.dsn or collector_config.DEFAULT_DSN,
-        checksum=checksum)
+        checksum=checksum,
+        # The engine comes from the Phase 3 decision, never a guess: it decides
+        # how every comparison is built, and Oracle rules against a PostgreSQL
+        # target would report differences that are not there.
+        target_engine=STATE.engine,
+        # No password is passed: STATE.pg_target is the *local Docker* compile
+        # container from Phase 4b, not the provisioned RDS instance, and reusing
+        # its password here would try the wrong credential against the wrong
+        # database. The validator reads the real one from SSM, the same place
+        # the deploy put it.
+        target_password=None)
 
     def work(emit):
         report = validate_run.execute(_aws_session(), opts, on_event=emit)

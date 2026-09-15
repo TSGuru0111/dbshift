@@ -231,7 +231,112 @@ carries `AUTHID_DEFINER` as not translated.
 `:NEW` — `NEW.due_on := COALESCE(OLD.due_on, date_trunc('second', LOCALTIMESTAMP))`
 — which is the case that would have been wrong without the `SYSDATE` rule.
 
+## Applying converted code
+
+> **Added 2026-09-14.** Until now this phase applied nothing, by design: there
+> was no target to apply to. With one, `convert/apply.py` creates the approved
+> objects for real — **the only place in `convert/` that writes to a database**.
+
+Four rules, each from a specific way this could go wrong:
+
+1. **Only `APPROVED` objects.** Not `READY_FOR_APPROVAL`. An object that passed
+   four gates and not the fifth is one a person has not read, and the fifth gate
+   *is* a person reading it. `APPLIABLE` is a set of one, so widening it is a
+   deliberate edit to that file.
+2. **The target is re-checked here**, not trusted from the plan. A plan can be
+   hours old and may have compiled against a different database.
+3. **One transaction, all or nothing.** A half-applied schema where a package
+   body exists and the function it calls does not is worse than no schema: it
+   looks finished.
+4. **Every statement is recorded before it runs**, so a process that dies
+   mid-apply still leaves a record of what was in flight.
+
+Plus a last screen on the exact text about to execute: no `DROP`, `TRUNCATE`,
+`DELETE`, `GRANT`, `REVOKE` or `SECURITY DEFINER`, whatever a gate said earlier.
+The policy gate checks the converted body; this checks the bytes about to run,
+and the two are not the same thing after a plan has been serialised and read
+back.
+
+The target DSN is typed back, the way a deploy asks for the account id. One
+person approving and another applying is **advisory, not a refusal** — that is
+ordinary separation of duty, and refusing it would push people to approve under
+whichever identity happens to be running the apply.
+
+**Proven on `DBMIG_APP`:** all six approved objects created for real on
+PostgreSQL 16 — two types, a function, a procedure, a package body flattened
+into two functions, and a trigger. Five functions and the types existed
+afterwards. Self-test `convert/selftest_apply.py` **35/35**, including a
+deliberate failure whose rollback left nothing behind.
+
 ## Change log
+
+**2026-09-14 — three bugs that only appear once code is applied.** Running the
+PostgreSQL path twice in a row found all three; each one made a *working*
+conversion look broken, or produced code that could not be called.
+
+**1. The shadow schema used the estate's own name.** That was invisible while
+nothing was ever applied: the compile transaction rolled back and the name was
+free again. Once the apply path creates real objects, the shadow's
+`CREATE TABLE customer` collides with the real `customer`, and every object is
+reported `BLOCKED` — which reads as "the conversion broke" when it had in fact
+succeeded and been applied. The shadow now lives in `dbshift_shadow_<estate>`,
+and `target.to_shadow` rewrites the qualifier on the statements the gate runs
+so a compile can never touch what an apply created.
+
+**2. `%TYPE` resolved only where `search_path` happened to be set.** A
+declaration of `v_name customer.full_name%TYPE` compiled under the gate, which
+puts the schema on the path, and then failed for any real caller with
+
+```
+invalid type name "customer.full_name%TYPE"
+```
+
+because PostgreSQL resolves `%TYPE` when the body is first parsed at **run**
+time. The table is now schema-qualified in the declaration.
+
+**3. Unqualified table names in the body had the same problem, one level
+deeper.** Oracle resolves `FROM customer` against the owning schema;
+PostgreSQL resolves it against the *caller's* `search_path`, so the converted
+function failed with `relation "customer" does not exist` for every application
+that had not set the path. Rewriting every table reference would mean parsing
+arbitrary SQL; PostgreSQL's own answer is a function-level
+`SET search_path = <estate>, pg_temp`, which is one line per function and
+reproduces Oracle's name resolution exactly. Every converted function,
+procedure and trigger function now carries it.
+
+**Proven by execution, not by reading.** After a fresh end-to-end run, with the
+estate schema deliberately **not** on the caller's `search_path`:
+
+| Object | Result |
+|---|---|
+| `fn_customer_full_name(1)` | returns `Alice Smith` |
+| `pkg_loan_ops$outstanding_balance(10)` | returns `5000.00` |
+| `trg_loan_status_check` | blocks reopening a written-off loan, with the original Oracle message |
+
+A Phase 4c check constraint also rejected an invalid `loan_status` during the
+test, which is the converted rule enforcing itself.
+
+**2026-09-14 — the apply path.** `convert/apply.py`, `convert/apply_run.py`,
+`convert/selftest_apply.py`. `plan.build` now records `approved_by` in the plan
+itself, not only in each object's approval gate: the apply reads it to record
+who approved what was applied.
+
+**Applying for real found two bugs that no amount of reading would have.** Both
+were the same shape — *the compile gate and the apply ran the statement
+differently, so the gate proved nothing about the apply*:
+
+- **`search_path`.** The gate sets it; the apply did not. A function declaring
+  `v_name customer.full_name%TYPE` compiled under the gate and failed on apply
+  with a syntax error, because the unqualified table resolved against the
+  shadow schema on the path and nowhere else.
+- **`check_function_bodies`.** Same divergence. Without it PostgreSQL stores a
+  plpgsql body without validating it at all.
+
+Both are now set identically in both places. Worth recording separately:
+`check_function_bodies` validates syntax and declarations but **does not resolve
+calls**, so a body calling a function that does not exist is created happily and
+fails at run time. That is PostgreSQL's documented behaviour, not a gap in this
+phase, and the gate's wording already says so.
 
 **2026-09-12 — shadow schema on a multi-schema run.** Driving the console
 with the schema field blank collects three owners (`DBMIG_APP`,

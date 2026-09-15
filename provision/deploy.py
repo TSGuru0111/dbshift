@@ -183,14 +183,19 @@ def deploy(session, *, confirm_account: str, accept_hourly: float | None, halt_r
     # Written before the first billable call, so an interrupted deploy still has a record.
     _append(OUTPUT / "deployments.jsonl", {**record, "event": "requested"})
 
-    tags = [{"Key": "project", "Value": "dbshift"}, {"Key": "estate", "Value": r["estate"]}]
+    # The SSM parameter holding the master password is a resource too, and the
+    # account's required tags apply to it like anything else.
+    tags = policy.as_tag_list({"project": "dbshift", "estate": r["estate"]})
     ssm = session.client("ssm", region_name=policy.REGION)
     emit({"event": "stage", "stage": "password", "detail": r["password_parameter"]})
     record["password"] = ensure_password(ssm, r["password_parameter"], tags)
 
     # Stack-level tag keys are distinct from the resource tags in the template, so
     # nothing collides when CloudFormation propagates them.
-    stack_tags = [{"Key": "dbshift-requested-by", "Value": who}]
+    # Stack-level tags CloudFormation propagates to every resource it creates.
+    # The required tags go here as well as on the template resources: a stack
+    # tagged correctly is what an account audit actually looks at.
+    stack_tags = policy.as_tag_list({"dbshift-requested-by": who})
     if ack:
         stack_tags.append({"Key": "dbshift-halt-acknowledged-by", "Value": ack["approved_by"]})
 

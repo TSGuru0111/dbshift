@@ -1,6 +1,20 @@
 # Phase 6 — Provision
 
-> **Latest update — 2026-09-11 (deployed and verified).** The approved deploy ran:
+> **Latest update — 2026-09-14 (two engines).** Provision follows the Phase 3
+> target decision: **RDS for Oracle** or **RDS for PostgreSQL**. The renderer
+> branches once, on `sizing.decision.engine`, and the PostgreSQL path drops
+> everything Oracle-specific — no option group, no `S3_INTEGRATION` role
+> association, no `CharacterSetName`, no edition-to-engine mapping, port 5432
+> and a lower-case database name. **Stack names now carry the engine**
+> (`dbshift-target-<estate>-pg`), because without it a second deploy would
+> silently UPDATE the first and replace an Oracle instance with a PostgreSQL
+> one. Rendered and validated against the live account on 2026-09-14:
+> CloudFormation accepted the template, PostgreSQL **16.9** orderable for
+> `db.t3.medium` `gp3`, every preflight check PASS. **Nothing was deployed.**
+> The bundled price list covers Oracle only, so the PostgreSQL estimate is
+> withheld rather than read from the wrong engine's SKUs.
+>
+> Earlier — **2026-09-11 (deployed and verified).** The approved deploy ran:
 > stack `dbshift-target-dbmig-app` `CREATE_COMPLETE`, instance available at
 > 07:53 UTC (≈16 min after the stack started) — **billing from then at
 > $0.098/hour**. `verify` passed every check: S3_INTEGRATION role `ACTIVE`, class,
@@ -253,6 +267,29 @@ the stack, because a stack cannot delete a bucket that holds objects.
 
 ## Change log
 
+**2026-09-14 — RDS for PostgreSQL as a second target.** `provision/policy.py`
+gained the PostgreSQL block (engine, licence `postgresql-license`, major 16 to
+match the Phase 4b compile gate, port 5432, `dbshiftadm`, lower-case `dbshift`
+database, UTF8). `render.render` branches on `sizing.decision.engine`; the
+option group, S3 integration role association and character-set properties are
+omitted on PostgreSQL, each with a provenance line saying *why* rather than
+just disappearing. `preflight.version_direction` now takes the engine and
+returns PASS across engines — Oracle 19c to PostgreSQL 16 is not a version
+downgrade, it is a different engine, and Phase 4b's compile is the real check.
+`preflight.aws_checks` resolves the orderable version against the right major.
+
+**`stack_name_for` gained the engine.** Both paths can be provisioned for the
+same estate, and the previous name would have collided: the second deploy would
+have updated the first stack in place, swapping the engine under a running
+instance. Oracle keeps the unsuffixed name so the deployed stack still
+resolves.
+
+Two smaller fixes found while proving it: `provision.run` mapped edition to
+engine unconditionally and would have raised `KeyError` on a null PostgreSQL
+edition; and `_report` printed `p['deploy']` unconditionally, so a *refused*
+plan died with a traceback that hid the refusal. The kill switch needed no
+change — it matches on the `dbshift` name prefix and already scans DMS
+replication instances, which matters now that DMS is the data path.
 **2026-09-11 — showing the CloudFormation work in a demo.** The target panel now
 shows the stack's *whole* creation, oldest first, timed from the first event
 (`+0:00` … `+23:05` — every supporting resource inside the first minute, the

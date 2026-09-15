@@ -1,15 +1,45 @@
 # Phase 3 — Size & Edition decision
 
-> **Latest update — 2026-09-10.** `sizing.run.main` split into `execute()`,
-> shared with the console, which now carries this as **Phase 3 - Size & Edition**
-> including the utilization upload. Earlier: measured utilization can be supplied as a CSV,
-> turning the capacity floor into a load-derived recommendation.
+> **Latest update — 2026-09-14 (two migration paths).** The phase now decides
+> **which engine**, not only how big. Two targets are supported and the client
+> chooses: Amazon RDS for Oracle (homogeneous) or Amazon RDS for PostgreSQL
+> (heterogeneous). `sizing/target.py` assesses both from the estate's own
+> evidence and separates **blockers** (the engine cannot express this at all)
+> from **effort** (work with a known shape); `sizing/validate.py` then sizes
+> whichever was chosen, with the Oracle licence arithmetic applying only to the
+> Oracle path. Self-test `sizing/selftest_target.py` 41/41; console drive 23/23.
+> Earlier: `execute()` shared with the console, and measured utilization as CSV.
 
 ## Purpose
 
-Decide what to buy: edition, licence model, instance class, storage. **This is
-the only phase where a model makes a judgement call**, and the whole design
-exists to bound it — the proposer suggests, the rules engine decides.
+Decide what to buy: **which engine**, then edition where one exists, licence
+model, instance class and storage. **This is the only phase where a model makes
+a judgement call**, and the whole design exists to bound it — the proposer
+suggests, the rules engine decides.
+
+## The two paths
+
+| | Amazon RDS for Oracle | Amazon RDS for PostgreSQL |
+|---|---|---|
+| Kind | Homogeneous | Heterogeneous |
+| Stored code | Moves unchanged | Rewritten by Phase 4b, compiled before it counts |
+| Table DDL | Moves unchanged | Converted (not yet built) |
+| Data movement | Data Pump over S3 | AWS DMS — Data Pump writes an Oracle-only format |
+| Edition | EE or SE2, decided from feature evidence | None — the engine is open source |
+| Licences | BYOL processor count, or licence-included | None |
+| Storage | Oracle segment bytes + headroom | Same, raised 20% first (no segment compression, 8 KB pages, larger indexes) |
+
+**The rules do not choose.** They assemble the evidence and publish a
+recommendation with its reasoning; a person picks, and the pick is recorded
+with who made it. `sizing.target.choose` refuses a blocked path outright —
+a blocker is not a warning.
+
+**The recommendation is deliberately conservative.** PostgreSQL is recommended
+only when no blocker exists *and* Phase 4b has actually compiled the stored
+code. An estate whose code has never been converted gets "insufficient
+evidence", never a guess; an estate with handwork left gets "a judgement, not a
+verdict", because whether the remaining objects are worth the licence saving is
+a commercial decision the tool should not make.
 
 ## What actually happens
 
@@ -101,6 +131,27 @@ capacity-only sizing understated the licence exposure fourfold. That example is
 marked `example_not_real_data` and is not used unless explicitly uploaded.
 
 ## Change log
+
+**2026-09-14 — two migration paths; the client chooses.** Added
+`sizing/target.py` (blockers, effort, recommendation, `choose`),
+`policy.pg_storage_floor_gb`, and `validate._validate_postgresql` as a separate
+function rather than branches threaded through the Oracle path — half the
+Oracle checks have no PostgreSQL meaning, and a shared function full of
+`if engine ==` would read as though they did. `execute()` gained `engine`,
+`chosen_by` and `conversion`; the CLI gained `--engine`, `--chosen-by` and
+`--conversion`. The console gained `POST /api/engine`, a path chooser above the
+sizing run, and per-engine rendering: the edition panels hide on PostgreSQL and
+a note explains why. Changing the path marks a completed sizing stale rather
+than leaving a stale edition on screen looking current.
+
+Two bugs found by the browser drive, not by reading: the sizing completion
+handler printed a literal `null null` on PostgreSQL because it hardcoded
+edition and licence; and the path chooser rendered only after a connection, so
+it was invisible on first load. Both fixed.
+
+Measured on `DBMIG_APP` with Phase 4b compiled: PostgreSQL open, 8 effort
+points across 7 items, 86% of stored code converting automatically, one object
+needing a person — so no recommendation, by design.
 
 **2026-09-12 — Multitenant reason corrected in code.** The `CONTEXTUAL_FEATURES`
 wording in `sizing/policy.py` now says that a single PDB is included in every
