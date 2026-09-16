@@ -189,7 +189,18 @@ def score_against_answer_key(
             and needle in (f["object_name"] or "").upper()
         ]
         matched_ids.update(f["finding_id"] for f in hits)
-        severities = sorted({f["severity"] for f in hits})
+        # The severity the *rule* carries, which is what the answer key grades.
+        #
+        # A finding the migration mode marked not-applicable has been moved to
+        # INFO for the score and the gate, and `severity_if_applicable` holds
+        # what it would otherwise have been. Grading the downgraded value would
+        # measure the wrong thing: the key says "DQ-001 should classify a
+        # missing primary key as CRITICAL", which is a statement about the rule
+        # catalogue and stays true whether or not this particular run does CDC.
+        # Without this, declaring a full load silently scored as a severity
+        # regression in the engine.
+        severities = sorted({f.get("severity_if_applicable") or f["severity"]
+                             for f in hits})
         results.append(
             {
                 "defect": defect["defect"],

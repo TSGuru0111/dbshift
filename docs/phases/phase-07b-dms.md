@@ -1,6 +1,14 @@
 # Phase 7b — Migrate with AWS DMS (the heterogeneous path)
 
-> **Latest update — 2026-09-14 (built, planned against the live account).**
+> **Latest update — 2026-09-16.** `--migration-type` now **defaults to the mode
+> declared in Phase 1** instead of carrying its own default. Before this, a run
+> could be gated for a full load and then executed with CDC — or the reverse —
+> with nothing in the record contradicting it. Passing the flag explicitly still
+> works and is recorded as `migration_type_overridden`, because a deliberate
+> rehearsal is legitimate and a silent disagreement with the gate is not. An
+> unrecognised mode falls back to full load, never to CDC.
+>
+> Earlier — **2026-09-14 (built, planned against the live account).**
 > `dms/` moves data to a PostgreSQL target, because Data Pump writes an
 > Oracle-only format that PostgreSQL cannot read. Preflight, table selection,
 > mappings, task settings and **the residue** — what DMS leaves behind and who
@@ -207,6 +215,17 @@ Everything was deleted afterwards: both endpoints, the replication instance, and
 the PostgreSQL instance stopped.
 
 ## Change log
+
+**2026-09-16 — the migration type comes from Phase 1.** `declared_migration_type()`
+reads the mode off the gate record, and `plan()`/`execute()` take
+`migration_type=None` to mean "whatever was declared". An explicit
+`--migration-type` still wins and is recorded as `migration_type_overridden`
+alongside `migration_type_declared_in_phase_1`, because a deliberate full-load
+rehearsal before a CDC run is legitimate while a silent disagreement with the
+gate is not. An unrecognised value falls back to full load rather than starting a
+replication nobody asked for. `collector.mode` spells its two values exactly as
+`dms.policy` does, so the value passes through with no translation table to
+drift; a self-test check asserts the two stay in step.
 
 **2026-09-14 — built.** `dms/` created: `policy.py`, `mappings.py`,
 `preflight.py`, `actions.py`, `residue.py`, `run.py`, `selftest.py` (85 checks);

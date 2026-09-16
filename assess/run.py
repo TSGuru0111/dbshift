@@ -12,6 +12,8 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "assess"
 
+from collector import mode as migration_mode
+
 from . import engine, loader, scoring
 
 log = logging.getLogger("assess")
@@ -61,6 +63,16 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         conn.close()
 
+    # The migration mode chosen in Phase 1. A run collected before the mode
+    # existed has none; treat that as the default rather than assuming CDC,
+    # which would reintroduce exactly the phantom blockers this removes.
+    mode_record = loaded.get("migration_mode") or migration_mode.decide(
+        None, declared=False
+    )
+    mode = mode_record["mode"]
+    findings = engine.apply_migration_mode(findings, mode)
+    not_applicable = [f for f in findings if not f.get("applies", True)]
+
     scores = scoring.score_findings(findings)
     owners = {f["owner"] for f in findings if f["owner"]}
     recall = scoring.score_against_answer_key(findings, owners=owners)
@@ -70,6 +82,18 @@ def main(argv: list[str] | None = None) -> int:
         "collector_run_id": loaded["collector_run_id"],
         "assessed_at_utc": datetime.now(timezone.utc).isoformat(),
         "source": loaded["source"],
+        "migration_mode": mode_record,
+        "not_applicable": [
+            {
+                "rule_id": f["rule_id"],
+                "title": f["title"],
+                "owner": f["owner"],
+                "object_name": f["object_name"],
+                "severity_if_applicable": f["severity_if_applicable"],
+                "because": f["not_applicable_because"],
+            }
+            for f in not_applicable
+        ],
         "rules_evaluated": len(rules),
         "rule_errors": rule_errors,
         "scores": scores,

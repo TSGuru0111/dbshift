@@ -6,6 +6,8 @@ import logging
 import sqlite3
 from pathlib import Path
 
+from collector import mode as migration_mode
+
 log = logging.getLogger("assess.engine")
 
 RULES_PATH = Path(__file__).resolve().parent / "rules.json"
@@ -111,6 +113,33 @@ def evaluate(conn: sqlite3.Connection) -> tuple[list[dict], list[dict]]:
     return findings, errors
 
 
+def apply_migration_mode(findings: list[dict], mode: str) -> list[dict]:
+    """Mark findings that only bear on CDC when CDC is not in scope.
+
+    A separate pass on purpose. `evaluate()` takes severity from the rule row
+    and never computes it, which is what makes an assessment reproducible; if
+    the mode edited severity in place, two runs of the same rules against the
+    same estate could disagree and the rule table would no longer explain why.
+
+    So nothing is removed and no severity is rewritten. Each finding gains
+    `applies` and, when it does not, `not_applicable_because` plus the severity
+    it would have carried. "Not a blocker for the migration you chose" is a
+    different statement from "not a problem", and the record keeps both.
+    """
+    for f in findings:
+        applies, why = migration_mode.applies(f["rule_id"], mode)
+        f["applies"] = applies
+        if applies:
+            continue
+        f["not_applicable_because"] = why
+        f["severity_if_applicable"] = f["severity"]
+        # INFO keeps it visible in the report and out of the blocker count. The
+        # original severity is one key away, so nothing is lost.
+        f["severity"] = "INFO"
+        f["migration_mode"] = mode
+    return findings
+
+
 SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
 
 # Objects listed inline per group. The count is always exact; this caps only how
@@ -150,6 +179,9 @@ def group_findings(findings: list[dict]) -> list[dict]:
                 "objects_truncated": max(0, len(objects) - MAX_OBJECTS_LISTED),
                 "sample_detail": head["detail"],
                 "finding_ids": [i["finding_id"] for i in items],
+                "applies": head.get("applies", True),
+                "not_applicable_because": head.get("not_applicable_because"),
+                "severity_if_applicable": head.get("severity_if_applicable"),
             }
         )
 

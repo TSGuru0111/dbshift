@@ -1,6 +1,18 @@
 # Phase 5 — Blocker gate
 
-> **Latest update — 2026-09-10.** Phase built **and added to the console**,
+> **Latest update — 2026-09-16.** **The gate now knows which migration it is
+> judging.** `blocker/policy.py` already recorded that `OPS-001` blocks only
+> `migrate_cdc` and `cutover` — but nothing ever told it those phases were not
+> happening, so a full-load migration still halted on the CDC prerequisites. The
+> gate reads the mode declared in Phase 1: on a full-load run `migrate_cdc`
+> leaves the downstream list and is reported `not_in_scope` rather than `clear`
+> (the difference between "nothing blocks it" and "it is not happening"), and a
+> blocker whose whole blast radius is out of scope is listed in
+> `out_of_scope_blockers` rather than halting the run. Every summary now names
+> the migration it judged. On `DBMIG_APP`, a full load goes from **HALT on 4** to
+> **HALT on 1** — `RDS-004`, which blocks either way — and `cutover` turns clear.
+>
+> Earlier — **2026-09-10.** Phase built **and added to the console**,
 > including granting and revoking waivers from each blocker. The console rail was
 > relabelled to architecture phase numbers at the same time, so this is
 > **Phase 5** on screen as well as in the docs. The gate
@@ -129,6 +141,19 @@ source is changed. That is a source-side database restart, not something the
 pipeline can fix for you.
 
 ## Change log
+
+**2026-09-16 — the gate honours the declared migration mode.** `evaluate()` reads
+`migration_mode` from the assessment and filters `policy.DOWNSTREAM`: on a
+full-load run `migrate_cdc` is reported `not_in_scope` with the reason, which is
+a different statement from `clear`. A blocker whose entire blast radius is out of
+scope goes to `out_of_scope_blockers` instead of halting the run, and is still
+listed — it would block a CDC migration and the record has to keep saying so.
+Every summary now opens by naming the migration judged, so a verdict can never be
+read against the wrong one. `by_phase` is built in `DOWNSTREAM` order rather than
+scope order, so the output still reads as the pipeline.
+
+The blast radii in `policy.BLOCKS` were already right; this is the half that was
+missing. Nothing in the policy changed.
 
 **2026-09-10 — console stage added.** Stage 6: verdict banner, per-phase table,
 expandable blockers, and waiver grant/revoke. Found and fixed a routing bug while

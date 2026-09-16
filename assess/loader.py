@@ -132,6 +132,9 @@ def _load(conn: sqlite3.Connection, run_dir: Path) -> dict:
         "total_rows": sum(loaded.values()),
         "source": manifest.get("source", {}),
         "schemas": manifest.get("schemas", {}),
+        # The Phase 1 decision. Absent on runs collected before the mode
+        # existed; callers fall back to the default rather than guessing CDC.
+        "migration_mode": manifest.get("migration_mode"),
     }
 
 

@@ -116,7 +116,26 @@ def _model_live() -> bool:
         return False
 
 
-def plan(session=None, *, migration_type: str = policy.FULL_LOAD,
+def declared_migration_type(recs: dict) -> str:
+    """What Phase 1 said this migration is, in DMS's vocabulary.
+
+    The mode is chosen in Discovery and carried on the gate record. Phase 7
+    following it means the task DMS is given matches the migration the gate
+    actually judged -- before this, the mode was a flag here with its own
+    default, so a run could be gated for full load and then executed with CDC,
+    or the reverse, with nothing in the record contradicting it.
+    """
+    record = (recs.get("gate") or {}).get("migration_mode")
+    if not record:
+        return policy.FULL_LOAD
+    # collector.mode names its values as DMS does, so this passes straight
+    # through. Anything unrecognised falls back to the safer full load rather
+    # than starting a replication nobody asked for.
+    mode = record.get("mode")
+    return mode if mode in policy.MIGRATION_TYPES else policy.FULL_LOAD
+
+
+def plan(session=None, *, migration_type: str | None = None,
          target_counts: dict | None = None) -> dict:
     """Everything that can be known without creating anything. Free.
 
@@ -125,6 +144,11 @@ def plan(session=None, *, migration_type: str = policy.FULL_LOAD,
     what it will, because "DMS migrated the database" is never true.
     """
     recs = prov_records.load()
+    # None means "whatever Phase 1 declared". An explicit argument still wins,
+    # and the plan records which of the two it was.
+    declared = declared_migration_type(recs)
+    overridden = migration_type is not None and migration_type != declared
+    migration_type = migration_type or declared
     prov_plan_path = provision_run.OUTPUT / "provision_plan.json"
     prov_plan = json.loads(prov_plan_path.read_text(encoding="utf-8")) \
         if prov_plan_path.exists() else None
@@ -169,6 +193,11 @@ def plan(session=None, *, migration_type: str = policy.FULL_LOAD,
         "estate": estate,
         "collector_run_id": recs["sizing"]["collector_run_id"],
         "migration_type": migration_type,
+        "migration_type_declared_in_phase_1": declared,
+        # A Phase 7 flag disagreeing with the Phase 1 decision is allowed --
+        # someone may deliberately rehearse a full load before a CDC run -- but
+        # it is never silent, because the gate judged the other one.
+        "migration_type_overridden": overridden,
         "heterogeneous": heterogeneous,
         "target_engine": d.get("engine") or "ORACLE",
         "instance": {"name": policy.instance_name(estate), "class": policy.INSTANCE_CLASS,
@@ -198,7 +227,7 @@ def plan(session=None, *, migration_type: str = policy.FULL_LOAD,
     }
 
 
-def execute(session, *, confirm_account: str, migration_type: str = policy.FULL_LOAD,
+def execute(session, *, confirm_account: str, migration_type: str | None = None,
             source: dict, target: dict, on_event=None, target_counts: dict | None = None) -> dict:
     """Create the instance, endpoints and task, then run it. **This bills.**"""
     events: list[dict] = []
@@ -292,7 +321,9 @@ def status(session) -> dict | None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="DBShift Phase 7 -- migrate with AWS DMS")
-    ap.add_argument("--migration-type", default=policy.FULL_LOAD, choices=list(policy.MIGRATION_TYPES))
+    ap.add_argument("--migration-type", default=None, choices=list(policy.MIGRATION_TYPES),
+                    help="defaults to the mode declared in Phase 1 discovery. Passing it "
+                         "here overrides that, and the plan records the disagreement.")
     ap.add_argument("--execute", action="store_true", help="create and run. THIS BILLS.")
     ap.add_argument("--confirm", type=str, default=None, help="the AWS account id, typed back")
     ap.add_argument("--status", action="store_true", help="where the running task stands")
@@ -334,7 +365,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\nestate           : {p['estate']}   run {p['collector_run_id']}")
     print(f"target           : {p['target_engine']}"
           + ("  (heterogeneous -- names lowercased)" if p["heterogeneous"] else ""))
-    print(f"migration type   : {p['migration_type']}")
+    print(f"migration type   : {p['migration_type']}"
+          + ("  (OVERRIDES the Phase 1 declaration of "
+             f"{p['migration_type_declared_in_phase_1']})"
+             if p["migration_type_overridden"] else "  (declared in Phase 1)"))
     print(f"instance         : {p['instance']['name']} {p['instance']['class']} "
           f"{p['instance']['storage_gb']} GB")
     print(f"tables           : {len(p['tables'])} moved, "
@@ -353,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.execute:
         print(f"\nready: {p['ready']}")
         if p["ready"]:
-            print(f"to run: python -m dms.run --migration-type {args.migration_type} "
+            print(f"to run: python -m dms.run --migration-type {p['migration_type']} "
                   f"--execute --confirm <account-id>")
         return 0 if p["ready"] else 2
 

@@ -300,6 +300,10 @@ td.det { color:var(--ink-2); min-width:280px; }
 .sev::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; flex:none; }
 .sev-CRITICAL{color:var(--sev-critical)} .sev-HIGH{color:var(--sev-high)}
 .sev-MEDIUM{color:var(--sev-medium)} .sev-LOW{color:var(--sev-low)} .sev-INFO{color:var(--sev-info)}
+/* A finding the declared migration mode puts out of scope. Shown, never hidden:
+   "does not block the migration you chose" is not the same claim as "clean". */
+.namode{margin-top:8px;padding:8px 10px;border-left:2px solid var(--sev-info);
+  background:rgba(0,0,0,.025);font-size:12.5px;line-height:1.5}
 .empty { padding:34px; text-align:center; color:var(--ink-3); font-size:13.5px;
   border:1px solid var(--rule); border-radius:3px; background:var(--surface); }
 .tcount { font-family:"IBM Plex Mono", monospace; font-size:11.5px; color:var(--ink-3); margin-top:10px; }
@@ -570,6 +574,9 @@ function render(){
     </div>
     <p class="idetail">${esc(g.sample_detail)}</p>
     <p class="iwhy">${esc(g.rationale)}</p>
+    ${g.applies === false ? `<p class="namode"><b>Not a blocker for this migration.</b>
+      Found and reported, and it would be ${esc(g.severity_if_applicable || 'CRITICAL')} for a
+      migration using change data capture. ${esc(g.not_applicable_because || '')}</p>` : ''}
     ${objectList(g)}
   </article>`).join('');
   empty.hidden = list.length > 0;
@@ -815,6 +822,20 @@ def _bars(by_category: dict) -> str:
     return "\n".join(out)
 
 
+# What travels into the page's ISSUES array. `applies` and its two companions
+# are what let a reader tell "not a problem" from "not a problem for the
+# migration you chose" -- without them a mode-downgraded finding renders as a
+# bare INFO with no explanation of why a CRITICAL rule is sitting at the bottom.
+_ISSUE_KEYS_REQUIRED = (
+    "rule_id", "severity", "category", "title", "rationale",
+    "remediation_level", "occurrences", "objects",
+    "objects_truncated", "sample_detail",
+)
+_ISSUE_KEYS = _ISSUE_KEYS_REQUIRED + (
+    "applies", "not_applicable_because", "severity_if_applicable",
+)
+
+
 def _stack(by_severity: dict, total: int) -> str:
     out = []
     for sev in SEVERITY_ORDER:
@@ -978,12 +999,12 @@ def build(assessment: dict, manifest: dict, estate: str, datasets: int, sizing: 
         "__ISSUES__": json.dumps(
             [
                 {
-                    k: g[k]
-                    for k in (
-                        "rule_id", "severity", "category", "title", "rationale",
-                        "remediation_level", "occurrences", "objects",
-                        "objects_truncated", "sample_detail",
-                    )
+                    # .get, not [], for the last three: an assessment.json
+                    # written before the migration mode existed has none of
+                    # them, and an old record should still render rather than
+                    # failing on a key it could not have had.
+                    k: g[k] if k in _ISSUE_KEYS_REQUIRED else g.get(k)
+                    for k in _ISSUE_KEYS
                 }
                 for g in assessment["issues"]
             ],

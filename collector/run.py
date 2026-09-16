@@ -6,6 +6,7 @@ import platform
 import sys
 import time
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,7 +14,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "collector"
 
-from . import config, writer
+from . import config, mode as migration_mode, writer
 from .db import connect, in_binds
 from .db import Session
 from .probes import PROBES
@@ -164,6 +165,11 @@ def execute(
 
         datasets: list[dict] = []
         probe_report: list[dict] = []
+        # CDC readiness evidence, taken from whatever the identity probe already
+        # collected rather than re-queried. If that probe is switched off the
+        # evidence is simply absent, and the mode record says so -- a second
+        # query here would silently undo the operator's decision to skip it.
+        database_facts: dict = {}
         total_probes = len(selected)
         for index, probe in enumerate(selected, start=1):
             if on_event:
@@ -176,6 +182,10 @@ def execute(
             mark = len(session.query_log)
             probe_started = time.perf_counter()
             produced = probe.collect(session, owners)
+            if probe.NAME == "identity":
+                rows = produced.get("source_inventory.database") or []
+                if rows:
+                    database_facts = rows[0]
             _externalize(probe, produced, run_dir)
             labels = session.labels_since(mark)
             elapsed_ms = int((time.perf_counter() - probe_started) * 1000)
@@ -215,6 +225,25 @@ def execute(
                     "rows": rows_returned,
                     "failed": [q.label for q in session.query_log[mark:] if q.error],
                 })
+        mode_record = migration_mode.decide(
+            cfg.migration_mode,
+            chosen_by=cfg.mode_chosen_by,
+            log_mode=database_facts.get("log_mode"),
+            supplemental_min=database_facts.get("supplemental_log_data_min"),
+            declared=cfg.mode_declared,
+        )
+        if not database_facts:
+            mode_record["cdc_readiness"]["evidence_missing"] = (
+                "the identity probe did not run, so log mode and supplemental "
+                "logging were not collected on this run"
+            )
+        log.info(
+            "migration_mode=%s declared=%s cdc_ready=%s",
+            mode_record["mode"], mode_record["declared"],
+            mode_record["cdc_readiness"]["ready"],
+        )
+        if mode_record.get("warning"):
+            log.warning("%s", mode_record["warning"])
     finally:
         connection.close()
 
@@ -232,6 +261,10 @@ def execute(
             "connection": cfg.redacted(),
         },
         "source": source,
+        # The Phase 1 decision every later phase reads. Nothing downstream
+        # reconnects to Oracle, so if the mode is not recorded here it does not
+        # exist as far as the rest of the pipeline is concerned.
+        "migration_mode": mode_record,
         "schemas": schema_report,
         "probes": probe_report,
         "probes_skipped": skipped,
@@ -260,6 +293,7 @@ def execute(
             "datasets": len(datasets),
             "total_rows": manifest["total_rows"],
             "failed_queries": len(failed),
+            "migration_mode": mode_record["mode"],
         },
     )
 
@@ -270,6 +304,19 @@ def execute(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="DBShift discovery collector")
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument(
+        "--migration-mode",
+        choices=list(migration_mode.MODES),
+        default=None,
+        help="full-load (default) or full-load-and-cdc. Decides whether the "
+             "CDC-only findings (OPS-001, OPS-002, DQ-001) are blockers on this "
+             "run. Overrides DBSHIFT_MIGRATION_MODE.",
+    )
+    parser.add_argument(
+        "--mode-chosen-by",
+        default=None,
+        help="who declared the migration mode. Recorded in the manifest.",
+    )
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
 
@@ -284,6 +331,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
+    # The flag wins over the environment, and using it counts as declaring.
+    if args.migration_mode or args.mode_chosen_by:
+        cfg = replace(
+            cfg,
+            migration_mode=args.migration_mode or cfg.migration_mode,
+            mode_declared=bool(args.migration_mode) or cfg.mode_declared,
+            mode_chosen_by=args.mode_chosen_by or cfg.mode_chosen_by,
+        )
+
     manifest = execute(cfg)
     run_id = manifest["collector_run_id"]
     run_dir = manifest["run_dir"]
@@ -291,8 +347,13 @@ def main(argv: list[str] | None = None) -> int:
     elapsed_ms = manifest["elapsed_ms"]
     failed = manifest["failed_queries"]
 
+    mode_record = manifest["migration_mode"]
     print(f"collector_run_id : {run_id}")
     print(f"output           : {run_dir}")
+    declared = "declared" if mode_record["declared"] else "DEFAULTED, nobody chose"
+    print(f"migration mode   : {mode_record['mode']}  ({declared})")
+    if mode_record.get("warning"):
+        print(f"  WARNING        : {mode_record['warning']}")
     print(f"datasets         : {len(datasets)}")
     print(f"total rows       : {manifest['total_rows']}")
     print(f"elapsed          : {elapsed_ms} ms")

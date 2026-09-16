@@ -4,11 +4,14 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import mode as migration_mode
+
 DEFAULT_USER = "dbmig_collector"
 DEFAULT_DSN = "localhost:1521/XEPDB1"
 DEFAULT_SCHEMAS = ("DBMIG_APP", "DBMIG_RPT", "DBMIG_COLLECTOR")
 
 PASSWORD_ENV = "DBSHIFT_COLLECTOR_PASSWORD"
+MODE_ENV = "DBSHIFT_MIGRATION_MODE"
 
 
 class ConfigError(RuntimeError):
@@ -22,9 +25,21 @@ class Config:
     dsn: str
     schemas: tuple[str, ...]
     output_dir: Path
+    # Full load, or full load plus CDC. Decided here in Phase 1 because it
+    # changes which findings are blockers -- see collector/mode.py.
+    migration_mode: str = migration_mode.DEFAULT
+    # False when nobody said, and the default applied. A declared full load is a
+    # decision; an undeclared one is an assumption, and the record says which.
+    mode_declared: bool = False
+    mode_chosen_by: str | None = None
 
     def redacted(self) -> dict:
-        return {"user": self.user, "dsn": self.dsn, "schemas": list(self.schemas)}
+        return {
+            "user": self.user,
+            "dsn": self.dsn,
+            "schemas": list(self.schemas),
+            "migration_mode": self.migration_mode,
+        }
 
 
 def _schemas_from_env() -> tuple[str, ...]:
@@ -40,6 +55,17 @@ def _schemas_from_env() -> tuple[str, ...]:
     return names
 
 
+def _mode_from_env() -> tuple[str, bool]:
+    """(mode, declared). Unset means the default applied and nobody chose it."""
+    raw = os.environ.get(MODE_ENV)
+    if not raw or not raw.strip():
+        return migration_mode.DEFAULT, False
+    try:
+        return migration_mode.normalize(raw), True
+    except migration_mode.ModeError as exc:
+        raise ConfigError(f"{MODE_ENV}: {exc}") from exc
+
+
 def load(output_dir: Path | None = None) -> Config:
     password = os.environ.get(PASSWORD_ENV)
     if not password:
@@ -47,10 +73,14 @@ def load(output_dir: Path | None = None) -> Config:
             f"{PASSWORD_ENV} is not set. Export the read-only collector password, "
             f"e.g.  $env:{PASSWORD_ENV}='...'   (never commit it to a file)"
         )
+    mode, declared = _mode_from_env()
     return Config(
         user=os.environ.get("DBSHIFT_COLLECTOR_USER", DEFAULT_USER),
         password=password,
         dsn=os.environ.get("DBSHIFT_DSN", DEFAULT_DSN),
         schemas=_schemas_from_env(),
         output_dir=output_dir or Path(__file__).resolve().parent / "output",
+        migration_mode=mode,
+        mode_declared=declared,
+        mode_chosen_by=os.environ.get("DBSHIFT_MIGRATION_MODE_BY") or None,
     )
