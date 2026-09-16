@@ -704,6 +704,39 @@ tr:last-child td{border-bottom:none}
          provision-only acknowledgement recorded against your AWS login.</p>
     </div>
 
+    <details class="panel pad" id="provOptions" style="margin-bottom:16px">
+      <summary style="cursor:pointer;font-weight:600">Instance and database configuration
+        <span class="sub" id="provOptSummary" style="color:var(--ink-3);font-weight:400"></span></summary>
+      <p style="font-size:13.5px;color:var(--ink-2);max-width:78ch;margin-top:10px">
+        Every value below is derived from the evidence in Phases 1–3. You can change them, and the
+        rendered plan will record <b>what was derived, what you chose, and why</b> — so the
+        provenance table stays true. A change needs a reason.</p>
+
+      <div class="mt"><div class="eyebrow">Instance class</div>
+        <div class="row2">
+          <div class="field"><label for="ovClass">Class</label>
+            <select id="ovClass"></select></div>
+          <div class="field"><label>Derived by Phase 3</label>
+            <div class="mono" id="ovDerived" style="padding:10px 0;color:var(--ink-3)"></div></div>
+        </div>
+        <div id="ovClassNote"></div>
+      </div>
+
+      <div class="mt"><div class="eyebrow">Database configuration</div>
+        <div id="ovConfig" class="row2"></div>
+      </div>
+
+      <div class="field mt"><label for="ovReason">Why these differ from the derived values</label>
+        <input id="ovReason" autocomplete="off"
+               placeholder="recorded in the plan next to the value it replaced"></div>
+      <div class="spread">
+        <button class="btn ghost sm" id="btnOvApply">Use these values</button>
+        <button class="btn ghost sm" id="btnOvReset">Back to derived</button>
+      </div>
+      <div id="ovMsg" class="mt-s"></div>
+      <div class="mt-s" id="ovLocked"></div>
+    </details>
+
     <div class="spread" style="margin-bottom:16px">
       <button class="btn" id="btnProvision">Render and check</button>
       <span class="mono" id="provMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
@@ -1135,6 +1168,11 @@ function show(id){
   // only after a *clean* validation, so the one case where a person most needs
   // to see why cutover is blocked showed an empty box until they found Rebuild.
   if (id === 'cutover' && !cutoverRendered) { cutoverRendered = true; renderCutover(); }
+  // Load the instance picker and the configuration form from the server rather
+  // than hardcoding either in the page: the classes on offer, the defaults and
+  // the locked properties are all decided in provision/overrides.py, so the
+  // console cannot drift from what the render will actually accept.
+  if (id === 'provision') loadProvOptions();
   window.scrollTo({top:0, behavior:'smooth'});
 }
 // Fetched once per visit rather than on every navigation: the certificate is a
@@ -2253,6 +2291,118 @@ $('#btnProvision').onclick = () => {
     }
   };
   es.onerror = () => { es.close(); btn.disabled = false; setStage('provision', 'active', 'connection lost'); };
+};
+
+/* ---------------- provision: manual instance and configuration ----------------
+   The screen's claim is that every value says where it came from. An override
+   does not weaken that -- it has to strengthen it, by recording the derived
+   value, the choice and the reason together. The form therefore always shows
+   what Phase 3 derived next to what is being chosen instead. */
+let OV = null;   // the options payload, loaded once per render
+
+async function loadProvOptions(){
+  const r = await fetch('/api/provision/options');
+  if (!r.ok) return;
+  OV = await r.json();
+
+  $('#ovDerived').textContent = OV.derived.instance_class
+    ? `${OV.derived.instance_class} · ${OV.derived.vcpu} vCPU / ${OV.derived.memory_gib} GiB`
+      + (OV.derived.basis ? ` · ${OV.derived.basis}-derived` : '')
+    : 'run Phase 3 first';
+
+  const chosen = OV.current?.instance_class?.chosen || OV.derived.instance_class;
+  $('#ovClass').innerHTML = OV.instance_classes.map(i => {
+    const isDerived = i.class === OV.derived.instance_class;
+    return `<option value="${esc(i.class)}"${i.class === chosen ? ' selected' : ''}>`
+      + `${esc(i.class)} — ${i.vcpu} vCPU / ${i.memory_gib} GiB · ${esc(i.family)}`
+      + `${isDerived ? '  (derived)' : ''}</option>`;
+  }).join('');
+
+  $('#ovConfig').innerHTML = OV.config_fields.map(f => {
+    const cur = OV.current?.configuration?.values?.[f.name];
+    const v = cur === undefined ? f.default : cur;
+    const ctl = f.kind === 'bool'
+      ? `<select id="ovf_${f.name}" data-field="${f.name}" data-kind="bool">
+           <option value="false"${!v ? ' selected' : ''}>No</option>
+           <option value="true"${v ? ' selected' : ''}>Yes</option></select>`
+      : `<input id="ovf_${f.name}" data-field="${f.name}" data-kind="${f.kind}"
+           value="${esc(String(v))}" autocomplete="off">`;
+    return `<div class="field">
+      <label for="ovf_${f.name}">${esc(f.label)}
+        ${f.billing ? '<span class="sev HIGH" style="margin-left:6px">affects cost</span>' : ''}</label>
+      ${ctl}
+      <div class="why" style="font-size:12.5px;color:var(--ink-3);margin-top:4px">
+        ${esc(f.help)} <b>Default: ${esc(String(f.default))}.</b></div></div>`;
+  }).join('');
+
+  $('#ovLocked').innerHTML = `<details class="item"><summary>
+      <span class="title">What cannot be changed here, and why<span class="sub">${OV.locked.length} properties</span></span>
+      </summary><div class="body">${OV.locked.map(l =>
+        `<p class="why"><b>${esc(l.property)}</b> — ${esc(l.why)}</p>`).join('')}</div></details>`;
+
+  $('#ovClass').onchange = showClassNote;
+  showClassNote();
+  paintOvSummary();
+}
+
+function showClassNote(){
+  const sel = $('#ovClass').value;
+  const spec = OV.instance_classes.find(i => i.class === sel);
+  const derived = OV.instance_classes.find(i => i.class === OV.derived.instance_class);
+  const notes = [];
+  if (spec && spec.family === 'burstable')
+    notes.push('Burstable: CPU is credit-limited and throttles under sustained load, which a cutover usually is.');
+  if (spec && derived && sel !== derived.class) {
+    if (spec.vcpu < derived.vcpu || spec.memory_gib < derived.memory_gib)
+      notes.push(`Smaller than the derived ${derived.class}. Phase 3 sized from ${OV.derived.basis || 'the evidence'}; going under it is a decision to accept less.`);
+    else if (spec.vcpu > derived.vcpu || spec.memory_gib > derived.memory_gib)
+      notes.push(`Larger than the derived ${derived.class}, so it costs more per hour.`);
+  }
+  $('#ovClassNote').innerHTML = notes.length
+    ? `<div class="note warn mt-s">${notes.map(esc).join('<br>')}</div>` : '';
+}
+
+function paintOvSummary(){
+  const ic = OV?.current?.instance_class, cf = OV?.current?.configuration;
+  const bits = [];
+  if (ic) bits.push(`${ic.chosen} instead of ${ic.derived}`);
+  if (cf?.changed?.length) bits.push(`${cf.changed.length} setting${cf.changed.length === 1 ? '' : 's'} changed`);
+  $('#provOptSummary').textContent = bits.length ? ' — ' + bits.join(', ') : ' — all derived from the evidence';
+}
+
+function collectConfig(){
+  const out = {};
+  document.querySelectorAll('#ovConfig [data-field]').forEach(el => {
+    out[el.dataset.field] = el.dataset.kind === 'bool' ? el.value === 'true'
+                          : el.dataset.kind === 'int' ? el.value.trim() : el.value.trim();
+  });
+  return out;
+}
+
+$('#btnOvApply').onclick = async () => {
+  const body = {instance_class: $('#ovClass').value,
+                configuration: collectConfig(),
+                reason: $('#ovReason').value};
+  const r = await fetch('/api/provision/options', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json();
+  if (!r.ok) {
+    $('#ovMsg').innerHTML = `<div class="note bad">${esc(d.detail)}</div>`;
+    return;
+  }
+  OV.current = d.overrides;
+  paintOvSummary();
+  $('#ovMsg').innerHTML = d.any
+    ? `<div class="note info">Recorded. <b>Render again</b> to see these in the plan — every one
+       will appear in "where each value came from", next to what it replaced.</div>`
+    : `<div class="note info">Nothing differs from the derived values, so nothing was recorded.</div>`;
+};
+
+$('#btnOvReset').onclick = async () => {
+  await fetch('/api/provision/options', {method:'DELETE'});
+  $('#ovReason').value = '';
+  await loadProvOptions();
+  $('#ovMsg').innerHTML = '<div class="note info">Back to the values Phase 3 derived.</div>';
 };
 
 async function renderProvision(){

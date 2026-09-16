@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 
-from . import policy
+from . import overrides, policy
 
 
 class RenderError(ValueError):
@@ -51,12 +51,16 @@ def _tags(stack: str, estate: str, run_id: str, expires: str) -> list[dict]:
 
 
 def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, estate: str,
-           now: datetime) -> dict:
+           now: datetime, instance_override: dict | None = None,
+           config_override: dict | None = None) -> dict:
     sizing, gate = records["sizing"], records["gate"]
     assessment, remediation = records["assessment"], records["remediation"]
     d = sizing["decision"]
     run_id = sizing["collector_run_id"]
     prov: list[dict] = []
+    # Defaults unless a person changed them on the Provision screen. Never
+    # mutates `policy`: that module is shared with the CLI and the kill switch.
+    cfg = overrides.effective_policy(config_override)
 
     def trace(prop, value, source, why):
         prov.append({"property": prop, "value": value, "source": source, "why": why})
@@ -98,12 +102,27 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
               if src_major and src_major != policy.TARGET_MAJOR else "matches the source major version")
 
     # ---- size ----------------------------------------------------------------
-    instance_class = trace("DBInstanceClass", d["instance_class"],
-                           "sizing.decision.instance_class (Phase 3)",
-                           f"{d['vcpu']} vCPU / {d['memory_gib']} GiB -- "
-                           f"{sizing['facts']['utilization']['basis']}-derived"
-                           + (", a floor rather than measured load"
-                              if sizing["facts"]["utilization"]["basis"] == "capacity" else ""))
+    derived_class = d["instance_class"]
+    derived_why = (f"{d['vcpu']} vCPU / {d['memory_gib']} GiB -- "
+                   f"{sizing['facts']['utilization']['basis']}-derived"
+                   + (", a floor rather than measured load"
+                      if sizing["facts"]["utilization"]["basis"] == "capacity" else ""))
+    if instance_override:
+        # The derived value is kept in the row, not replaced by it. The screen's
+        # promise is that every value says where it came from, and "a person
+        # chose this over the evidence, because X" is a source -- "manual" alone
+        # is not, and would quietly turn the provenance table into decoration.
+        o = instance_override
+        notes = ("; ".join(o.get("notes") or [])) or "no cost or capacity note"
+        instance_class = trace(
+            "DBInstanceClass", o["chosen"],
+            "a person, overriding sizing.decision.instance_class (Phase 3)",
+            f"Phase 3 derived {o['derived']} ({derived_why}). "
+            f"Overridden to {o['chosen']} ({o['vcpu']} vCPU / {o['memory_gib']} GiB) "
+            f"because: {o['reason']}. Note: {notes}")
+    else:
+        instance_class = trace("DBInstanceClass", derived_class,
+                               "sizing.decision.instance_class (Phase 3)", derived_why)
     storage_gb = trace("AllocatedStorage", str(d["storage_gb"]), "sizing.decision.storage_gb (Phase 3)",
                        f"{sizing['facts']['segment_gb']} GB of segments; "
                        + ("PostgreSQL stores the same data larger (no segment compression, "
@@ -111,6 +130,17 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
                           if pg else "RDS Oracle minimum is 20 GB"))
     storage_type = trace("StorageType", d["storage_type"], "sizing.decision.storage_type (Phase 3)",
                          "gp3 includes baseline IOPS without provisioning them")
+
+    # ---- database configuration a person changed -----------------------------
+    # Only the changed ones get a row. The defaults are policy and are already
+    # explained in policy.py; listing all nine here would bury the one a person
+    # actually touched, which is the row a reviewer is looking for.
+    for ch in (config_override or {}).get("changed", []):
+        trace(ch["label"], str(ch["chosen"]),
+              "a person, overriding the project default",
+              f"default is {ch['default']}; changed because: "
+              f"{(config_override or {}).get('reason')}"
+              + (" -- this changes what the instance costs" if ch["billing"] else ""))
 
     # ---- character sets: cannot be changed after creation ---------------------
     # PostgreSQL has no CharacterSetName property: RDS creates the database as
@@ -269,14 +299,14 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
                     "Engine": engine, "EngineVersion": engine_version, "LicenseModel": licence,
                     "DBInstanceClass": instance_class,
                     "AllocatedStorage": storage_gb, "StorageType": storage_type,
-                    "StorageEncrypted": policy.STORAGE_ENCRYPTED,
+                    "StorageEncrypted": cfg["storage_encrypted"],
                     **({} if pg else {"CharacterSetName": cs}),
                     **({"NcharCharacterSetName": nchar} if nchar else {}),
-                    "DBName": policy.PG_DB_NAME if pg else policy.DB_NAME,
-                    "MasterUsername": policy.PG_MASTER_USERNAME if pg else policy.MASTER_USERNAME,
+                    "DBName": policy.PG_DB_NAME if pg else cfg["db_name"],
+                    "MasterUsername": policy.PG_MASTER_USERNAME if pg else cfg["master_username"],
                     "MasterUserPassword": password_ref,
-                    "Port": str(policy.PG_PORT if pg else policy.PORT),
-                    "MultiAZ": policy.MULTI_AZ,
+                    "Port": str(policy.PG_PORT if pg else cfg["port"]),
+                    "MultiAZ": cfg["multi_az"],
                     "PubliclyAccessible": policy.PUBLICLY_ACCESSIBLE,
                     "DBSubnetGroupName": {"Ref": "DbSubnetGroup"},
                     "VPCSecurityGroups": [{"Fn::GetAtt": ["DbSecurityGroup", "GroupId"]}],
@@ -284,9 +314,9 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
                         "OptionGroupName": {"Ref": "OptionGroup"},
                         "AssociatedRoles": [{"RoleArn": {"Fn::GetAtt": ["S3IntegrationRole", "Arn"]},
                                              "FeatureName": "S3_INTEGRATION"}]}),
-                    "BackupRetentionPeriod": policy.BACKUP_RETENTION_DAYS,
-                    "DeletionProtection": policy.DELETION_PROTECTION,
-                    "AutoMinorVersionUpgrade": policy.AUTO_MINOR_UPGRADE,
+                    "BackupRetentionPeriod": cfg["backup_retention_days"],
+                    "DeletionProtection": cfg["deletion_protection"],
+                    "AutoMinorVersionUpgrade": cfg["auto_minor_version_upgrade"],
                     "MonitoringInterval": policy.MONITORING_INTERVAL,
                     "EnablePerformanceInsights": policy.PERFORMANCE_INSIGHTS,
                     "CopyTagsToSnapshot": True,
@@ -320,6 +350,16 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
             "engine": engine, "licence": licence, "instance_class": instance_class,
             "storage_gb": int(storage_gb), "storage_type": storage_type,
             "target": "POSTGRESQL" if pg else "ORACLE",
-            "port": policy.PG_PORT if pg else policy.PORT,
-            "db_name": policy.PG_DB_NAME if pg else policy.DB_NAME,
-            "master_username": policy.PG_MASTER_USERNAME if pg else policy.MASTER_USERNAME}
+            # These four report what was RENDERED, not what policy defaults to,
+            # so a caller that echoes them back (the console's tiles, the Phase 10
+            # report) cannot show a value the template does not contain.
+            "port": policy.PG_PORT if pg else cfg["port"],
+            "db_name": policy.PG_DB_NAME if pg else cfg["db_name"],
+            "master_username": policy.PG_MASTER_USERNAME if pg else cfg["master_username"],
+            "multi_az": cfg["multi_az"],
+            # What a person changed, for the console to show and the record to keep.
+            "overrides": {
+                "instance_class": instance_override,
+                "configuration": config_override,
+                "any": bool(instance_override or (config_override or {}).get("changed")),
+            }}

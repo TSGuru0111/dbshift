@@ -40,8 +40,17 @@ def default_price_file() -> Path | None:
 
 
 def execute(*, session=None, price_file: Path | None = None, operator_cidr: str | None = None,
-            now: datetime | None = None, on_event=None) -> dict:
-    """Shared by the CLI and the console."""
+            now: datetime | None = None, on_event=None,
+            instance_override: dict | None = None,
+            config_override: dict | None = None) -> dict:
+    """Shared by the CLI and the console.
+
+    `instance_override` and `config_override` are the validated records from
+    `overrides.py` -- already checked and carrying their reason. This function
+    does not re-validate them; it routes them into the render, the preflight and
+    the price lookup so that all three describe the same instance. Passing an
+    unvalidated dict here would put an unchecked value in a template.
+    """
     def emit(stage, detail):
         if on_event:
             on_event({"event": "stage", "stage": stage, "detail": detail})
@@ -66,6 +75,13 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
         engine, licence = policy.ENGINE[d["edition"]]
     stack = render.stack_name_for(estate, engine)
 
+    # One instance class from here down: the override if a person made one, the
+    # Phase 3 value otherwise. Preflight checks orderability and pricing quotes
+    # an hourly rate, and both must describe what will actually be created --
+    # quoting the derived class for an overridden instance would show a client a
+    # price for a machine they are not buying.
+    instance_class = (instance_override or {}).get("chosen") or d["instance_class"]
+
     checks.append(preflight.gate_allows(recs["gate"]))
     checks.append(preflight.version_direction(facts, engine))
     emit("gate", checks[-2]["detail"])
@@ -74,7 +90,7 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
     if session is not None:
         emit("aws", "read-only checks against the account")
         aws, resolved = preflight.aws_checks(session, engine=engine, licence=licence,
-                                             instance_class=d["instance_class"],
+                                             instance_class=instance_class,
                                              storage_type=d["storage_type"], stack_name=stack)
         checks += aws
     else:
@@ -89,14 +105,16 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
     if engine_version:
         emit("render", f"{stack} on {engine} {engine_version}")
         rendered = render.render(recs, facts, engine_version=engine_version, stack_name=stack,
-                                 estate=estate, now=now)
+                                 estate=estate, now=now,
+                                 instance_override=instance_override,
+                                 config_override=config_override)
         checks.append(preflight.validate_template(session, rendered["template"]))
 
     cost = None
     if price_file and rendered:
         prices = pricing.lookup(price_file, region=policy.REGION, engine=engine, licence=licence,
-                                instance_class=d["instance_class"], storage_type=d["storage_type"],
-                                multi_az=policy.MULTI_AZ)
+                                instance_class=instance_class, storage_type=d["storage_type"],
+                                multi_az=(rendered or {}).get("multi_az", policy.MULTI_AZ))
         cost = {"prices": prices,
                 "estimate": pricing.estimate(prices, d["storage_gb"],
                                              oracle=engine != policy.PG_ENGINE)}

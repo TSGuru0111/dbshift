@@ -51,6 +51,7 @@ from migrate import steps as migrate_steps
 from dms import policy as dms_policy
 from dms import run as dms_run
 from provision import deploy as provision_deploy
+from provision import overrides as provision_overrides
 from provision import policy as provision_policy
 from provision import run as provision_run
 from provision import verify as provision_verify
@@ -108,6 +109,11 @@ class State:
     gate: dict | None = None
     waivers: list = field(default_factory=list)
     provision: dict | None = None
+    # A person's manual instance choice and database configuration, already
+    # validated. Held per-session rather than written to disk: it belongs to
+    # the render about to happen, not to the project.
+    provision_overrides: dict = field(default_factory=lambda: {
+        "instance_class": None, "configuration": None})
     migrate_owner_password: str | None = None   # memory only, for a fresh export
 
 
@@ -1170,12 +1176,79 @@ def _provision_plan() -> dict | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
+@app.get("/api/provision/options")
+def provision_options():
+    """What the Provision screen needs to draw the instance picker and the
+    configuration form: the classes on offer, the fields with their defaults and
+    help, and the properties that are deliberately not overridable, each with the
+    reason it is locked."""
+    opts = provision_overrides.describe()
+    d = ((STATE.sizing or {}).get("decision") or {})
+    # What Phase 3 derived, so the form can open on it and show it as the value a
+    # person is choosing to depart from.
+    opts["derived"] = {
+        "instance_class": d.get("instance_class"),
+        "vcpu": d.get("vcpu"),
+        "memory_gib": d.get("memory_gib"),
+        "basis": (((STATE.sizing or {}).get("facts") or {}).get("utilization") or {}).get("basis"),
+    }
+    opts["current"] = STATE.provision_overrides
+    return opts
+
+
+class OverrideRequest(BaseModel):
+    instance_class: str | None = None
+    configuration: dict | None = None
+    reason: str = ""
+
+
+@app.post("/api/provision/options")
+def set_provision_options(req: OverrideRequest):
+    """Validate and hold a person's choices for the next render.
+
+    Validated here rather than at render time so a bad value is refused while the
+    person is still looking at the form, with a message naming the field. The
+    render receives only records that have already passed.
+    """
+    d = ((STATE.sizing or {}).get("decision") or {})
+    derived = d.get("instance_class")
+    if not derived:
+        raise HTTPException(409, "no sizing decision yet -- run Phase 3 first")
+
+    instance = config = None
+    try:
+        if req.instance_class and req.instance_class != derived:
+            instance = provision_overrides.validate_instance_class(
+                req.instance_class, derived, req.reason)
+        if req.configuration is not None:
+            config = provision_overrides.validate_config(req.configuration, req.reason)
+            if not config["changed"]:
+                config = None
+    except provision_overrides.OverrideError as exc:
+        raise HTTPException(400, str(exc))
+
+    STATE.provision_overrides = {"instance_class": instance, "configuration": config}
+    return {"ok": True, "overrides": STATE.provision_overrides,
+            "any": bool(instance or config)}
+
+
+@app.delete("/api/provision/options")
+def clear_provision_options():
+    """Back to the derived values. Kept explicit rather than posting an empty
+    form, so 'I changed my mind' is a different action from 'I submitted nothing'."""
+    STATE.provision_overrides = {"instance_class": None, "configuration": None}
+    return {"ok": True}
+
+
 @app.get("/api/provision")
 def provision():
     """Phase 6 render + read-only preflight. Streams its stages; creates nothing."""
     def work(emit):
+        ov = STATE.provision_overrides or {}
         plan = provision_run.execute(session=_aws_session(),
-                                     price_file=provision_run.default_price_file(), on_event=emit)
+                                     price_file=provision_run.default_price_file(), on_event=emit,
+                                     instance_override=ov.get("instance_class"),
+                                     config_override=ov.get("configuration"))
         STATE.provision = plan
         est = (plan.get("cost") or {}).get("estimate") or {}
         emit({"event": "complete", "ready": plan["ready"], "stack": plan.get("stack_name"),

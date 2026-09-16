@@ -1,6 +1,23 @@
 # Phase 6 — Provision
 
-> **Latest update — 2026-09-14 (two engines).** Provision follows the Phase 3
+> **Latest update — 2026-09-16.** **A person can choose the instance class and
+> fill in the database configuration**, and the plan still says where every
+> value came from. The instance class was taken straight from Phase 3 with no
+> way to depart from it, and nine configuration values were module constants in
+> `policy.py` — right for a beta on $100 of credit, wrong for a client whose
+> standards differ.
+>
+> An override is not a free-form edit: it is a claim that the evidence was
+> wrong, so it is recorded as one. **The derived value is never discarded** — it
+> stays in the provenance row next to what was chosen and why, which is the only
+> way the screen's promise survives contact with a human. A change needs a
+> reason of real length; cost-affecting fields say so at the field; and four
+> properties refuse to be overridden at all, each with the reason
+> (`engine_version` would invalidate the Phase 4b compile gate;
+> `character_set` cannot be altered after creation).
+> `provision/overrides.py`, self-test 49/49, browser drive 21/21.
+>
+> Earlier — **2026-09-14 (two engines).** Provision follows the Phase 3
 > target decision: **RDS for Oracle** or **RDS for PostgreSQL**. The renderer
 > branches once, on `sizing.decision.engine`, and the PostgreSQL path drops
 > everything Oracle-specific — no option group, no `S3_INTEGRATION` role
@@ -266,6 +283,51 @@ To remove anything this project created: `python -m killswitch --destroy --confi
 the stack, because a stack cannot delete a bucket that holds objects.
 
 ## Change log
+
+**2026-09-16** — **Manual instance choice and a database configuration form.**
+Client feedback: "Provisioning -- give option to manual inputs to choose
+instance" and "default configuration for the Database to be filled by user while
+configuring." Both were gaps: `render.py` read `instance_class` from the Phase 3
+decision with no override, and `policy.py` held nine values as module constants
+a client could not reach.
+
+`provision/overrides.py` added. The design question was not how to accept input
+-- it was how to accept it **without turning the provenance table into
+decoration**. The answer runs through every part of it:
+
+- **13 instance classes as a picker, not free text.** A typo like
+  `db.t3.medum` would otherwise fail minutes later, inside CloudFormation, after
+  a stack had begun. The existing `preflight.aws_checks` still confirms the
+  chosen class is orderable in the region, so an entry AWS will not sell is
+  caught before anything is created.
+- **The derived value survives.** The provenance row for an overridden class
+  reads "a person, overriding sizing.decision.instance_class (Phase 3)" and its
+  *why* carries what Phase 3 derived, what was chosen, and the reason given.
+  "Manual" alone would have been a worse answer than the one it replaced.
+- **A reason is required** (8 characters minimum). An override without one is
+  indistinguishable from a mis-click three months later.
+- **Only what differs is an override.** The form posts all nine fields; posting
+  nine defaults records nothing. Without this a person who changed one setting
+  would have found nine override rows in the plan.
+- **Cost-affecting fields are marked at the field** — Multi-AZ doubles the
+  instance bill, backup retention and Performance Insights add to it.
+- **Four properties are locked, each with its reason.** `engine_version`
+  (Phase 4b compiled against it), `character_set` (cannot be altered after
+  creation, and Phase 8 compares against the source), `engine` (that is a
+  different migration) and `region` (everything else is in one region).
+- **`policy` is never mutated.** `effective_policy()` returns a dict, because
+  `policy` is module state shared with the CLI and the kill switch -- a console
+  override that leaked into a later CLI run in the same process would be a
+  genuinely nasty bug.
+
+The chosen class drives the **render, the preflight and the price lookup**
+together. Quoting the derived class for an overridden instance would have shown
+a client an hourly rate for a machine they were not buying.
+
+Self-test `provision.selftest_overrides` **49/49**; browser drive
+`scripts/console-test/drive_provision_options.js` **21/21**, including that an
+invalid database name and a missing reason are both refused in the UI with a
+message naming the field. `provision.selftest` still passes unchanged.
 
 **2026-09-14 — RDS for PostgreSQL as a second target.** `provision/policy.py`
 gained the PostgreSQL block (engine, licence `postgresql-license`, major 16 to
