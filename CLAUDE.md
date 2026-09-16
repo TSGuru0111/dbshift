@@ -26,6 +26,17 @@ names the right target (10).
 **Decided 2026-09-14:** the client chooses the target in Phase 3, from evidence.
 This reversed the earlier "capability, not a target" position on PostgreSQL.
 
+**Decided 2026-09-16:** the client also declares in **Phase 1** whether this is a
+**full load** or **full load + CDC**. It was a Phase 7 flag, which meant every run
+was assessed as though CDC were in scope: `OPS-001` (NOARCHIVELOG), `OPS-002`
+(supplemental logging) and `DQ-001` (no primary key) only matter because CDC reads
+redo, and all three halted the gate regardless. On `DBMIG_APP` that is 4 CRITICALs
+where **only `RDS-004` is real**. The mode lives in the discovery manifest and is
+read by Phases 2, 5 and 7. **It never suppresses a finding** — a CDC-only blocker
+on a full-load run is still reported, keeps its severity in
+`severity_if_applicable`, and is marked not-applicable with the reason.
+`collector/mode.py`, self-test `collector.selftest_mode` 55/55.
+
 **Aurora is not RDS for PostgreSQL** — different products, and Aurora stays out
 of scope. Also out: Redshift (analytical only, never for OLTP), Oracle
 Database@AWS, and SQL Server as a source. See `docs/02-architecture.md`, and do
@@ -39,8 +50,8 @@ not re-add them.
 | **Second estate** | ✅ `DBMIG_TELCO`, **5.67 GB**, 32.7M rows, 68 objects, 14 defects. Telecom billing, own bigfile tablespace. `docs/12-telco-estate.md` |
 | Seeded defects | ✅ 8 defects in place, documented |
 | Golden snapshot | ✅ `data/dbmig_golden.dmp` |
-| Discovery collector | ✅ `collector/`, 47 datasets, local JSON, 5/5 verify checks |
-| Assessment engine | ✅ `assess/`, 50 rules as data, **7/7 on DBMIG_APP, 14/14 on DBMIG_TELCO**, HTML report |
+| Discovery collector | ✅ `collector/`, 47 datasets, local JSON, 5/5 verify checks. **Asks the migration mode (full load / +CDC) since 2026-09-16** — `DBSHIFT_MIGRATION_MODE`, `--migration-mode`, or the console. Console tiles count **user objects, not Oracle's internals** (DBMIG_APP: 9 tables, not 21), pinned to Phase 2's `v_user_tables` by `web.selftest_counts` 22/22 |
+| Assessment engine | ✅ `assess/`, 50 rules as data, **7/7 on DBMIG_APP, 14/14 on DBMIG_TELCO**, HTML report. CDC-only findings marked not-applicable on a full-load run, never removed. Console shows the issues as a **sortable table** (accordion still there behind *Detail*) and downloads them as **CSV or JSON** — one row per finding, not-applicable ones exported with their reason |
 | **Target & Sizing (3)** | ✅ `sizing/`, **two paths since 2026-09-14**. `target.py` separates blockers from effort and refuses a blocked path; PostgreSQL has no edition or licence arithmetic. On `DBMIG_APP`: both paths open, PostgreSQL 8 effort points, 86% of stored code automatic. Self-test 41/41 |
 | AWS account | ✅ Granted 2026-09-09, SSO + `DBA_permissions`. See `docs/05-aws-services.md` |
 | Bedrock access | ⛔ **Blocked** — re-tested 2026-09-12: every invoke now fails with `INVALID_PAYMENT_INSTRUMENT` (the account has no valid payment method for the Marketplace subscription). A Billing-console fix by an admin, not IAM. `docs/05-aws-services.md`; the enablement plan is `docs/14-bedrock-enablement.md` |
@@ -139,6 +150,7 @@ file, not the pricing API, which this permission set cannot call.
 ```
 $env:DBSHIFT_COLLECTOR_PASSWORD='...'      # read-only dbmig_collector
 .\.venv\Scripts\python.exe -m collector.run       # discover  -> collector/output/<run_id>/
+#   --migration-mode full-load-and-cdc   # default is full-load; decides what counts as a blocker
 .\.venv\Scripts\python.exe -m collector.verify    # reconcile against ground truth
 .\.venv\Scripts\python.exe -m assess.run          # assess    -> assess/output/assessment.json
 .\.venv\Scripts\python.exe -m assess.report       # render    -> assess/output/report.html
@@ -166,6 +178,11 @@ a script. A drive of the console through Phases 1–4b and 10
 in headless Edge (connect, discover, assess, size, register PostgreSQL,
 convert, build the report, reload, phone width) passed 21/21 on 2026-09-12; it
 found two real bugs on the way — see the 4b and 10 change logs.
+`drive_counts_export.js` covers the Phase 1 counts and the Phase 2 table and
+downloads (26/26); it downloads the CSV for real and parses what arrives. It
+runs without a collector password against a server seeded from the newest run
+on disk, so those two screens stay testable on a machine that cannot reach
+Oracle.
 
 **The rail is numbered by architecture phase, not by screen order.** Connect is a
 prerequisite, not a phase, so it carries no number. Numbering it would shift every
@@ -176,9 +193,18 @@ CLI uses, so the UI cannot show a result the CLI would not.
 - **Connect** runs a six-check preflight (reachability, auth, container,
   catalogue access, row-data access, CDC readiness) and states what a client
   network would need. The password lives in process memory only.
-- **Discovery** streams probe-by-probe progress over SSE, then shows a summary
-  and every dataset in an expandable list.
-- **Assessment** streams rule-by-rule progress, then scores and grouped issues.
+- **Discovery** asks the **migration mode** first — full load, or full load +
+  CDC — because it decides what counts as a blocker, and shows whether the
+  source is actually configured for CDC from the preflight's own evidence. Then
+  it streams probe-by-probe progress over SSE and shows a summary with every
+  dataset in an expandable list. Changing the mode marks a completed discovery
+  as needing a re-run, since the assessment and gate built on it judged a
+  different migration.
+- **Assessment** streams rule-by-rule progress, then scores and the issues as a
+  **sortable table** — severity, rule, finding, category, object count, fix level
+  — with a row opening its own detail in place. **Detail** switches back to the
+  full accordion, and **Download CSV / JSON** takes the findings away
+  (`/api/assessment.csv`, one row per finding, Excel-safe BOM).
 - **Rules &amp; probes** switches any check off, or adds a custom one. Custom
   probes are a `SELECT` against the data dictionary; custom rules are a `SELECT`
   against the loaded discovery data. Read-only is enforced in `web/settings.py`
@@ -239,6 +265,27 @@ is non-empty and every table is granted, and wrong anywhere else.
 **Re-run it after any change to `collector/` or `assess/`.** A second estate is
 the only thing that catches this class of bug, and `DBMIG_APP` regression
 (still 7/7) is not a substitute.
+
+## Credentials
+
+Local database credentials live in **`credentials.local.ps1`** (gitignored by the
+`credentials*` rule). Dot-source it, do not run it:
+
+```powershell
+. .\credentials.local.ps1                  # collector -> DBMIG_APP
+. .\credentials.local.ps1 -Estate telco    # collector -> DBMIG_TELCO
+. .\credentials.local.ps1 -Estate rehearsal  # the writable copy, for Phase 4
+```
+
+It clears the per-estate variables before setting them, because dot-sourcing
+twice in one shell otherwise leaves the previous estate behind — and Phase 4
+decides what to remap a fix *onto* from `DBSHIFT_PRIMARY_SCHEMA`.
+
+⚠️ **These passwords are also committed in five tracked files, and the repo is
+public on GitHub.** The listener is bound to `0.0.0.0`, so a published password
+reaches the database from anywhere on this network — verified by connecting over
+the LAN address, not assumed. Rotate before the next client-facing run.
+**`docs/15-credential-exposure.md`** has the locations and the fix.
 
 ## Two things that bite
 
