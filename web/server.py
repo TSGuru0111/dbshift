@@ -12,6 +12,8 @@ written to disk, logged, or returned to the browser.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import queue
@@ -27,7 +29,8 @@ if __package__ in (None, ""):
     __package__ = "web"
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import (FileResponse, HTMLResponse, Response,
+                               StreamingResponse)
 from pydantic import BaseModel
 
 from assess import engine as assess_engine
@@ -59,6 +62,7 @@ from report import render as report_render
 from sizing import run as sizing_run
 from sizing import target as sizing_target
 from sizing import utilization as sizing_utilization
+from collector import mode as migration_mode
 from collector.db import in_binds  # noqa: F401  (kept for custom probe authors)
 from collector.probes import PROBES
 
@@ -89,6 +93,11 @@ class State:
     sizing: dict | None = None
     engine: str = sizing_target.ORACLE   # which target every later phase acts on
     engine_chosen_by: str | None = None
+    # Full load or full load + CDC, asked in Phase 1. Decides whether the
+    # CDC-only findings are blockers -- see collector/mode.py.
+    migration_mode: str = migration_mode.DEFAULT
+    mode_declared: bool = False
+    mode_chosen_by: str | None = None
     utilization: dict | None = None
     remediation: dict | None = None
     rehearsal_dsn: str | None = None
@@ -243,6 +252,18 @@ def get_state():
         "engine": STATE.engine,
         "engine_label": sizing_target.LABEL[STATE.engine],
         "engine_chosen_by": STATE.engine_chosen_by,
+        "migration_mode": STATE.migration_mode,
+        "migration_mode_label": migration_mode.LABEL[STATE.migration_mode],
+        "migration_mode_declared": STATE.mode_declared,
+        "migration_mode_chosen_by": STATE.mode_chosen_by,
+        "migration_modes": [
+            {"mode": m, "label": migration_mode.LABEL[m],
+             "description": migration_mode.DESCRIPTION[m]}
+            for m in migration_mode.MODES
+        ],
+        "cdc_readiness": migration_mode.readiness(
+            STATE.facts.get("log_mode"), STATE.facts.get("supplemental_logging")
+        ),
         "has_remediation": STATE.remediation is not None,
         "has_conversion": STATE.conversion is not None,
         "pg_dsn": STATE.pg_dsn,
@@ -380,6 +401,9 @@ def discover():
             dsn=STATE.dsn,
             schemas=STATE.schemas or collector_config.DEFAULT_SCHEMAS,
             output_dir=Path(__file__).resolve().parent.parent / "collector" / "output",
+            migration_mode=STATE.migration_mode,
+            mode_declared=STATE.mode_declared,
+            mode_chosen_by=STATE.mode_chosen_by,
         )
         emit({"event": "start", "total": len(enabled), "probes": enabled})
         manifest = collector_run.execute(
@@ -395,6 +419,7 @@ def discover():
             "total_rows": manifest["total_rows"],
             "elapsed_ms": manifest["elapsed_ms"],
             "failed": manifest["failed_queries"],
+            "migration_mode": manifest["migration_mode"],
         })
 
     return _stream(work)
@@ -421,8 +446,27 @@ def discovery():
             "rows": [
                 {k: v for k, v in r.items() if k != "collector_run_id"} for r in rows[:200]
             ],
+            "all_rows": rows,
             "truncated": max(0, entry["row_count"] - 200),
         })
+
+    # Classify after every dataset is read: "is this table someone's container?"
+    # cannot be answered until the mview, queue and external lists are loaded.
+    # Counting over `all_rows` rather than the 200 sent for display keeps the
+    # tile correct on an estate larger than the display cap.
+    # `owned` applies to the tables dataset only. Phase 2's `v_user_objects`
+    # filters on name prefixes alone, so a materialized view is a user object
+    # while the table backing it is not -- passing `owned` here too would
+    # exclude the mview itself and under-report by 4 on DBMIG_APP.
+    owned = _owned_table_names(datasets)
+    for d in datasets:
+        key = {"tables": "table_name", "objects": "object_name"}.get(d["name"])
+        rows = d.pop("all_rows")
+        scope = owned if d["name"] == "tables" else frozenset()
+        d["internal_count"] = (
+            sum(1 for r in rows if _is_internal(r.get(key), scope))
+            if key and rows and key in rows[0] else 0
+        )
 
     facts = dict(STATE.facts)
     return {
@@ -439,15 +483,73 @@ def discovery():
     }
 
 
+# What counts as a *user* table, kept identical to Phase 2's `v_user_tables`
+# (assess/loader.py :: _create_views). Two parts, and the second is easy to miss:
+#
+#   1. name prefixes -- assess.loader.INTERNAL_PATTERNS
+#   2. tables owned by another object -- a materialized view's container, a
+#      queue table, an external table. None of these match a `$` prefix, so a
+#      prefix-only check reports three of DBMIG_APP's tables as the client's.
+#
+# The console used to report the raw count, so a client whose schema has 9
+# tables saw "Tables 21" and had no way to reconcile it. The hint said
+# "including Oracle internals", which explained the number without making it
+# usable. Count what a client would count, and show the rest separately.
+#
+# This duplicates the view's definition because the view lives in SQLite, which
+# Phase 2 builds and Phase 1 has not yet run. If one changes, change both --
+# `web.selftest_counts` fails when they disagree on a collected run.
+_INTERNAL_PREFIXES = tuple(p.rstrip("%") for p in assess_loader.INTERNAL_PATTERNS)
+
+
+def _owned_table_names(datasets: list[dict]) -> set[str]:
+    """Tables that exist only to back another object, by name."""
+    owned: set[str] = set()
+    for name, key in (("materialized_views", "container_name"),
+                      ("queues", "queue_table"),
+                      ("external_tables", "table_name")):
+        ds = next((d for d in datasets if d["name"] == name), None)
+        for r in (ds or {}).get("all_rows") or []:
+            if r.get(key):
+                owned.add(str(r[key]).upper())
+    return owned
+
+
+def _is_internal(name: str, owned: set[str] = frozenset()) -> bool:
+    n = str(name or "").upper()
+    return n.startswith(_INTERNAL_PREFIXES) or n in owned
+
+
+def _split_internal(datasets: list[dict], name: str) -> tuple[int, int]:
+    """(user, internal) counts for a dataset.
+
+    `internal_count` is computed in the discovery endpoint over every collected
+    row, so this stays correct on an estate larger than the display cap. A
+    dataset that was not collected reports zero of both.
+    """
+    ds = next((d for d in datasets if d["name"] == name), None)
+    if not ds:
+        return 0, 0
+    internal = ds.get("internal_count", 0)
+    return ds.get("row_count", 0) - internal, internal
+
+
 def _discovery_summary(datasets: list[dict], facts: dict) -> list[dict]:
     by_name = {d["name"]: d for d in datasets}
 
     def count(name: str) -> int:
         return by_name.get(name, {}).get("row_count", 0)
 
+    user_tables, internal_tables = _split_internal(datasets, "tables")
+    user_objects, internal_objects = _split_internal(datasets, "objects")
+
+    def hint(internal: int, noun: str) -> str:
+        return (f"{internal} Oracle-managed {noun} excluded" if internal
+                else f"every {noun.rstrip('s')} found")
+
     return [
-        {"label": "Objects", "value": count("objects"), "hint": "every schema object found"},
-        {"label": "Tables", "value": count("tables"), "hint": "including Oracle internals"},
+        {"label": "Objects", "value": user_objects, "hint": hint(internal_objects, "objects")},
+        {"label": "Tables", "value": user_tables, "hint": hint(internal_tables, "tables")},
         {"label": "Columns", "value": count("columns"), "hint": "full structure captured"},
         {"label": "Indexes", "value": count("indexes"), "hint": "with columns and expressions"},
         {"label": "Constraints", "value": count("constraints"), "hint": "PK, FK, unique, check"},
@@ -564,6 +666,83 @@ def assessment():
     return STATE.assessment
 
 
+# One row per finding, not per issue. An issue groups a rule's hits for reading;
+# a client filtering or pivoting the export wants the object name on its own row,
+# and the grouped view is one pivot away from this while the reverse is not.
+_EXPORT_COLUMNS = [
+    ("rule_id", "Rule"),
+    ("severity", "Severity"),
+    ("applicable", "Applies to this migration"),
+    ("severity_if_applicable", "Severity if applicable"),
+    ("not_applicable_reason", "Why not applicable"),
+    ("category", "Category"),
+    ("title", "Finding"),
+    ("owner", "Schema"),
+    ("object_name", "Object"),
+    ("object_type", "Object type"),
+    ("remediation_level", "Remediation"),
+    ("detail", "Detail"),
+    ("rationale", "Why it matters"),
+]
+
+
+def _export_rows() -> list[dict]:
+    """Findings flattened for export, severity-ordered.
+
+    A not-applicable finding is exported with its reason and its original
+    severity, never dropped: Phase 1 is explicit that "does not block the
+    migration you chose" must not read as "clean", and a spreadsheet that
+    silently omitted them would say exactly that.
+    """
+    order = {s: n for n, s in enumerate(["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"])}
+    rows = []
+    for f in STATE.assessment.get("findings", []):
+        row = {}
+        for key, label in _EXPORT_COLUMNS:
+            v = f.get(key)
+            if key == "applicable":
+                v = "no" if v is False else "yes"
+            row[label] = "" if v is None else str(v)
+        rows.append(row)
+    rows.sort(key=lambda r: (order.get(r["Severity"], 9), r["Rule"], r["Object"]))
+    return rows
+
+
+@app.get("/api/assessment.csv")
+def assessment_csv():
+    """The findings as a spreadsheet. Excel-compatible: UTF-8 with a BOM, so a
+    non-ASCII object name does not arrive mojibake in the client's copy."""
+    if not STATE.assessment:
+        raise HTTPException(409, "no assessment run yet")
+    rows = _export_rows()
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=[label for _, label in _EXPORT_COLUMNS],
+                       lineterminator="\r\n")
+    w.writeheader()
+    w.writerows(rows)
+    run = (STATE.assessment.get("collector_run_id") or "run")[:8]
+    name = f"dbshift-assessment-{run}.csv"
+    return Response(
+        content="\ufeff" + buf.getvalue(),  # BOM: Excel reads UTF-8 only with it
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@app.get("/api/assessment.json/download")
+def assessment_json_download():
+    """The whole record, for a client who wants the evidence rather than a table."""
+    if not STATE.assessment:
+        raise HTTPException(409, "no assessment run yet")
+    run = (STATE.assessment.get("collector_run_id") or "run")[:8]
+    return Response(
+        content=json.dumps(STATE.assessment, indent=2, default=str),
+        media_type="application/json",
+        headers={"Content-Disposition":
+                 f'attachment; filename="dbshift-assessment-{run}.json"'},
+    )
+
+
 class UtilizationRequest(BaseModel):
     filename: str = "utilization.csv"
     content: str
@@ -606,6 +785,47 @@ def utilization_sample():
         "percentile": sizing_utilization.SIZING_PERCENTILE,
         "headroom": sizing_utilization.HEADROOM,
     }
+
+
+class MigrationModeRequest(BaseModel):
+    mode: str
+    chosen_by: str | None = None
+
+
+@app.post("/api/migration-mode")
+def set_migration_mode(req: MigrationModeRequest):
+    """Phase 1. Declare whether this migration is full load, or full load + CDC.
+
+    Asked in Discovery rather than at Phase 7, because it decides whether
+    OPS-001, OPS-002 and DQ-001 are blockers. Declaring a full load against a
+    NOARCHIVELOG source is the normal case, not an override: there is nothing
+    to override, because a full load never reads redo.
+
+    CDC against a source that is not ready is allowed and warned about. That is
+    a remediation task with a restart window attached -- refusing the
+    declaration would just move the conversation somewhere this tool cannot
+    record it.
+    """
+    try:
+        mode = migration_mode.normalize(req.mode)
+    except migration_mode.ModeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    STATE.migration_mode = mode
+    STATE.mode_declared = True
+    # Typed, not taken from AWS: unlike the target engine this is a statement
+    # about the client's outage tolerance, and the person making it need not
+    # hold credentials in this account.
+    STATE.mode_chosen_by = (req.chosen_by or "").strip() or None
+
+    record = migration_mode.decide(
+        mode,
+        chosen_by=STATE.mode_chosen_by,
+        log_mode=STATE.facts.get("log_mode"),
+        supplemental_min=STATE.facts.get("supplemental_logging"),
+        declared=True,
+    )
+    return {"ok": True, **record}
 
 
 class EngineRequest(BaseModel):

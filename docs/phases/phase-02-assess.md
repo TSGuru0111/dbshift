@@ -1,6 +1,28 @@
 # Phase 2 — Assess
 
-> **Latest update — 2026-09-10.** **Validated against a second, independently
+> **Latest update — 2026-09-16 (later).** **The issues read as a table, and the
+> client can take them away.** 37 issues as stacked accordions was a long scroll
+> that could not be scanned or compared — severity, rule, category and object
+> count now sit in sortable columns, and a row opens its own detail in place.
+> The accordion is still there behind **Detail**. Two downloads:
+> `GET /api/assessment.csv` (one row per finding, Excel-safe UTF-8 BOM) and the
+> whole JSON record. A not-applicable finding is exported **with its reason and
+> its original severity**, never dropped — a spreadsheet that silently omitted
+> them would say "clean", which is exactly the claim Phase 1 forbids.
+>
+> Earlier — **2026-09-16.** **Findings are now judged against the
+> migration mode declared in Phase 1.** `OPS-001`, `OPS-002` and `DQ-001` exist
+> only because DMS change data capture reads redo, so on a full-load migration
+> they are marked not applicable rather than reported as CRITICAL — with the
+> reason, and with the severity they would otherwise carry kept in
+> `severity_if_applicable`. Nothing is removed: "not a blocker for the migration
+> you chose" is a different claim from "clean", and the HTML report says which.
+> The pass is separate from `evaluate()` on purpose — severity still comes from
+> the rule row and is never computed — and the answer key grades the rule's own
+> severity, so recall on `DBMIG_APP` stays **7/7, severity exact 7/7**.
+> On run `2f67a47b` this takes CRITICAL from **4 to 1**.
+>
+> Earlier — **2026-09-10.** **Validated against a second, independently
 > seeded estate: `DBMIG_TELCO`, 5.67 GB, 14 defects, 14/14 recall with severity
 > exact on all 14.** Six rules fired for the first time ever (PERF-004, PERF-008,
 > DQ-005, DQ-008, DQ-009, OPS-004). Getting there exposed two real defects: five
@@ -115,6 +137,64 @@ Console: **Phase 2 - Assess**, with rule-by-rule progress.
 Recall **7 of 7 detectable, severity exact on all 7**.
 
 ## Change log
+
+**2026-09-16 (later) — the issues are a table, and they download.** Client
+feedback: "Assess looks very long, make it like tabular format. Give a download
+option to client." Both were fair — 37 issues rendered as stacked `<details>`
+meant a client could not see severity, rule and blast radius side by side, and
+there was no way to take the result off the screen.
+
+- **Table view, default.** Severity · Rule · Finding · Category · Objects · Fix,
+  sorted worst-first. Any heading sorts, clicking again reverses; severity sorts
+  by rank, not alphabetically (CRITICAL before HIGH, not after). A row opens its
+  own detail underneath without collapsing the table, so one finding can be read
+  without losing the overview.
+- **Detail view** keeps the original accordion with the full rationale and the
+  object list. The table replaces the default *reading mode*, not the evidence.
+- **The severity chips drive both views**, and the count line reports what is
+  shown against the total.
+- **`GET /api/assessment.csv`** — one row per *finding*, not per issue: an issue
+  groups a rule's hits for reading, but a client filtering in Excel wants the
+  object on its own row, and the grouped view is one pivot away from the flat
+  one while the reverse is not. 13 columns including `applicable`,
+  `severity_if_applicable` and the not-applicable reason. UTF-8 **with a BOM**,
+  because Excel misreads UTF-8 without one and a non-ASCII object name would
+  arrive mangled in the client's copy. Filename carries the run id.
+- **`GET /api/assessment.json/download`** — the whole record, for a client who
+  wants the evidence rather than a table.
+
+Both endpoints 409 before an assessment has run, like every other phase route.
+
+Verified in headless Edge (`scripts/console-test/drive_counts_export.js`,
+**26/26**): the CSV is downloaded for real and parsed, not inspected in the
+handler — 67 rows matching the record's 67 findings, BOM present, CRLF endings,
+and no horizontal overflow at 400px.
+
+**2026-09-16 — findings are judged against the Phase 1 migration mode.**
+`engine.apply_migration_mode()` added: a pass over the findings that marks the
+CDC-only rules (`OPS-001`, `OPS-002`, `DQ-001`) not applicable when the run
+declared a full load, moving them to INFO for the score and the gate while
+keeping the original in `severity_if_applicable` and the reason in
+`not_applicable_because`. Deliberately **not** folded into `evaluate()`: severity
+comes from the rule row and is never computed, and a mode that edited it in place
+would make two runs of the same rules disagree.
+
+`assess.run` records the mode and a `not_applicable` list in `assessment.json`
+and prints both. `loader.load_run` carries `migration_mode` out of the manifest;
+a run collected before the mode existed falls back to an undeclared full load,
+which is visible as an assumption rather than presented as a decision.
+
+Two things found while building it:
+
+1. **`scoring.score_against_answer_key` graded the downgraded severity**, so
+   declaring a full load scored as a severity regression in the engine — 6/7
+   instead of 7/7 — when the engine had done nothing wrong. It now grades
+   `severity_if_applicable`: the key asserts what the *rule catalogue* should
+   say, which does not change with this run's migration.
+2. **The HTML report copies grouped issues through a fixed key list**, so
+   `applies` never reached the page and a downgraded finding rendered as a bare
+   INFO with no explanation. The three fields are now carried, read with `.get`
+   so an older `assessment.json` still renders.
 
 **2026-09-10** — Answer key gated on the reference schema. Rule toggles and
 custom rules from the console. `assess.report` made tolerant of a

@@ -381,6 +381,19 @@ tr:last-child td{border-bottom:none}
       <p>Each probe reads one area of the data dictionary. They run in order, and every
          statement is logged with its row count and duration.</p>
     </div>
+    <!-- The migration mode. Asked here, before the run, because it decides
+         whether OPS-001, OPS-002 and DQ-001 are blockers or irrelevancies. It
+         used to be a Phase 7 flag, which meant the assessment reported all
+         three as CRITICAL on every run and the gate halted on them. -->
+    <div class="panel pad" style="margin-bottom:16px">
+      <div class="eyebrow">Migration mode — how is this estate moving?</div>
+      <p style="color:var(--ink-2);font-size:12.5px;margin:6px 0 14px;max-width:78ch">
+        Answer this before discovery runs. It decides what counts as a blocker:
+        ARCHIVELOG, supplemental logging and missing primary keys stop change data
+        capture, and none of them affect a full load into an outage window.</p>
+      <div class="paths" id="modeOpts"></div>
+      <div id="modeNote" style="margin-top:12px"></div>
+    </div>
     <div class="spread" style="margin-bottom:16px">
       <button class="btn" id="btnDiscover">Run discovery</button>
       <span class="mono" id="discMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
@@ -426,9 +439,21 @@ tr:last-child td{border-bottom:none}
         </div>
       </div>
       <div id="recallNote" class="mt-s"></div>
-      <div class="mt"><div class="eyebrow">Issues</div>
-        <div class="chips" id="sevChips"></div>
-        <div class="acc" id="issueAcc"></div>
+      <div class="mt">
+        <div class="spread" style="align-items:flex-end;gap:12px;flex-wrap:wrap">
+          <div class="eyebrow" style="margin:0">Issues</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn ghost sm" id="btnViewTable" aria-pressed="true">Table</button>
+            <button class="btn ghost sm" id="btnViewDetail" aria-pressed="false">Detail</button>
+            <a class="btn ghost sm" id="btnCsv" href="/api/assessment.csv"
+               style="text-decoration:none;display:inline-block">Download CSV</a>
+            <a class="btn ghost sm" id="btnJson" href="/api/assessment.json/download"
+               style="text-decoration:none;display:inline-block">JSON</a>
+          </div>
+        </div>
+        <div class="chips mt-s" id="sevChips"></div>
+        <div id="issueTable" class="tblwrap"></div>
+        <div class="acc" id="issueAcc" style="display:none"></div>
         <div class="mono mt-s" id="issueCount" style="font-size:12.5px;color:var(--ink-3)"></div>
       </div>
     </div>
@@ -1132,6 +1157,11 @@ async function loadState(){
   $('#netreq').innerHTML = s.network_requirements.map(r =>
     `<div><div class="t">${esc(r.title)}</div><div class="d">${esc(r.detail)}</div></div>`).join('');
   if (s.engine) { ENGINE = s.engine; renderPaths(); showMigrationEngine(); }
+  if (s.migration_modes) {
+    MODES = s.migration_modes; MODE = s.migration_mode;
+    MODE_DECLARED = s.migration_mode_declared; CDC_READY = s.cdc_readiness;
+    renderModes();
+  }
   if (!s.connected) return;
   applyConnected(s.checks, s.facts);
 
@@ -1250,6 +1280,12 @@ $('#btnConnect').onclick = async () => {
     renderChecks(d.checks); renderFacts(d.facts);
     if (d.ok) {
       applyConnected(d.checks, d.facts);
+      // The mode picker shows whether the source is actually ready for CDC, and
+      // that evidence only exists once the preflight has run. Refetched from
+      // the server rather than recomputed here: `collector.mode.readiness` is
+      // the one place that decides what "ready" means, and a second copy in the
+      // browser would be free to drift from the one the gate uses.
+      refreshModes();
       // Advance to the next stage once the connection is proven, so the run
       // reads as a sequence rather than one long page.
       setTimeout(() => show('discover'), 550);
@@ -1466,8 +1502,95 @@ async function renderAssessment(){
   $('#assessResult').style.display = '';
 }
 
+/* Two views over the same issues.
+   Table is the default: 37 issues as stacked accordions is a long scroll that
+   cannot be scanned or compared, and a client asked for something they could
+   read across. Detail keeps the full rationale and object list for the one
+   issue they then want to read properly -- so the table replaces the default
+   reading mode, not the evidence. */
+let issueView = 'table';
+const SEV_ORDER = {CRITICAL:0, HIGH:1, MEDIUM:2, LOW:3, INFO:4};
+let issueSort = {key:'severity', dir:1};
+
+const ISSUE_COLS = [
+  {key:'severity',    label:'Severity', w:'108px'},
+  {key:'rule_id',     label:'Rule',     w:'86px'},
+  {key:'title',       label:'Finding'},
+  {key:'category',    label:'Category', w:'150px'},
+  {key:'occurrences', label:'Objects',  w:'84px', num:true},
+  {key:'remediation_level', label:'Fix', w:'70px'},
+];
+
+function sortIssues(list){
+  const {key, dir} = issueSort;
+  return [...list].sort((a,b) => {
+    let x, y;
+    if (key === 'severity') { x = SEV_ORDER[a.severity]; y = SEV_ORDER[b.severity]; }
+    else if (key === 'occurrences') { x = a.occurrences; y = b.occurrences; }
+    else { x = String(a[key] ?? '').toLowerCase(); y = String(b[key] ?? '').toLowerCase(); }
+    if (x < y) return -dir;
+    if (x > y) return dir;
+    // Severity ties read best by rule id, not by whatever order the engine emitted.
+    return String(a.rule_id).localeCompare(String(b.rule_id));
+  });
+}
+
+function renderIssueTable(list){
+  const rows = sortIssues(list);
+  const head = ISSUE_COLS.map(c => {
+    const active = issueSort.key === c.key;
+    const arrow = active ? (issueSort.dir === 1 ? ' ↑' : ' ↓') : '';
+    return `<th data-sort="${c.key}" style="cursor:pointer;user-select:none${c.w ? `;width:${c.w}` : ''}"
+              title="Sort by ${esc(c.label)}">${esc(c.label)}${arrow}</th>`;
+  }).join('');
+  const body = rows.map((i, n) => `
+    <tr data-idx="${n}" style="cursor:pointer" title="Show the full finding">
+      <td><span class="sev ${i.severity}">${i.severity}</span></td>
+      <td>${esc(i.rule_id)}</td>
+      <td style="font-family:inherit">${esc(i.title)}
+        ${i.applicable === false
+          ? `<span class="sub" style="display:block;color:var(--ink-3)">not a blocker for this migration</span>` : ''}</td>
+      <td>${esc(CATLABEL[i.category] || i.category || '')}</td>
+      <td style="text-align:right">${i.occurrences}</td>
+      <td>${esc(i.remediation_level || '')}</td>
+    </tr>
+    <tr class="rowdetail" data-for="${n}" style="display:none">
+      <td colspan="${ISSUE_COLS.length}" style="font-family:inherit;background:var(--bg-2, transparent)">
+        <b>${esc(i.sample_detail || '')}</b>
+        <div style="margin-top:6px;color:var(--ink-2)">${esc(i.rationale || '')}</div>
+        ${i.objects && i.objects.length
+          ? `<div style="margin-top:8px"><span style="color:var(--ink-3)">Objects:</span>
+             <span class="mono">${i.objects.slice(0,40).map(esc).join(', ')}</span>
+             ${i.objects.length > 40 ? ` <span style="color:var(--ink-3)">+${i.objects.length - 40} more</span>` : ''}</div>`
+          : ''}
+      </td>
+    </tr>`).join('');
+
+  $('#issueTable').innerHTML = rows.length
+    ? `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+    : '<div class="empty">No issues match these filters.</div>';
+
+  $('#issueTable').querySelectorAll('th[data-sort]').forEach(th => th.onclick = () => {
+    const k = th.dataset.sort;
+    issueSort = {key:k, dir: issueSort.key === k ? -issueSort.dir : 1};
+    renderIssues();
+  });
+  // A row opens its own detail in place, so the table stays scannable while one
+  // finding is being read.
+  $('#issueTable').querySelectorAll('tr[data-idx]').forEach(tr => tr.onclick = () => {
+    const d = $('#issueTable').querySelector(`tr.rowdetail[data-for="${tr.dataset.idx}"]`);
+    if (d) d.style.display = d.style.display === 'none' ? '' : 'none';
+  });
+}
+
 function renderIssues(){
   const list = ISSUES.filter(i => sevFilter.size === 0 || sevFilter.has(i.severity));
+  const table = issueView === 'table';
+  $('#issueTable').style.display = table ? '' : 'none';
+  $('#issueAcc').style.display = table ? 'none' : '';
+  $('#btnViewTable').setAttribute('aria-pressed', table);
+  $('#btnViewDetail').setAttribute('aria-pressed', !table);
+  if (table) renderIssueTable(list);
   $('#issueAcc').innerHTML = list.map(i => `
     <details class="item"><summary>
       <span class="title"><span class="sev ${i.severity}">${i.severity}</span>
@@ -1483,8 +1606,13 @@ function renderIssues(){
           </tbody></table></div>` : ''}
       </div></details>`).join('') || '<div class="empty">No issues match these filters.</div>';
   const occ = list.reduce((n,i) => n + i.occurrences, 0);
-  $('#issueCount').textContent = `Showing ${list.length} of ${ISSUES.length} issues (${occ} occurrences)`;
+  $('#issueCount').textContent =
+    `Showing ${list.length} of ${ISSUES.length} issues (${occ} occurrences)` +
+    (issueView === 'table' ? ' · click a row for the detail, a heading to sort' : '');
 }
+
+$('#btnViewTable').onclick = () => { issueView = 'table';  renderIssues(); };
+$('#btnViewDetail').onclick = () => { issueView = 'detail'; renderIssues(); };
 
 /* ---------------- target decision ---------------- */
 $('#btnSize').disabled = true;
@@ -2754,6 +2882,88 @@ const PATH_SUB = {
   ORACLE: 'Homogeneous. PL/SQL, packages and types move unchanged.',
   POSTGRESQL: 'Heterogeneous. Stored code is rewritten and compiled before it counts.',
 };
+
+/* ---------------- migration mode (Phase 1) ---------------- */
+// Full load, or full load + CDC. Declared before discovery runs, because the
+// answer decides whether three CRITICAL findings are blockers. MODES comes from
+// the server so the browser never holds its own copy of the vocabulary.
+let MODE = 'full-load', MODES = [], MODE_DECLARED = false, CDC_READY = null;
+
+function renderModes(){
+  const el = $('#modeOpts');
+  if (!el || !MODES.length) return;
+  el.innerHTML = MODES.map(m => {
+    // CDC against an unready source is offered, not hidden. It is a real choice
+    // with a restart attached, and a greyed-out button would send someone
+    // hunting for why rather than telling them.
+    //
+    // "Not ready" is only claimed once the preflight has actually looked. Before
+    // connecting there is no evidence either way, and reporting the absence of a
+    // reading as a fault accuses a source nobody has queried yet.
+    let needs = 'no source changes needed';
+    if (m.mode === 'full-load-and-cdc') {
+      const looked = CDC_READY && CDC_READY.log_mode;
+      needs = !looked ? 'needs ARCHIVELOG + supplemental logging — checked on connect'
+            : (CDC_READY.ready ? 'source is ready — ARCHIVELOG and supplemental logging are on'
+                               : `<b>source not ready</b> — ${esc(CDC_READY.unmet.join('; '))}`);
+    }
+    return `<button class="pathopt" data-mode="${m.mode}" aria-pressed="${MODE === m.mode}">
+      <div class="n">${esc(m.label)}</div>
+      <div class="s">${esc(m.description)}</div>
+      <div class="m">${needs}</div></button>`;
+  }).join('');
+  el.querySelectorAll('.pathopt').forEach(b => b.onclick = () => chooseMode(b.dataset.mode));
+  renderModeNote();
+}
+
+function renderModeNote(){
+  const el = $('#modeNote');
+  if (!el) return;
+  if (!MODE_DECLARED) {
+    el.innerHTML = `<div class="note warn">Nothing chosen yet, so the run defaults to
+      <b>full load</b>. The record will say it was defaulted rather than decided.</div>`;
+    return;
+  }
+  if (MODE === 'full-load-and-cdc' && CDC_READY && CDC_READY.log_mode && !CDC_READY.ready) {
+    el.innerHTML = `<div class="note warn"><b>CDC is in scope but the source is not
+      configured for it:</b> ${esc(CDC_READY.unmet.join('; '))}. This stays a blocker until
+      the source is changed, and ARCHIVELOG needs a database restart.</div>`;
+    return;
+  }
+  if (MODE === 'full-load') {
+    el.innerHTML = `<div class="note info"><b>Full load.</b> ARCHIVELOG, supplemental logging
+      and missing primary keys are still found and reported, but they do not block this
+      migration — nothing reads redo. The outage lasts as long as the load.</div>`;
+    return;
+  }
+  el.innerHTML = `<div class="note ok"><b>Full load + CDC.</b> The source is configured for
+    replication, so the cutover can wait for CDC to catch up instead of holding a long
+    outage.</div>`;
+}
+
+async function refreshModes(){
+  const s = await (await fetch('/api/state')).json();
+  if (!s.migration_modes) return;
+  MODES = s.migration_modes; MODE = s.migration_mode;
+  MODE_DECLARED = s.migration_mode_declared; CDC_READY = s.cdc_readiness;
+  renderModes();
+}
+
+async function chooseMode(mode){
+  const r = await fetch('/api/migration-mode', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({mode})});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { $('#modeNote').innerHTML = `<div class="note bad">${esc(d.detail || 'refused')}</div>`; return; }
+  MODE = d.mode; MODE_DECLARED = true;
+  renderModes();
+  // A discovery already on screen was collected under the previous answer, and
+  // the assessment and gate built on it judged a different migration. Say so
+  // rather than leaving results that no longer describe this run.
+  if (stageState.discover === 'done') {
+    setStage('discover', 'active', 'mode changed — re-run');
+    $('#discMeta').textContent = 'migration mode changed — run discovery again';
+  }
+}
 
 function renderPaths(){
   const el = $('#pathPick');
