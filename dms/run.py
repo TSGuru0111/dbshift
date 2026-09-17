@@ -170,10 +170,32 @@ def plan(session=None, *, migration_type: str | None = None,
     if target_counts is not None:
         checks.append(preflight.target_is_empty(target_counts))
     if session is not None:
-        dms = session.client("dms")
-        checks.append(preflight.no_instance_running(
-            dms.describe_replication_instances()["ReplicationInstances"],
-            policy.instance_name(estate)))
+        # One AWS call, and it answers one question: is a replication instance
+        # already running and billing? Everything else in this phase is computed
+        # from records on disk.
+        #
+        # So a credentials problem must not take the phase down. Expired SSO
+        # tokens are the normal state of an idle laptop, and planning is exactly
+        # what someone does before they go and refresh them. Report the check as
+        # blocked, with the reason, and carry on -- the alternative is a 500 that
+        # looks like the planner is broken when only the login is.
+        try:
+            dms = session.client("dms")
+            checks.append(preflight.no_instance_running(
+                dms.describe_replication_instances()["ReplicationInstances"],
+                policy.instance_name(estate)))
+        except Exception as exc:  # noqa: BLE001 -- botocore raises several shapes here
+            detail = str(exc).splitlines()[0]
+            expired = "ExpiredToken" in detail or "security token" in detail.lower()
+            checks.append({
+                "name": "no_instance_running",
+                "status": preflight.BLOCKED,
+                "detail": ("AWS credentials have expired, so this could not be checked"
+                           if expired else f"AWS could not be reached: {detail}"),
+                "remedy": ("Refresh the login (aws sso login) and plan again. Until then "
+                           "this cannot confirm whether a replication instance is already "
+                           "running and billing."),
+            })
 
     # Tables come from discovery, named rather than wildcarded: a table added to
     # the source after planning should not join the migration unnoticed.
