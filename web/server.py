@@ -646,6 +646,29 @@ def assess():
             conn.close()
 
         findings.sort(key=lambda f: (f["rule_id"], f["owner"] or "", f["object_name"] or ""))
+
+        # The Phase 1 migration mode, applied exactly as assess/run.py does it.
+        #
+        # This was missing, and the omission was invisible: the console declared
+        # full load, recorded it in the manifest, and then scored as though CDC
+        # were in scope -- so OPS-001, OPS-002 and DQ-001 stayed CRITICAL and the
+        # gate halted on three blockers that do not apply to the migration the
+        # client chose. The CLI was right and the console was wrong about the
+        # same run, which is the precise failure the "one orchestration path"
+        # rule exists to prevent.
+        #
+        # A run collected before the mode existed carries none; treat that as the
+        # default rather than assuming CDC, which would reintroduce exactly the
+        # phantom blockers this removes.
+        mode_record = ((STATE.manifest or {}).get("migration_mode")
+                       or migration_mode.decide(None, declared=False))
+        findings = assess_engine.apply_migration_mode(findings, mode_record["mode"])
+        not_applicable = [f for f in findings if not f.get("applies", True)]
+        if not_applicable:
+            emit({"event": "stage", "stage": "migration mode",
+                  "detail": f"{mode_record['label']} — {len(not_applicable)} finding(s) "
+                            "marked not applicable, with the reason"})
+
         scores = assess_scoring.score_findings(findings)
         owners = {f["owner"] for f in findings if f["owner"]}
         recall = assess_scoring.score_against_answer_key(findings, owners=owners)
@@ -659,6 +682,22 @@ def assess():
             "assessed_at_utc": __import__("datetime").datetime.now(
                 __import__("datetime").timezone.utc
             ).isoformat(),
+            # Same two keys assess/run.py writes. Phase 5's gate and the Phase 10
+            # report both read them, so a console-produced assessment that lacked
+            # them was a different shape from a CLI-produced one -- and the gate
+            # would then judge a CDC migration on a full-load run.
+            "migration_mode": mode_record,
+            "not_applicable": [
+                {
+                    "rule_id": f["rule_id"],
+                    "title": f["title"],
+                    "owner": f["owner"],
+                    "object_name": f["object_name"],
+                    "severity_if_applicable": f["severity_if_applicable"],
+                    "because": f["not_applicable_because"],
+                }
+                for f in not_applicable
+            ],
             "rules_evaluated": len(rules),
             "rule_errors": errors,
             "scores": scores,
