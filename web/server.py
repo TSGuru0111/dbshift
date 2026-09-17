@@ -59,6 +59,7 @@ from validate import context as validate_context
 from validate import run as validate_run
 from remediate import plan as remediate_plan
 from report import build as report_build
+from report import export as report_export
 from report import render as report_render
 from sizing import run as sizing_run
 from sizing import target as sizing_target
@@ -1115,6 +1116,43 @@ def report_json():
     """The same report as data, for the Phase 10 screen in the console. One
     builder feeds both, so the screen can never disagree with the page."""
     return _report_data()
+
+
+@app.get("/api/assessment.xlsx")
+def assessment_xlsx():
+    """The SCT-shaped assessment as a spreadsheet — the artefact a client
+    filters and forwards. Four sheets: summary, action items, every finding,
+    stored code by type.
+
+    Built from the same Phase 10 record the HTML report renders, so the
+    spreadsheet cannot say something the report does not. It carries the Phase 2
+    findings alongside, because those live in the assessment record rather than
+    the report's rolled-up counts.
+    """
+    if not STATE.assessment:
+        raise HTTPException(409, "no assessment run yet")
+    rec = _report_data()
+    data = report_export.workbook(rec, STATE.assessment)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{report_export.filename(rec, "xlsx")}"'})
+
+
+@app.get("/api/assessment.pdf")
+def assessment_pdf():
+    """The same assessment as a PDF — the artefact that gets attached to an
+    email. Paginated rather than a print of the HTML: a PDF cannot be expanded,
+    so the action items are a table with their complexity spelled out."""
+    if not STATE.assessment:
+        raise HTTPException(409, "no assessment run yet")
+    rec = _report_data()
+    data = report_export.pdf(rec, STATE.assessment)
+    return Response(
+        content=data, media_type="application/pdf",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{report_export.filename(rec, "pdf")}"'})
 
 
 class WaiverRequest(BaseModel):

@@ -163,6 +163,25 @@ function log(name, ok, detail = '') {
       /^Rule,Severity,Applies to this migration/.test(lines[0]), lines[0].slice(0, 60));
   log('a not-applicable finding keeps its reason column', /Why not applicable/.test(lines[0]));
 
+  // PDF and Excel -- the SCT-shaped artefacts a client circulates.
+  const xdl = await Promise.all([page.waitForEvent('download'), page.click('#btnXlsx')]);
+  const xfile = path.join(OUT, 'assessment.xlsx');
+  await xdl[0].saveAs(xfile);
+  const xbuf = fs.readFileSync(xfile);
+  log('the Excel workbook downloads', fs.existsSync(xfile), xdl[0].suggestedFilename());
+  log('it is a real .xlsx (zip container)', xbuf[0] === 0x50 && xbuf[1] === 0x4B);
+  log('and is named for the estate and run',
+      /^dbshift-assessment-.+-[0-9a-f]{8}\.xlsx$/.test(xdl[0].suggestedFilename()));
+
+  const pdl = await Promise.all([page.waitForEvent('download'), page.click('#btnPdf')]);
+  const pfile = path.join(OUT, 'assessment.pdf');
+  await pdl[0].saveAs(pfile);
+  const pbuf = fs.readFileSync(pfile);
+  log('the PDF downloads', fs.existsSync(pfile), pdl[0].suggestedFilename());
+  log('it is a real PDF', pbuf.slice(0, 5).toString() === '%PDF-');
+  log('the screen says what these files are',
+      /not\s+generated\s+by\s+AWS\s+SCT/i.test(await page.textContent('#view-assess')));
+
   const jdl = await Promise.all([page.waitForEvent('download'), page.click('#btnJson')]);
   const jfile = path.join(OUT, 'assessment.json');
   await jdl[0].saveAs(jfile);
