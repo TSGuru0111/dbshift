@@ -241,7 +241,21 @@ class CustomRuleRequest(BaseModel):
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    """The console, always fresh.
+
+    FileResponse sends an ETag and Last-Modified but no Cache-Control, so a
+    browser is free to reuse its stored copy -- and does. After a change to
+    index.html that means the operator sees yesterday's console, with none of
+    today's controls, and no reason to suspect the page rather than the code.
+    That happened, and cost an evening looking for a bug that was not there.
+
+    The page is a single file served from localhost; there is nothing to gain by
+    caching it and a whole class of phantom bug to lose.
+    """
+    return FileResponse(
+        STATIC / "index.html",
+        headers={"Cache-Control": "no-store, must-revalidate",
+                 "Pragma": "no-cache", "Expires": "0"})
 
 
 @app.get("/api/state")
