@@ -1,6 +1,23 @@
 # Phase 4 — Detect & Remediate
 
-> **Latest update — 2026-09-11 (static stand-ins).** Bedrock invoke is still
+> **Latest update — 2026-09-16.** **A proven fix can now be applied and kept.**
+> Until today the phase proved fixes and stopped: `rehearsal.py` applied each one
+> and rolled it back, so nothing survived. `remediate/apply.py` is the exception
+> — the only module here that writes and keeps what it writes.
+>
+> **It applies to the rehearsal copy, never to the source.** That was a decision,
+> not a limitation to route around: the source is the system of record until
+> Phase 9, and two of `DBMIG_APP`'s four CRITICALs (`OPS-001`, `OPS-002`) need
+> `ALTER DATABASE` and a restart — a maintenance window a DBA schedules, not
+> something an agent does while a client watches.
+>
+> **Run for real on 2026-09-16.** 2 fixes applied to `DBMIG_REHEARSAL`, 65 held
+> back with reasons, recorded against `guru.ts@ganitinc.com`. Verified after:
+> `IX_COLLATERAL_NOTE_LOAN_ID` present and `PAYMENT_HIST` statistics refreshed on
+> the copy — and `DBMIG_APP` **unchanged**, still 90 objects with statistics dated
+> 2026-09-08. Self-test `remediate.selftest_apply` 41/41.
+>
+> Earlier — **2026-09-11 (static stand-ins).** Bedrock invoke is still
 > blocked, so the model seam is now filled by **hand-written static output**,
 > `bedrock/static/DBMIG_APP.json`, served under `model_mode="static"`. It is
 > labelled everywhere as `source: static_fixture`, `model_id: null`, and the plan
@@ -169,9 +186,12 @@ columns were nullable again and no constraint or index was left behind.
 
 ## Known limits
 
-- **Proving is not applying.** Both fixes are now proven on a copy, but there is
-  still no apply step against production, deliberately. That is Phase 5's gate
-  and a human decision, not a function call.
+- **Applying means applying to the copy.** Since 2026-09-16 a proven fix can be
+  applied and kept — `remediate/apply.py`, on the rehearsal copy. There is still
+  **no apply step against the source**, deliberately: that is Phase 9's decision,
+  taken with a certificate, not a function call here. A fix proven on a copy and
+  applied to that same copy is a claim this project can stand behind; "we
+  corrected your production database" is not, on the evidence available.
 - **XML-typed findings cannot be rehearsed** on a same-instance copy, because an
   XML schema URL is unique per database. They stay `BLOCKED`, which is honest —
   a separate instance would lift this.
@@ -228,6 +248,62 @@ Console: **Phase 4 - Remediate**.
 3. **`CHAR_LENGTH` in the column probe** — converts 11 more without a model.
 
 ## Change log
+
+**2026-09-16** — **A proven fix can be applied and kept.** Client feedback: "if
+it is broken in source, correct it and write it to target using agent." The
+phase proved fixes and then threw them away -- `rehearsal.py` applies each one
+and rolls it back, by design -- so nothing an agent produced ever survived.
+
+`remediate/apply.py` added, plus `remediate/apply_cli.py`. Deliberately a
+separate command from `remediate.run`: planning is free and repeatable, this
+writes and keeps, and the two should not share an entry point where a stray flag
+turns one into the other.
+
+**Where it writes, and why that was the choice.** The feedback said "in source",
+and the target chosen was the **rehearsal copy**. The source is the system of
+record until Phase 9; `remediate/rehearsal.py` opens with "Nothing here ever
+touches the source"; and two of `DBMIG_APP`'s four CRITICALs need
+`ALTER DATABASE` plus a restart, which is a maintenance window rather than an
+agent action. Applying to the copy is the strongest honest version of the
+request.
+
+Five rules, each for a specific failure:
+
+- **Only `AUTO_APPLY` and `READY_TO_APPLY`.** `BLOCKED` most often means nobody
+  has approved it, which is the gate working.
+- **The `dry_run` gate must have passed** — checked against the gate record, not
+  inferred from the status. A status can be widened by a later policy change; a
+  gate result is a fact about this run. This is the check most likely to matter
+  later, and the self-test asserts a failed *and* a missing dry run are both
+  held back even at `AUTO_APPLY`.
+- **The target is re-checked here**, not trusted from a plan that may be hours
+  old.
+- **Each fix commits on its own** — unlike `convert/apply.py`, which is one
+  transaction because a half-applied schema is worse than none. Remediation
+  fixes are independent: a failure on the fourth is no reason to undo three that
+  worked.
+- **The statement is remapped and re-screened** on the exact text about to run.
+
+Two refusals are about safety rather than readiness: the rehearsal schema must
+differ from the source (otherwise every "rehearsal" write lands on production),
+and `confirm_schema` must be typed back. Preflight *reports* the first rather
+than raising, so a caller checks `ready` instead of catching exceptions.
+
+**Run for real, 2026-09-16.** `DQ-007` (statistics on `PAYMENT_HIST`) and
+`PERF-001` (an index on `COLLATERAL_NOTE.LOAN_ID`) applied to `DBMIG_REHEARSAL`,
+65 entries held back with a reason each, recorded against
+`guru.ts@ganitinc.com`. Verified afterwards on both databases:
+
+| | before | after |
+|---|---|---|
+| `DBMIG_REHEARSAL` index | absent | **present** |
+| `DBMIG_REHEARSAL` statistics | 2026-09-11 | **2026-09-16** |
+| `DBMIG_APP` index | absent | absent |
+| `DBMIG_APP` statistics | 2026-09-08 | 2026-09-08 |
+| `DBMIG_APP` objects | 90 | 90 |
+
+Self-test `remediate.selftest_apply` **41/41**, with `check_target` stubbed so
+the refusals are exercised on a machine with no database.
 
 **2026-09-12 — database-level static entries are served across estates.** The
 full telco run reported `static_outputs_used: 2` although every entry in

@@ -56,7 +56,7 @@ not re-add them.
 | AWS account | ✅ Granted 2026-09-09, SSO + `DBA_permissions`. See `docs/05-aws-services.md` |
 | Bedrock access | ⛔ **Blocked** — re-tested 2026-09-12: every invoke now fails with `INVALID_PAYMENT_INSTRUMENT` (the account has no valid payment method for the Marketplace subscription). A Billing-console fix by an admin, not IAM. `docs/05-aws-services.md`; the enablement plan is `docs/14-bedrock-enablement.md` |
 | Rehearsal copy | ✅ `DBMIG_REHEARSAL`, 85/90 objects, same XE instance. `scripts/oracle-source/06_*` |
-| Detect & Remediate | 🟡 `remediate/`, all 5 gates live. 2 fixes proven apply+rollback on the copy; the other 61 need Bedrock |
+| Detect & Remediate | ✅ `remediate/`, all 5 gates live. **A proven fix is now applied and kept** — `remediate/apply.py`, built 2026-09-16, the only writer in `remediate/`. **2 fixes applied for real** to `DBMIG_REHEARSAL` (index + statistics verified present; `DBMIG_APP` unchanged at 90 objects), 65 held back with reasons. Self-test 41/41. **Writes to the rehearsal copy, never the source** — that is Phase 9's decision |
 | **Apply converted code** | ✅ `convert/apply.py`, built 2026-09-14. Creates APPROVED objects on PostgreSQL in one transaction, all or nothing, recorded against a person. **All 6 objects applied for real.** Self-test 35/35. The only writer in `convert/` |
 | **Convert PL/SQL (4b)** | ✅ `convert/`, built 2026-09-12. PL/SQL → PL/pgSQL, 5 gates, **compiled for real on PostgreSQL 16 in Docker and rolled back**. 6/6 convertible objects ready on both estates, model tier needed by 0. `docs/phases/phase-04b-convert.md` |
 | **Schema DDL (4c)** | ✅ `convert/ddl.py`, built 2026-09-14. Tables, keys, checks and indexes for a PostgreSQL target, from discovery. **Every statement run on PostgreSQL 16 and rolled back**: 30/30 on DBMIG_APP, 52/52 on DBMIG_TELCO. Self-test 39/39. `docs/phases/phase-04c-schema-ddl.md` |
@@ -159,6 +159,8 @@ $env:DBSHIFT_COLLECTOR_PASSWORD='...'      # read-only dbmig_collector
 .\scripts\postgres-target\run_pg.ps1              # local PostgreSQL 16 (Docker) for Phase 4b
 .\.venv\Scripts\python.exe -m convert.run         # PL/SQL -> PL/pgSQL -> convert/output/conversion_plan.json
 .\.venv\Scripts\python.exe -m report.run          # SCT/DMS-shaped report -> report/output/migration_report.html
+.\.venv\Scripts\python.exe -m remediate.apply_cli --check   # what would be applied to the rehearsal copy
+#   --applied-by you@example.com --confirm DBMIG_REHEARSAL   # ...and apply it, recorded against a person
 ```
 
 ## The console
