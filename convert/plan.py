@@ -196,8 +196,29 @@ def build(inv: dict, *, model_mode: str = "static", pg_target: target_mod.PgTarg
         in_the_way.append(next(g["remedy"] for e in entries for g in e["gates"]
                                if g["gate"] == "compile" and g["status"] == gates.BLOCKED))
     if totals.get("MODEL_REQUIRED"):
-        in_the_way.append(f"{totals['MODEL_REQUIRED']} object(s) need the reasoning tier; Bedrock invoke is "
-                          "blocked on this account (docs/05-aws-services.md)")
+        # **Report why the model did not produce a usable answer, not a guess.**
+        # This line used to say "Bedrock invoke is blocked on this account",
+        # which was true when it was written and false from 2026-09-14 -- so on
+        # a run where the model answered for four objects and returned
+        # unparseable output for a fifth, the summary blamed the account. The
+        # per-object reason already carries the real cause; surface it.
+        reasons = []
+        for e in entries:
+            if e["status"] != "MODEL_REQUIRED":
+                continue
+            reason = str(e.get("reason") or e.get("route_reason") or "")
+            # The route reason names the constructs; anything after "model:" is
+            # what actually went wrong on the call.
+            detail = reason.split("model:", 1)[1].strip() if "model:" in reason else ""
+            reasons.append(f"{e['object_name']}"
+                           + (f" ({detail[:90]})" if detail else ""))
+        in_the_way.append(
+            f"{totals['MODEL_REQUIRED']} object(s) still need the reasoning tier: "
+            + "; ".join(reasons)
+            + ". Each needs judgement no rule covers, and the model tier did not "
+              "return a usable conversion for it -- re-running may succeed, or the "
+              "object goes to a person."
+        )
 
     return {
         "phase": "4b-convert",

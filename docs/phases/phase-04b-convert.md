@@ -1,6 +1,22 @@
 # Phase 4b — Convert PL/SQL
 
-> **Latest update — 2026-09-12 (built, and proven on both estates).** A new
+> **Latest update — 2026-09-17 (the model tier is exercised).**
+> `scripts/oracle-source/09_seed_model_tier_plsql.sql` seeded six `DBMIG_APP`
+> objects using constructs `constructs.json` already classified `tier=model` —
+> `CONNECT BY`, `BULK COLLECT`/`FORALL`, `LISTAGG`/`DECODE`, `EXECUTE IMMEDIATE`,
+> `REF CURSOR`/`ROWNUM`, `MERGE INTO`. `DBMIG_APP` now routes **6 ready by rule,
+> 6 model, 1 manual, 1 excluded, 1 absorbed** — 46% automatic over 13
+> convertible, where the 2026-09-12 run below measured 86% over 7. **The
+> catalogue did not change** (one commit, 57 constructs, never modified): the
+> estate did. `DBMIG_TELCO` was not seeded and still routes 6/6 by rule.
+>
+> So the sentence "the model tier was needed by zero objects" below was true of
+> the pre-seed estate and is superseded. The reason it was true is unchanged and
+> still worth stating: every construct in the *original* stored code sat inside
+> the deterministic tier, which is a fact about that estate rather than a gap in
+> the converter.
+>
+> **Earlier — 2026-09-12 (built, and proven on both estates).** A new
 > phase converts stored code from PL/SQL to PL/pgSQL, gates it five ways, and
 > **compiles it for real on PostgreSQL 16 inside a transaction that is rolled
 > back**. On `DBMIG_APP` (run `ee35e2bf`): 9 objects, **6 ready for approval**
@@ -379,3 +395,112 @@ for the ticker. Verified by driving the routes from a script against the live
 container (9 converting/converted events, 1 compile, 6 ready) and by parsing
 the console's inline script under Node. Not yet done: an approver taken from
 the AWS identity rather than a flag.
+
+## Change log
+
+**2026-09-17 — the console said "not model output" while the model tier was
+live.** Spotted from a screenshot: the *Where a conversion comes from* card read
+**"Rules, then static stand-ins — not model output"** on a console whose server
+reported `model_mode: live`.
+
+Two causes, both in the card rather than in the conversion:
+
+1. **The wording was hardcoded in the markup.** `renderConvGenStatus(mode)`
+   reports whatever the server says, but the initial HTML asserted the static
+   wording — so the false claim was visible before any JS ran, and would have
+   stayed visible permanently if the fetch failed. It now says *"Checking the
+   model tier…"* and asserts nothing until the server answers.
+2. **`/api/state` did not carry `model_mode`.** The call passed
+   `s.model_mode`, which was `undefined`, so it fell through to a default —
+   and the default was the static wording. `model_mode` is now in `/api/state`,
+   and an unrecognised mode reports **"could not be determined"** with a
+   warning rather than silently choosing a claim.
+
+Verified after the fix: server `live`, card `status ok`, and no "not model
+output" text on the page.
+
+**The underlying question was fair, and the answer is worth recording.** Run
+with `--model-mode live` against both estates:
+
+```
+by source:  rule: 15,  no source: 11
+MANUAL 5 | READY_FOR_APPROVAL 15 | EXCLUDED_BROKEN_ON_SOURCE 3 | ABSORBED_INTO_BODY 3
+```
+
+**The model tier is live and wired, and nothing on these estates needs it.** All
+15 convertible objects were converted by deterministic rules. The other 11 never
+reach the model either, and correctly: 5 are `MANUAL` because no PostgreSQL
+equivalent exists (quoted mixed-case identifiers, Oracle object types) where a
+model would be inventing rather than translating; 3 do not compile in Oracle, so
+converting them is meaningless; 3 are package specs absorbed into their bodies.
+
+That is a property of the estate, not a defect — `CLAUDE.md` has recorded "model
+tier needed by 0" since 2026-09-12. **But it is a demo weakness:** AI conversion
+cannot be shown on an estate where rules handle everything, and a client asking
+"where does the AI actually do the work" should be pointed at Phase 4's SCT
+remediation, where the model drafts for real and the gates reject it when it is
+wrong.
+
+**2026-09-17 (later) — the model tier now does real work in 4b.** Asked for
+directly: *"I need model only, not just deterministic or static content."*
+
+The tier was already live; the estate had nothing for it. `convert/classify.py`
+routes 22 constructs to tier=model, and **not one appeared in the existing
+stored code**. So `scripts/oracle-source/09_seed_model_tier_plsql.sql` adds six
+`DBMIG_APP` objects that genuinely need judgement:
+
+| Object | Construct | Why a rule cannot do it |
+|---|---|---|
+| `FN_CUSTOMER_HIERARCHY` | `CONNECT BY` / `PRIOR` / `LEVEL` | the recursive CTE's anchor, recursive term and stop condition are all readings of intent |
+| `SP_LOAN_RISK_ROLLUP` | `BULK COLLECT`, `FORALL`, `INDEX BY`, `SAVEPOINT` | whether it becomes one set-based statement, an array, or stays row-by-row is a judgement |
+| `FN_LOAN_SUMMARY_TEXT` | `LISTAGG`, `DECODE`, `NVL2`, `TO_CHAR` formats | Oracle and PostgreSQL date format models differ in ways a substitution table gets wrong |
+| `SP_AUDIT_DYNAMIC` | `EXECUTE IMMEDIATE` with concatenated SQL | binding rather than concatenating is a correctness *and* injection decision |
+| `FN_TXN_CURSOR` | `REF CURSOR`, explicit cursor, `ROWNUM` | cursor ownership and `ROWNUM`-vs-`LIMIT` semantics differ |
+| `SP_MERGE_CUSTOMER` | `MERGE INTO` | `ON CONFLICT` needs to know which constraint arbitrates; PG 15+ `MERGE` is a different rewrite |
+
+All six compiled VALID in Oracle. Then `convert.run --model-mode live`:
+
+```
+objects 15 | model mode: live -- Bedrock
+by source: rule 6, bedrock 5, (not routed to a generator) 4
+READY_FOR_APPROVAL 10 | REJECTED 1 | MODEL_REQUIRED 1 | MANUAL 1
+```
+
+**Five conversions authored by `global.anthropic.claude-sonnet-4-6`**, each with
+its confidence and token counts recorded:
+
+| Object | Status | Confidence | Tokens in/out |
+|---|---|---|---|
+| `SP_MERGE_CUSTOMER` | READY_FOR_APPROVAL | 0.90 | 967/1252 |
+| `FN_LOAN_SUMMARY_TEXT` | READY_FOR_APPROVAL | 0.88 | 1157/1750 |
+| `FN_TXN_CURSOR` | READY_FOR_APPROVAL | 0.85 | 1003/1331 |
+| `SP_AUDIT_DYNAMIC` | READY_FOR_APPROVAL | 0.78 | 970/1361 |
+| `SP_LOAN_RISK_ROLLUP` | **REJECTED** | 0.72 | 1281/2343 |
+
+**The conversions are good.** On `SP_MERGE_CUSTOMER` it dropped Oracle's
+`FROM dual`, moved `WHERE c.status <> 'LOCKED'` into `WHEN MATCHED AND`, and
+translated `SYSDATE`. On `SP_AUDIT_DYNAMIC` it wrapped the concatenated
+predicate in `quote_literal()` -- closing the injection hole rather than
+carrying it across -- and translated `SQLCODE = -942` to `SQLSTATE = '42P01'`
+and `:1` to `$1`.
+
+**The rejection is the gates working.** `SP_LOAN_RISK_ROLLUP` passed static and
+policy and failed **parity**: it claimed `%TYPE` was translated while rendering
+`BIGINT[]` only in a comment, so the output did not contain what the model said
+it contained. Confidence 0.72 was also the lowest of the five -- the model was
+least sure about exactly the one that failed.
+
+One stale message fixed on the way. `convert/plan.py` reported
+*"Bedrock invoke is blocked on this account"* for any `MODEL_REQUIRED` object,
+which was true when written and false since 2026-09-14 -- so on a run where the
+model answered four times, the summary blamed the account. It now names the real
+per-object cause: `FN_CUSTOMER_HIERARCHY (not JSON: Expecting value...)`, i.e.
+the model returned unparseable output for the hardest of the six and the object
+routes to a person.
+
+**All of this is Sonnet 4.6.** Both tiers in `bedrock/models.json` bind
+`global.anthropic.claude-sonnet-4-6`; `convert/model.py` asks for `reasoning`,
+which is the same model. No Haiku, no Opus.
+
+**Nothing was applied.** The conversions are in `convert/output/plpgsql/`, each
+header saying `NOT applied anywhere. Review, then approve.`
