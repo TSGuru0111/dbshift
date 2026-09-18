@@ -45,3 +45,11 @@ blocker/output/
 # Second-estate run artifacts (scripts/telco-source/run_phases.ps1)
 telco-output/
 dms/output/
+
+# Phase 2, SCT path: SCT's own project, PDF and CSV, plus the run record.
+# Never committed -- the project directory holds source connection details and
+# the reports describe a real estate's schema.
+sct/output/
+
+# Phase 4d application-SQL output (plan plus generated PostgreSQL)
+appsql/output/
