@@ -1,6 +1,31 @@
 # Phase 4 — Detect & Remediate
 
-> **Latest update — 2026-09-16.** **A proven fix can now be applied and kept.**
+> **Latest update — 2026-09-17.** **The phase now remediates AWS SCT's action
+> items, routed by where the fix belongs.** `remediate/sct_plan.py`,
+> `sct_generate.py`, `pg_policy.py`, `sct_run.py`. SCT is the assessment a client
+> reads (Phase 2), so it is what Phase 4 acts on; the 50-rule path in `plan.py`
+> is unchanged and still runs.
+>
+> **The substantive decision: a second allow-list, not a wider one.**
+> `remediate/policy.py` guards a client's **production Oracle** and permits
+> almost nothing — `CREATE INDEX`, `ALTER TABLE`, `DBMS_STATS`. A target-side
+> SCT fix needs `CREATE EXTENSION`, `CREATE TABLE`, `ALTER ... VALIDATE`, which
+> that list must never admit. Adding them would have quietly widened what may
+> run against the source, so `remediate/pg_policy.py` is a separate file that
+> shares no rules with it, and the self-test asserts neither imports the other.
+>
+> Which policy applies comes from the item's **route** (`sct/route.py`), which
+> is a reviewed table — **the model cannot move a statement from one policy to
+> the other.**
+>
+> Proven against the real PostgreSQL 16 in Docker: SCT **5639** (install
+> `postgres_fdw`) reaches `READY_TO_APPLY` with all four gates passing, a
+> deliberately broken statement is caught by the engine rather than by a syntax
+> guess, and `postgres_fdw` is still absent afterwards — which is the rollback
+> proving itself. Self-test `remediate.selftest_sct` **85/85**;
+> `selftest_apply` unchanged at 41/41.
+>
+> Earlier — 2026-09-16.** **A proven fix can now be applied and kept.**
 > Until today the phase proved fixes and stopped: `rehearsal.py` applied each one
 > and rolled it back, so nothing survived. `remediate/apply.py` is the exception
 > — the only module here that writes and keeps what it writes.
@@ -371,3 +396,256 @@ statement", which refused every valid `DBMS_STATS` fix.
 `DROP TABLE`, `DELETE`, `GRANT`, `CREATE OR REPLACE PACKAGE`, a missing rollback,
 and a fix naming the wrong object — all rejected; only the legitimate one reached
 the dry-run gate.
+
+## Phase 4 over AWS SCT's action items
+
+`plan.py` remediates the 50-rule findings. `sct_plan.py` does the same for SCT's
+action items, and has to make a distinction the rules path never needed: **where
+the fix belongs.**
+
+| Route | What Phase 4 does | Gated against |
+|---|---|---|
+| **source** | drafts a statement for the client's Oracle | `policy.py` + rehearsal dry run + named approver |
+| **target** | drafts PostgreSQL DDL for the target being built | `pg_policy.py` + real PostgreSQL dry run + named approver |
+| **decision** | drafts nothing — records the advice | n/a |
+| **human** | drafts nothing, or drafts and labels it a draft | n/a |
+
+Routing comes from [`../16-sct-runner.md`](../16-sct-runner.md)'s table, not from
+here and not from the model.
+
+### Why the two policies stay apart
+
+`remediate/policy.py` exists to keep statements away from a **production
+database serving traffic**. Its allow-list is four shapes wide and every
+addition is a new way to damage that database.
+
+A target-side fix is a different risk: the target is being built, has no
+traffic, and Phase 6 can rebuild it. So `pg_policy.py` is wider — but it is
+still a list, and it still refuses anything destructive, because by Phase 7 the
+target holds migrated data and a statement that was harmless during the build is
+not. **A fix must not depend on which phase it happens to run in.**
+
+It also refuses dollar-quoted function bodies. Converted PL/pgSQL is Phase 4b's
+job, where it is compiled and gated properly; a remediation statement carrying a
+function body would bypass that.
+
+### Approval is required even for the automatic route
+
+SCT 5639 is the one item this path can fully automate — the fix is
+`CREATE EXTENSION postgres_fdw`, always. It still needs a named approver.
+Installing an extension on a client's database is their DBA's decision, and
+"automatic" here means *no model was needed to write it*, not *nobody has to
+agree to it*.
+
+### A bug worth recording: the Oracle static gate rejected the one automatable fix
+
+`gates.static_check` requires the statement to name the object the finding is
+about. That is correct on Oracle — a fix touching a different table is not a fix
+— and **wrong for a target fix**: `CREATE EXTENSION postgres_fdw` cannot name
+the database link it exists to replace. Reusing the Oracle gate therefore
+REJECTED SCT 5639, the single item with a perfect deterministic remedy.
+
+`sct_plan.pg_static_check` drops the object-reference rule and keeps the two
+that still mean something (a statement exists, it carries a rollback). Whether
+the statement is *appropriate* is the policy gate's job; whether it *works* is
+the dry run's. The self-test asserts both halves: the target gate accepts it,
+and the Oracle gate would still have refused it.
+
+### How to run it
+
+```powershell
+$env:DBSHIFT_PG_DSN='localhost:5432/dbshift'      # the Phase 4b PostgreSQL
+$env:DBSHIFT_PG_USER='dbshift'
+$env:DBSHIFT_PG_PASSWORD='dbshift-local-only'
+.\.venv\Scripts\python.exe -m remediate.sct_run                        # plan only
+.\.venv\Scripts\python.exe -m remediate.sct_run --model live           # let the model draft
+.\.venv\Scripts\python.exe -m remediate.sct_run --approve you@x.com    # hold approval
+.\.venv\Scripts\python.exe -m remediate.selftest_sct                   # 85/85, offline
+```
+
+Output: `remediate/output/sct_remediation_plan.json`. It records `applied: false`
+and means it — `apply.py` is not wired to this path.
+
+## Change log
+
+**2026-09-17 — Phase 4 remediates AWS SCT's action items.** Client direction:
+*"in remediate also now I need AI response to remediate the SCT problems, not
+the things we get from our rules"*, with the source/target/human split spelled
+out.
+
+Four modules: `sct_plan.py` (route, draft, gate), `sct_generate.py` (templates,
+then the model, with **a different prompt per engine** — one prompt would have
+produced Oracle syntax for the target), `pg_policy.py` (the separate target
+allow-list), `sct_run.py` (the CLI).
+
+- **The Oracle allow-list was not touched.** Asserted by test, because the
+  tempting shortcut — one policy with a flag — would have made a client's
+  production database less safe to serve a target-side feature.
+- **SCT's own recommendation is carried into every record and every prompt**, so
+  a reviewer compares our draft against AWS's advice rather than taking ours on
+  trust.
+- **A grouped item names its objects.** SCT emits one row per occurrence and
+  Phase 2 groups them; a fix for 27 columns needs to know it is writing a
+  pattern, not one statement.
+- **`model_mode='off'` drafts nothing and says so per item** rather than
+  reporting an empty plan, which would read as "no work to do".
+
+Two bugs found by running it rather than reading it: the Oracle static gate
+rejecting SCT 5639 (above), and `pg8000` cursors not being context managers —
+`with conn.cursor()` raised a `TypeError` that the gate reported as *the
+statement failed*, i.e. the check blaming the estate for its own defect. Both
+fixed; the second now follows the explicit connect/try/finally shape
+`convert/target.py` already used.
+
+One test bug fixed too: two prompt assertions matched a substring that spans a
+line break in wrapped source, so they failed while the prompts were correct.
+They match whitespace-collapsed text now.
+
+**Not done yet:** `apply.py` does not accept an SCT plan, the console has no
+Phase 4 SCT screen, and a live-model run is untested because the AWS SSO token
+expired mid-session (`aws sso login --profile dbshift-bedrock` to refresh).
+
+**2026-09-17 (later) — the model tier ran live against SCT's items, and the
+result is the argument for the whole design.**
+
+Bedrock verified 2/2 on Sonnet 4.6 and `--model live` drafted for real. On
+`DBMIG_TELCO`, 7 action items:
+
+| SCT | Route | Outcome |
+|---|---|---|
+| 5984 | source | **declined** — "a reviewer must know the actual precision and scale... choosing wrong values could silently truncate existing data" |
+| 5581 | target | **declined** — "the column definitions and primary-key columns are unknown" |
+| 5034 | human | **declined** — correctly identified it as Phase 4b's work |
+| 5326 | target | drafted a statement, **REJECTED by the dry run** |
+
+**The model declined three of four rather than guessing**, which is what the
+prompt's "an empty `sql` is a correct answer, not a failure" instruction is for.
+Each refusal came with the reason and what a reviewer must establish first.
+
+**The one statement it wrote is the result worth keeping.** For SCT 5326 it
+produced:
+
+```sql
+ALTER TABLE DBMIG_TELCO.CK_DEVICE_STAT DISABLE CONSTRAINT CK_DEVICE_STAT;
+```
+
+That is **Oracle syntax aimed at a PostgreSQL target**. It passed `pg_policy` —
+`ALTER TABLE` is legitimately on the allow-list — and was then caught by the
+real database:
+
+```
+pg_dry_run  fail  42601: syntax error at or near "CONSTRAINT"
+```
+
+**An allow-list cannot catch this and a syntax checker would not have either.**
+Only executing against the actual engine does. That single result justifies the
+dry run being a real connection rather than a parse, and it is why
+`pg_dry_run` blocks rather than passes when no target is configured.
+
+Two bugs of mine found on the way, both silent:
+
+1. **`complete(tier, prompt)` takes the tier first.** I called
+   `complete(prompt, tier=...)`, which raises `TypeError` — and my broad
+   `except Exception` reported it as *"the model call failed"*. So every item
+   came back undrafted on a run where Bedrock was verified working: a code
+   defect wearing an outage's clothes. `TypeError` and `AttributeError` are now
+   re-raised rather than converted, and the self-test pins the client's
+   signature so a contract change surfaces here instead of at a client.
+2. **`str.format()` ate the prompt's JSON example.** `{"sql": ...}` is read as a
+   field name, raising `KeyError: '"sql"'`. The braces are doubled now, with a
+   comment saying why so nobody tidies them back.
+
+`remediate.selftest_sct` **102/102**, including a fake-client suite that covers
+a fenced reply, a non-JSON reply, and an empty `sql` treated as the correct
+answer it is.
+
+**Note on credentials:** this run used temporary STS credentials supplied in
+chat. They are not recorded in any file here, and `aws sso login --profile
+dbshift-bedrock` is the right way to get them — see
+`docs/15-credential-exposure.md`.
+
+**2026-09-17 (UI) — a placeholder was being read as an approver, so every
+target fix blocked.** Reported from a screenshot showing *"hold approval as
+you@example.com"* next to **0 ready** and SCT 5639 `BLOCKED`.
+
+`you@example.com` was the input's **placeholder**, not its value. So
+`$('#sctRemApprover').value` was empty, the request carried `approve=`, and the
+approval gate blocked — with static, `pg_policy` and `pg_dry_run` all passing.
+Three gates green and the run still produced nothing applyable, because the
+screen looked filled in and was not.
+
+The checkbox now refuses to run with an empty approver and says why —
+*"type the approver's name or email — approval is recorded against a person"* —
+rather than starting a run whose outcome is predetermined. With a real
+approver, SCT 5639 reaches **READY_TO_APPLY** with `approved by
+guru.ts@ganitinc.com` recorded on the gate.
+
+**A general lesson worth keeping:** a placeholder that reads like a plausible
+value is a trap in any field whose emptiness changes behaviour. The same shape
+exists on the rehearsal-database inputs; they are pre-filled with real defaults
+rather than placeholders, which is why they do not have this bug.
+
+**The screens were also cut back**, on the note *"the UI is not looking good for
+the SCT remedies, I don't need more text"*:
+
+- **Nine explanatory paragraphs removed** from the Assess, Remediate and Gate
+  screens — 40-odd lines of justification that belonged in these docs and in
+  `title=` tooltips, not above the data.
+- **Status chips became readable.** `HUMAN_AUTHORED_REQUIRED` was 23 characters
+  of shouting that also set the column width; it is now `a person`, with the
+  full constant in the tooltip for anyone grepping the record.
+- **Rows are a grid**, so code, title and actor line up down the list instead of
+  drifting with each title's length.
+- **Group headings carry counts** — `Absorb in the target — 4 · 1 ready ·
+  1 human-only` — which is the number a reader actually wants from a group.
+
+Two browser drives updated where they asserted removed sentences: they now
+assert the *claim* rather than the wording. `drive_sct_1to5.js` **46/46**,
+`drive_sct.js` **37/37**.
+
+**2026-09-17 (review) — the screens now say how to solve it, and what a person
+must confirm first.** Client direction: *"in remedies we will show how we should
+solve it, and verified by human before directly changing in the target"*, then
+*"same in 4b too"*.
+
+The guarantee already held in code -- nothing is auto-applied, `apply.py` is the
+only writer and is not wired to the SCT path -- but it was **invisible on
+screen**, and most items offered no method at all. `5984`, the largest source
+item on the estate, had only *"clears when: the source columns declare precision
+and scale"*: a definition of done, not an approach.
+
+**Every routed SCT code now carries `how` and `verify`** in `sct/route.py`:
+steps a person can follow, and what they must confirm before it is applied.
+Written and reviewed in the table rather than generated -- a model-written
+method would differ between runs, and a client reading the same plan twice must
+see the same plan. 14 codes plus the unmapped fallback; the self-test asserts
+both are present and that each step is a real instruction rather than a stub.
+
+What the row shows now, in this order: **the action**, the SQL if one was
+drafted, **how to solve it** as numbered steps, then **"A person must confirm
+before this is applied"** as a checklist, then affects/done-when/gates, with
+SCT's own words and the routing rationale collapsed at the end. The reasoning
+used to sit *above* the answer, which is why the row read as an explanation
+rather than a task.
+
+**Phase 4b got the same treatment**, and it needed it more: 4b has the
+strongest guarantee in the project -- every conversion is created on a real
+PostgreSQL inside a rolled-back transaction -- and said none of it, so a
+reviewer could not tell what was already proven and what was still theirs. Its
+checklist is derived from the object's own state rather than written per object:
+a model-authored conversion says so and asks for a read against the source, a
+compile-passed one says *"Already proven: the DDL was created on a real
+PostgreSQL and rolled back. It compiles. Behaviour is still yours to confirm"*,
+an untranslated construct is listed as left for a person, and a
+lower-than-usual model confidence is called out.
+
+**A real gap this exposed: Phase 4b had become unreachable in the console.**
+`#btnConvert` was armed off `has_assessment`, because the rules assessment used
+to gate everything -- so when that panel left the Assess screen, 4b's button
+stayed disabled while `/api/convert` worked fine. It only ever needed
+`STATE.run_dir`. Both the live and reload paths now arm it from **discovery**,
+which is what it actually reads. Verified: `4b armed by discovery alone: true`,
+32 conversions rendered.
+
+`sct.selftest` **278/278**; `drive_sct_1to5.js` **44/44**, `drive_sct.js`
+**48/48**.
