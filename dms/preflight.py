@@ -135,6 +135,64 @@ def cdc_possible(facts: dict, findings: list[dict], migration_type: str) -> list
     return checks
 
 
+def target_has_the_tables(counts: dict | None, include: list[str] | None) -> dict:
+    """Every table DMS is about to load exists on the target, under the right name.
+
+    `TargetTablePrepMode` is DO_NOTHING, so DMS creates nothing: the tables must
+    already be there, put there by Phase 4c. That makes a missing table a
+    guaranteed per-table failure partway through a load -- after the replication
+    instance has been billing for however long the earlier tables took.
+
+    **`target_is_empty` does not catch this.** An empty target with the *wrong*
+    tables passes it: every table it can see holds zero rows, which is true and
+    useless. On 2026-09-18 the prepared DDL on disk built `DBMIG_TELCO`'s eleven
+    tables while the console held `DBMIG_APP`, and nothing between Phase 4c and
+    the load would have said so.
+
+    A target with extra tables is fine and not reported as a problem -- other
+    things live in a database, and DMS is given an explicit table list.
+
+    Names are compared through `validate.crossengine.target_name`, the one
+    function that decides what a table is called on the target, so this cannot
+    report a table missing that is sitting there under a different spelling.
+    """
+    if counts is None:
+        # Says the consequence, not just the state. A BLOCKED check refuses
+        # execution, so a reader needs to know why it matters rather than only
+        # that something was not read.
+        return _c("target_has_tables", BLOCKED,
+                  "target tables not read, so it is unknown whether the tables DMS will "
+                  "load exist. TargetTablePrepMode is DO_NOTHING: DMS creates nothing, so "
+                  "a missing table fails the load per table partway through, while the "
+                  "replication instance bills.",
+                  "Pass --pg-dsn so the check can read the target, or run this from the "
+                  "console where the target is registered.")
+    if not include:
+        return _c("target_has_tables", BLOCKED, "no table selection to check against",
+                  "The selection comes from dms.mappings.select_tables; without it there "
+                  "is nothing to compare the target's tables to.")
+
+    from validate import crossengine
+
+    present = {str(t).lower() for t in counts}
+    wanted = {crossengine.target_name(t): t for t in include}
+    missing = sorted(src for pg, src in wanted.items() if pg not in present)
+
+    if missing:
+        return _c("target_has_tables", FAIL,
+                  f"{len(missing)} of {len(wanted)} table(s) DMS will load do not exist on "
+                  "the target: " + ", ".join(missing[:8])
+                  + (f" and {len(missing) - 8} more" if len(missing) > 8 else ""),
+                  "DMS is configured never to create a table (TargetTablePrepMode is "
+                  "DO_NOTHING), so it cannot make these and the load will fail per table "
+                  "partway through -- while the replication instance bills. Apply Phase 4c's "
+                  "table DDL to the target first, and check it was generated for this estate: "
+                  "an empty target with another schema's tables passes the empty check.",
+                  tables=missing)
+    return _c("target_has_tables", PASS,
+              f"all {len(wanted)} table(s) DMS will load exist on the target")
+
+
 def target_is_empty(counts: dict | None) -> dict:
     """A non-empty target is a decision, not a detail.
 

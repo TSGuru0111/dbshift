@@ -135,6 +135,48 @@ def declared_migration_type(recs: dict) -> str:
     return mode if mode in policy.MIGRATION_TYPES else policy.FULL_LOAD
 
 
+
+def _read_target_counts(dsn: str, user: str, estate_hint: str | None = None):
+    """Every table on the target and how many rows it holds, or None and why.
+
+    Returns None rather than raising: an unreachable target is what the two
+    target checks exist to report, and a connection failure must not take the
+    whole plan down.
+    """
+    import os
+    try:
+        import pg8000.dbapi
+        host, rest = dsn.split(":", 1)
+        port, database = rest.split("/", 1)
+        pw = os.environ.get("DBSHIFT_PG_PASSWORD")
+        if not pw:
+            return None, "DBSHIFT_PG_PASSWORD is not set"
+        conn = pg8000.dbapi.connect(host=host, port=int(port), database=database,
+                                    user=user, password=pw, timeout=20)
+    except Exception as exc:                                   # noqa: BLE001
+        return None, str(exc).splitlines()[0][:200]
+    try:
+        cur = conn.cursor()
+        # Every non-system schema: the estate's own name is lower-cased on the
+        # target, and guessing it wrongly would report an empty target that is
+        # not empty.
+        cur.execute("""SELECT table_schema, table_name FROM information_schema.tables
+                       WHERE table_type = 'BASE TABLE'
+                         AND table_schema NOT IN ('pg_catalog', 'information_schema')""")
+        found = cur.fetchall()
+        counts = {}
+        for schema, name in found:
+            cur.execute(f'SELECT count(*) FROM "{schema}"."{name}"')
+            counts[name] = cur.fetchone()[0]
+        return counts, None
+    except Exception as exc:                                   # noqa: BLE001
+        return None, str(exc).splitlines()[0][:200]
+    finally:
+        try:
+            conn.close()
+        except Exception:                                      # noqa: BLE001
+            pass
+
 def plan(session=None, *, migration_type: str | None = None,
          target_counts: dict | None = None) -> dict:
     """Everything that can be known without creating anything. Free.
@@ -167,8 +209,6 @@ def plan(session=None, *, migration_type: str | None = None,
     checks = [preflight.records_consistent(recs)]
     checks.append(preflight.gate_allows(recs["gate"], migration_type))
     checks += preflight.cdc_possible(facts, recs["assessment"]["findings"], migration_type)
-    if target_counts is not None:
-        checks.append(preflight.target_is_empty(target_counts))
     if session is not None:
         # One AWS call, and it answers one question: is a replication instance
         # already running and billing? Everything else in this phase is computed
@@ -206,6 +246,35 @@ def plan(session=None, *, migration_type: str | None = None,
         external_tables=prov_records._dataset(run_id, "external_tables"),
         queues=prov_records._dataset(run_id, "queues"))
     tables = selection["include"]
+
+    # Both target checks, here rather than above, because the shape check needs
+    # the selection. **"Has the tables" is listed before "is empty"**: an empty
+    # target carrying another schema's tables passes the empty check, which is
+    # true and useless, so the shape must be established first.
+    if target_counts is not None:
+        checks.append(preflight.target_has_the_tables(target_counts, tables))
+        checks.append(preflight.target_is_empty(target_counts))
+    else:
+        # **Blocked, not absent.** `target_counts` used to be supplied only by
+        # `execute()`, so a plan showed neither target check and read as a clean
+        # preflight -- the one moment a person decides whether to migrate is
+        # exactly when they need to know the target has nowhere to put the data.
+        # A check that only appears once you have committed is not a preflight.
+        for name, why in (
+            ("target_has_tables",
+             "target tables not read, so it is unknown whether the tables DMS will load "
+             "exist. TargetTablePrepMode is DO_NOTHING: DMS creates nothing, so a missing "
+             "table fails the load per table partway through, while the instance bills."),
+            ("target_empty",
+             "target row counts not read, so it is unknown whether the target already "
+             "holds rows. DMS would add rows alongside existing ones rather than "
+             "replacing them, which looks successful and is wrong."),
+        ):
+            checks.append(preflight._c(
+                name, preflight.BLOCKED, why,
+                "Connect to the target so these can run: pass --pg-dsn, or run this from "
+                "the console where the target is registered. Until then the migration is "
+                "planned but the target is unverified."))
 
     tm = mappings.table_mappings(schema=estate, tables=tables, lowercase=heterogeneous)
     ts = mappings.task_settings(migration_type=migration_type)
@@ -360,6 +429,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--source-port", type=int, default=1521)
     ap.add_argument("--source-user", default=None, help="defaults to the estate owner")
     ap.add_argument("--source-database", default="XEPDB1")
+    # The target, so the two target preflight checks can actually run at plan
+    # time. Without it they report BLOCKED -- which is honest, but a plan whose
+    # target is unverified is not something to act on.
+    ap.add_argument("--pg-dsn", default=None,
+                    help="the PostgreSQL target as host:port/dbname, so the target checks "
+                         "can read its tables and row counts. Password from "
+                         "DBSHIFT_PG_PASSWORD.")
+    ap.add_argument("--pg-user", default="dbshiftadm", help="master user on the target")
     args = ap.parse_args(argv)
 
     session = _session(args.profile)
@@ -383,7 +460,18 @@ def main(argv: list[str] | None = None) -> int:
               "delete it with `python -m killswitch --destroy --confirm <account>`.")
         return 0
 
-    p = plan(session if args.execute else None, migration_type=args.migration_type)
+    # Read the target's tables and row counts, when told where it is. Both
+    # target checks need them, and a failure to connect must not take the plan
+    # down: an unreachable target is exactly what they report.
+    target_counts = None
+    if args.pg_dsn:
+        target_counts, why = _read_target_counts(args.pg_dsn, args.pg_user, estate_hint=None)
+        if target_counts is None:
+            print(f"\ncould not read the target at {args.pg_dsn}: {why}\n"
+                  "the target checks will report blocked.\n")
+
+    p = plan(session if args.execute else None, migration_type=args.migration_type,
+             target_counts=target_counts)
     print(f"\nestate           : {p['estate']}   run {p['collector_run_id']}")
     print(f"target           : {p['target_engine']}"
           + ("  (heterogeneous -- names lowercased)" if p["heterogeneous"] else ""))
@@ -424,6 +512,16 @@ def main(argv: list[str] | None = None) -> int:
               "  the private address behind a VPN or Direct Connect.\n"
               "Nothing was created.")
         return 2
+    # `execute()` refuses on any BLOCKED check, and the two target checks are
+    # BLOCKED without the counts -- so --execute without --pg-dsn cannot
+    # proceed. Said here, before anything is created, rather than as a
+    # preflight refusal after the plan has been printed.
+    if args.execute and not args.pg_dsn:
+        print("\n--execute needs --pg-dsn: DMS creates no tables "
+              "(TargetTablePrepMode is DO_NOTHING), so the preflight must read the "
+              "target's tables and row counts before a load may start. Nothing was created.")
+        return 2
+
     if args.source_host in ("localhost", "127.0.0.1", "::1"):
         print(f"\nrefusing --source-host {args.source_host!r}: that address means the\n"
               "  replication instance itself, not your database. Nothing was created.")
@@ -445,8 +543,13 @@ def main(argv: list[str] | None = None) -> int:
         print("\nset DBSHIFT_SOURCE_OWNER_PASSWORD and DBSHIFT_PG_PASSWORD. Nothing was created.")
         return 2
 
+    # The counts read above, forwarded. `execute()` refuses on any BLOCKED
+    # check, and the two target checks report BLOCKED when the counts are
+    # absent -- so not passing them here made execution impossible rather than
+    # merely unverified. The guardrail caught it on the first real attempt:
+    # "preflight refused: target_has_tables, target_empty", nothing created.
     rec = execute(session, confirm_account=args.confirm, migration_type=args.migration_type,
-                  source=source, target=target,
+                  source=source, target=target, target_counts=target_counts,
                   on_event=lambda e: print("  " + (e.get("detail") or e.get("message") or "")))
     print(f"\nstatus: {rec['status']}")
     print(f"record: {RECORD}")

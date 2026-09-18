@@ -17,7 +17,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "dms"
 
-from . import mappings, policy, preflight, residue
+from . import mappings, policy, preflight, residue, run
 
 SCHEMA = "DBMIG_APP"
 
@@ -183,6 +183,78 @@ def main() -> int:
       "alongside" in non_empty["remedy"])
     c("unknown counts block rather than pass",
       preflight.target_is_empty(None)["status"] == preflight.BLOCKED)
+
+    # TargetTablePrepMode is DO_NOTHING, so DMS creates nothing: a table that is
+    # not already there is a guaranteed per-table failure partway through a load,
+    # after the replication instance has been billing. `target_is_empty` cannot
+    # catch it -- an empty target with the WRONG tables passes, because every
+    # table it can see holds zero rows.
+    print("\ntarget shape -- the empty check cannot see this")
+    app = ["CUSTOMER", "LOAN", "COMM_LOG", "PAYMENT_HIST"]
+    right = {t.lower(): 0 for t in app}
+    c("the right tables pass",
+      preflight.target_has_the_tables(right, app)["status"] == preflight.PASS)
+
+    # The real case: on 2026-09-18 the prepared DDL on disk built DBMIG_TELCO's
+    # tables while the console held DBMIG_APP.
+    other_schema = {"cdr": 0, "subscriber": 0, "invoice": 0, "device": 0}
+    wrong = preflight.target_has_the_tables(other_schema, app)
+    c("another schema's tables fail", wrong["status"] == preflight.FAIL)
+    c("the missing tables are named", "CUSTOMER" in wrong["detail"])
+    c("the count is reported", "4 of 4" in wrong["detail"], wrong["detail"])
+    c("the remedy names Phase 4c", "Phase 4c" in wrong["remedy"])
+    c("the remedy warns that the empty check passes this",
+      "passes the empty check" in wrong["remedy"])
+    c("the same target passes the empty check",
+      preflight.target_is_empty(other_schema)["status"] == preflight.PASS,
+      "if this ever fails, the shape check is no longer the only thing catching it")
+
+    partial = preflight.target_has_the_tables({"customer": 0, "loan": 0}, app)
+    c("a partially built target fails", partial["status"] == preflight.FAIL)
+    c("only the missing tables are named",
+      "COMM_LOG" in partial["detail"] and "CUSTOMER" not in partial["detail"])
+
+    # Other things live in a database, and DMS is given an explicit table list.
+    c("extra tables on the target are not a problem",
+      preflight.target_has_the_tables({**right, "audit_log": 0}, app)["status"]
+      == preflight.PASS)
+
+    # One function decides what a table is called on the target, so this cannot
+    # report a table missing that is there under a different spelling.
+    c("names are compared case-insensitively",
+      preflight.target_has_the_tables({"CUSTOMER": 0, "LOAN": 0, "COMM_LOG": 0,
+                                       "PAYMENT_HIST": 0}, app)["status"]
+      == preflight.PASS)
+
+    c("unreadable target tables block rather than pass",
+      preflight.target_has_the_tables(None, app)["status"] == preflight.BLOCKED)
+    c("no table selection blocks rather than passes",
+      preflight.target_has_the_tables(right, [])["status"] == preflight.BLOCKED)
+
+    # A BLOCKED check refuses execution, so making these two report BLOCKED
+    # without the counts turned "unverified" into "impossible": `main()` read
+    # the counts from --pg-dsn and never forwarded them to `execute()`, and the
+    # first real attempt died with "preflight refused: target_has_tables,
+    # target_empty" -- having created nothing, which is the guardrail working.
+    #
+    # Asserted here at the contract level: `execute` must accept the counts,
+    # and BLOCKED must still refuse. Both halves matter -- dropping the refusal
+    # would let a load start against an unverified target.
+    print("\nblocked target checks refuse execution, and the counts reach it")
+    import inspect
+    sig = inspect.signature(run.execute)
+    c("execute accepts target_counts", "target_counts" in sig.parameters)
+    src = inspect.getsource(run.main)
+    c("main forwards target_counts to execute",
+      "target_counts=target_counts" in src,
+      "without this, --execute can never satisfy the target checks")
+    c("--execute without --pg-dsn is refused up front",
+      "--execute needs --pg-dsn" in src)
+    blocked = preflight.target_has_the_tables(None, app)
+    c("a blocked check is still BLOCKED, not downgraded",
+      blocked["status"] == preflight.BLOCKED)
+    c("the blocked reason names the DO_NOTHING consequence",
+      "DO_NOTHING" in blocked["detail"])
 
     print("billing")
     c("an existing instance warns",
