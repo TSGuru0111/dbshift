@@ -52,10 +52,16 @@ def execute(session, opts: C.Options, on_event=None) -> dict:
             report.update(status="stopped", reason=f"the target is {estate['status']}; start it to validate")
             return _save(report, events)
 
-        stack = ctx.plan["stack_name"]
-        s = session.client("cloudformation", region_name=prov_policy.REGION).describe_stacks(
-            StackName=stack)["Stacks"][0]
-        ctx.state["outputs"] = {o["OutputKey"]: o["OutputValue"] for o in s.get("Outputs", [])}
+        # A local target has no stack: `resolve_estate` already put its endpoint
+        # in the state, and asking CloudFormation about a stack that was never
+        # created is how this phase failed on a demo run with an expired token
+        # for a call it did not need.
+        if not opts.target_dsn:
+            stack = ctx.plan["stack_name"]
+            s = session.client("cloudformation", region_name=prov_policy.REGION).describe_stacks(
+                StackName=stack)["Stacks"][0]
+            ctx.state["outputs"] = {o["OutputKey"]: o["OutputValue"]
+                                    for o in s.get("Outputs", [])}
 
         # Reach the target before claiming to validate anything against it.
         reach = C.reachability(ctx)
@@ -140,7 +146,26 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--target-engine", default="oracle", choices=["oracle", "postgresql"],
                     help="which engine the target runs. Must match the Phase 3 decision: it "
                          "decides how every comparison is built.")
+    # A PostgreSQL target that is not an RDS instance. For a demo or a
+    # rehearsal against the Docker PostgreSQL: the five levels are otherwise
+    # unreachable without a live instance, which is how they went unexercised on
+    # the heterogeneous path. The record says `target_source: local` so a reader
+    # can tell this from a validation whose target identified itself by tag.
+    ap.add_argument("--target-dsn", default=None,
+                    help="host:port/dbname of a non-RDS PostgreSQL target. Requires "
+                         "--target-estate and --target-run, because a local database has "
+                         "no tags to say what it holds.")
+    ap.add_argument("--target-estate", default=None,
+                    help="the schema the local target carries (with --target-dsn)")
+    ap.add_argument("--target-run", default=None,
+                    help="the collector run the local target was built from (with --target-dsn)")
+    ap.add_argument("--target-user", default=None,
+                    help="master user on a local target (default: the provision policy's)")
     args = ap.parse_args(argv)
+
+    if args.target_dsn and not (args.target_estate and args.target_run):
+        ap.error("--target-dsn needs --target-estate and --target-run: without them this "
+                 "cannot say what it is comparing")
 
     import boto3
     opts = C.Options(collector_password=os.environ.get("DBSHIFT_COLLECTOR_PASSWORD"),
@@ -148,7 +173,11 @@ def main(argv: list[str] | None = None) -> int:
                      source_dsn=os.environ.get("DBSHIFT_DSN", "localhost:1521/XEPDB1"),
                      checksum=not args.no_checksum,
                      target_engine=args.target_engine.upper(),
-                     target_password=os.environ.get("DBSHIFT_PG_PASSWORD"))
+                     target_password=os.environ.get("DBSHIFT_PG_PASSWORD"),
+                     target_dsn=args.target_dsn,
+                     target_estate=args.target_estate,
+                     target_run_id=args.target_run,
+                     target_user=args.target_user)
 
     def show(e):
         if e["event"] == "estate":

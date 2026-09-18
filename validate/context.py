@@ -44,6 +44,25 @@ class Options:
     # the same bytes across engines.
     target_engine: str = "ORACLE"
     target_password: str | None = None     # PostgreSQL master password, memory only
+    # A PostgreSQL target that is not an RDS instance: host:port/dbname.
+    #
+    # Every path here otherwise reads the target's endpoint from RDS and the
+    # estate from the instance's own tags -- good discipline, because it means a
+    # validation cannot be run against a database nobody can identify. It also
+    # makes the phase untestable without a live instance, which is how the five
+    # levels went unexercised on the heterogeneous path.
+    #
+    # With this set, the endpoint and the estate come from the caller instead
+    # and the record says so: `target_source: "local"` rather than the instance
+    # tags. It is for a demo or a rehearsal against the Docker PostgreSQL, never
+    # for a client's cutover -- a validation whose target nobody can name is not
+    # evidence.
+    target_dsn: str | None = None
+    # Required with `target_dsn`, because the estate is what decides which
+    # objects to compare and no tag is available to read it from.
+    target_estate: str | None = None
+    target_run_id: str | None = None
+    target_user: str | None = None
 
 
 def finding(level: int, check: str, verdict: str, detail: str, why: str = "", **evidence) -> dict:
@@ -66,7 +85,32 @@ class Ctx:
 
     # ---- what to compare -----------------------------------------------------
     def resolve_estate(self) -> dict:
-        """The collector run the target was built from, from the instance's tag."""
+        """The collector run the target was built from, from the instance's tag.
+
+        With `target_dsn` the instance does not exist, so the estate and run id
+        come from the caller. Recorded as `target_source: "local"` so a reader
+        can tell a demo validation from one whose target identified itself.
+        """
+        if self.opts.target_dsn:
+            if not (self.opts.target_estate and self.opts.target_run_id):
+                raise RuntimeError(
+                    "a local target has no tags to read, so --target-estate and "
+                    "--target-run must both be given: without them this cannot say "
+                    "what it is comparing")
+            self.run_id = self.opts.target_run_id
+            self.estate = self.opts.target_estate
+            self.state["instance_status"] = "local (not an RDS instance)"
+            self.state["target_source"] = "local"
+            host, rest = self.opts.target_dsn.split(":", 1)
+            port, database = rest.split("/", 1)
+            self.state["outputs"] = {"Endpoint": host, "Port": port, "Database": database}
+            if not (records.COLLECTOR_OUTPUT / self.run_id).exists():
+                raise RuntimeError(f"collector run {self.run_id} has no discovery output")
+            # The same three keys the RDS path returns, so every caller and
+            # every event reads one shape. "available" because a local
+            # database that answered is available; `target_source` in the
+            # state is what distinguishes this from an instance.
+            return {"run_id": self.run_id, "estate": self.estate, "status": "available"}
         stack = self.plan["stack_name"]
         db = self.session.client("rds", region_name=prov_policy.REGION).describe_db_instances(
             DBInstanceIdentifier=stack)["DBInstances"][0]
@@ -129,8 +173,9 @@ class Ctx:
                     WithDecryption=True)["Parameter"]["Value"]
             self._target = pg8000.dbapi.connect(
                 host=out["Endpoint"], port=int(out["Port"]),
-                database=prov_policy.PG_DB_NAME,
-                user=prov_policy.PG_MASTER_USERNAME, password=pw)
+                database=out.get("Database") or prov_policy.PG_DB_NAME,
+                user=self.opts.target_user or prov_policy.PG_MASTER_USERNAME,
+                password=pw)
             cur = self._target.cursor()
             # The same reason the Oracle side normalises: a session-level
             # format difference would make identical data hash differently.
