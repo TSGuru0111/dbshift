@@ -6,7 +6,13 @@
 > inside a transaction that was rolled back**: 30 of 30 on `DBMIG_APP`, 52 of 52
 > on `DBMIG_TELCO`, zero failures, with no code changes between the two estates.
 > Self-test `convert/selftest_ddl.py` **39/39**, including the live compile.
-> **Nothing is applied.**
+>
+> **Update — 2026-09-18.** `convert/ddl_apply_run.py` gives `ddl_apply.py` a
+> command line, so applying 4c's schema to a real target is now a repeatable
+> step rather than an inline script rewritten on the day. `ddl_run` itself still
+> applies nothing: it compiles into a transaction and rolls back. Only
+> `ddl_apply_run --apply` writes, and it asks for the target DSN typed back and
+> a named approver, like `convert.apply_run`.
 
 ## Purpose
 
@@ -97,7 +103,46 @@ python -m convert.selftest_ddl                 # 39 checks, incl. the live compi
 
 Writes `convert/output/schema_ddl.json` and a readable `schema.sql`.
 
+**Applying it to a real target** (this writes; everything above does not):
+
+```powershell
+$env:DBSHIFT_PG_PASSWORD = '...'
+python -m convert.ddl_apply_run --pg-dsn <host>:5432/dbshift --pg-user dbshiftadm
+#   preflight only -- prints the statements, checks their shape, applies nothing
+
+python -m convert.ddl_apply_run --apply --pg-dsn <host>:5432/dbshift     --pg-user dbshiftadm --confirm <host>:5432/dbshift --approved-by you@example.com
+#   pre-load: the schema, its sequences and types, then the tables
+
+#   ... then Phase 7 loads the rows, and only afterwards:
+python -m convert.ddl_apply_run --apply --post-load --pg-dsn <host>:5432/dbshift     --pg-user dbshiftadm --confirm <host>:5432/dbshift --approved-by you@example.com
+#   post-load: the keys, checks and indexes
+```
+
+**The two passes are not interchangeable.** Pre-load stops after the tables
+because validating a foreign key row by row during a bulk load is the slowest
+possible way to do it. Records go to `convert/output/ddl_apply_record.json` and
+`ddl_apply_post_record.json` — the same two filenames the inline script used, so
+the existing 19- and 41-statement records from the real RDS apply are continued
+rather than orphaned.
+
 ## Change log
+
+**2026-09-18 — `ddl_apply_run.py`, a command line for the apply.** `ddl_apply.py`
+had no CLI: Phase 4c's apply to the live RDS target was driven by a `python -c`
+script written fresh each time, which is the kind of step that gets done
+slightly differently on the day it matters. The module was always the careful
+part — four rules, one transaction, a re-checked target — and this only adds the
+door to it, with `--post-load`, `--approved-by` and `--confirm`.
+
+Two things it does beyond wrapping the call:
+
+- **Statement-shape violations are reported before a connection is opened**, so
+  a defect in the DDL generator does not arrive looking like a database error.
+- **It reuses the record filenames the inline script wrote**, because new names
+  would have orphaned the existing pre- and post-load records from the real RDS
+  apply and made it look as though 4c had never been applied to a target.
+
+`convert.selftest_ddl_apply` still **45/45**; `convert.selftest_ddl` **39/39**.
 
 **2026-09-14 — built.** `convert/ddl.py`, `convert/ddl_run.py`,
 `convert/selftest_ddl.py`. `dms.mappings.select_tables` gained a `queues`

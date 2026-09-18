@@ -53,6 +53,27 @@ def build(run_id: str, owner: str) -> dict:
     return plan
 
 
+
+def _pg_message(exc: Exception) -> str:
+    """The engine's own sentence, out of pg8000's wire dict.
+
+    pg8000 raises with the raw PostgreSQL error fields -- {'S': 'ERROR', 'C':
+    '42P01', 'M': 'relation "x" does not exist', ...}. `str(exc)` on that is a
+    Python dict repr, which reached the console screen verbatim and read like a
+    crash in the tool rather than a statement the target refused.
+    """
+    args = getattr(exc, "args", None)
+    fields = args[0] if args and isinstance(args[0], dict) else None
+    if not fields:
+        return str(exc).splitlines()[0][:200]
+    msg = fields.get("M") or ""
+    code = fields.get("C") or ""
+    out = msg + (f" [{code}]" if code else "")
+    for extra in (fields.get("D"), fields.get("H")):
+        if extra:
+            out += f" -- {extra}"
+    return out[:300]
+
 def compile_check(plan: dict, dsn: str, user: str, password: str) -> dict:
     """Run every statement inside one transaction, then roll it back."""
     import pg8000.dbapi
@@ -84,7 +105,7 @@ def compile_check(plan: dict, dsn: str, user: str, password: str) -> dict:
             except Exception as exc:  # noqa: BLE001
                 cur.execute("ROLLBACK TO SAVEPOINT s")
                 failures.append({"statement": stmt[:200],
-                                 "error": str(exc).splitlines()[0][:200]})
+                                 "error": _pg_message(exc)})
     finally:
         conn.rollback()
         conn.close()
