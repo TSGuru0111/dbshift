@@ -1,6 +1,25 @@
 # Phase 5 — Blocker gate
 
-> **Latest update — 2026-09-16.** **The gate now knows which migration it is
+> **Latest update — 2026-09-17.** **The gate now runs over AWS SCT's action
+> items, split by where the work belongs.** `blocker/sct_gate.py` +
+> `sct_run.py`. SCT is the assessment a client reads since 2026-09-17, so it is
+> what the gate judges; `gate.py` is unchanged and still runs on the 50-rule
+> findings.
+>
+> **The split is the point.** A single "halted" list sends people to fix the
+> wrong thing. On `DBMIG_APP` the gate now reports 2 items to fix in the source,
+> 3 the target absorbs, 2 needing a decision and 5 needing a person — and only
+> **2 of 12** halt anything. A gate that halted on all 12 would be ignored.
+>
+> **CDC readiness does not come from SCT**, which never reads redo. It comes
+> from the Connect preflight's own reading of `v$database`, interpreted by
+> `collector.mode.readiness` — the same function the mode picker uses, so the
+> two cannot drift. That replaces the rules engine's `OPS-001`/`OPS-002` with
+> better evidence: measured, not inferred from a rule.
+>
+> Self-test `blocker.selftest_sct` **70/70**.
+>
+> Earlier — 2026-09-16.** **The gate now knows which migration it is
 > judging.** `blocker/policy.py` already recorded that `OPS-001` blocks only
 > `migrate_cdc` and `cutover` — but nothing ever told it those phases were not
 > happening, so a full-load migration still halted on the CDC prerequisites. The
@@ -165,3 +184,80 @@ handler. Replaced with explicit paths.
 validation), `blocker/gate.py` (evaluation), `blocker/run.py` (CLI). Verified
 against the reference estate: HALT with `provision` clear; a well-formed waiver
 accepted and recorded; a short-reason waiver and an unnamed waiver both refused.
+
+## The gate over AWS SCT's action items
+
+```powershell
+.\.venv\Scripts\python.exe -m blocker.sct_run            # the verdict, split by where
+.\.venv\Scripts\python.exe -m blocker.sct_run --compare  # ...beside the rules gate
+.\.venv\Scripts\python.exe -m blocker.selftest_sct       # 70/70, offline
+```
+
+### What halts, and what is only work
+
+An action item halts a phase when **both** are true: `sct/route.py` says it
+blocks that phase, *and* the phase is in scope for the declared migration.
+Everything else is reported as work.
+
+On `DBMIG_APP`, full load + CDC:
+
+| | Blocks | Why |
+|---|---|---|
+| **SCT 5200** external tables | `migrate_full_load`, `migrate_cdc` | RDS has no filesystem. The same blocker the rules engine raises as `RDS-004` — and SCT finds more occurrences |
+| **SCT 5659** no primary key | `migrate_cdc` | CDC cannot apply updates row by row. Same as `DQ-001` |
+| **CDC readiness** | `migrate_cdc`, `cutover` | `NOARCHIVELOG`, supplemental logging `NO` |
+
+The other 10 items are work: real, not going away, and not stopping a phase.
+The summary says so explicitly — *"10 action item(s) remain as work rather than
+blockers — they do not stop a phase, and they do not go away"* — because
+"PROCEED" must never read as "nothing to do".
+
+### Where CDC readiness comes from, and why
+
+SCT assesses schema and stored-code conversion. It never reads
+`v$database.log_mode`. So the requirement the rules engine raised as `OPS-001`
+and `OPS-002` cannot come from SCT — and does not need to: the **Connect
+preflight already measures it**, and `collector/mode.py` stores the verdict in
+the discovery manifest as `migration_mode.cdc_readiness`.
+
+The gate reads that stored reading. It does not re-derive it: a second copy
+would be free to drift from the one the mode picker shows the operator.
+
+**Absent evidence reports blocked, never clear.** A gate that says "ready"
+because it failed to look is worse than no gate, and the self-test asserts it
+for both `{}` and `None`.
+
+### Three bugs found by running it
+
+1. **The facts key never existed.** I read `manifest["facts"]`, so the gate
+   reported *"log mode is unknown"* about a source it already knew to be
+   `NOARCHIVELOG` — a gate inventing an absence of evidence. It now reads the
+   stored `cdc_readiness`.
+2. **`manifest["schemas"]` is a dict, not a list** — `{configured, present,
+   missing, discovered_not_configured}`. Iterating it yielded key names, so no
+   estate ever matched and every run claimed no discovery existed. It now
+   matches on `present`.
+3. **The comparison compared different estates.** `--compare` printed "the two
+   gates AGREE" for an SCT report on `DBMIG_TELCO` beside a rules assessment on
+   `DBMIG_APP`. That is the same mistake `collector.verify` was fixed for on
+   2026-09-14 — comparing two runs *whatever estate they collected*. It now
+   prints which schemas each side read and refuses to compare verdicts across
+   different ones.
+
+One test bug too: the waiver fixture used `accepted_by` where the field is
+`approved_by`, and the gate correctly rejected it. The validation working, not
+a defect — the test was fixed, and a token-reason case added.
+
+### The before/after, same estate
+
+```
+rules engine (DBMIG_APP)   HALT — RDS-004 blocks migrate_full_load, validate
+AWS SCT      (DBMIG_APP)   HALT — 5200, 5659, CDC readiness
+                                  blocks migrate_full_load, migrate_cdc, cutover
+```
+
+Both halt. The SCT gate blocks **more phases on more evidence**, and says who
+must fix each one. `validate` is no longer blocked because SCT attributes the
+external-table problem to the load rather than to validation — a difference
+worth knowing before this gate is trusted at a client, and visible rather than
+buried.
