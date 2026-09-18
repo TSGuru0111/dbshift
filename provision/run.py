@@ -21,7 +21,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "provision"
 
-from . import policy, preflight, pricing, records, render
+from . import prepared, policy, preflight, pricing, records, render
 
 OUTPUT = Path(__file__).resolve().parent / "output"
 DEFAULT_PROFILE = (os.environ.get("DBSHIFT_AWS_PROFILE")
@@ -124,6 +124,15 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
                                "never offered without a stated cost -- pass --price-file with the "
                                "AWS offer file for this region."}
 
+    # What Phases 4b, 4c and 4d prepared for this target. Checked here rather
+    # than in `records.load` because it is optional: provisioning an empty
+    # instance is a legitimate choice, and a phase that has not run warns
+    # rather than failing.
+    artefacts = prepared.load()
+    prepared_check = prepared.check(artefacts, estate)
+    checks.append(prepared_check)
+    prepared_summary = prepared.summarise(artefacts, estate)
+
     plan = {
         "rendered_at_utc": now.isoformat(),
         "stack_name": stack,
@@ -141,6 +150,11 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
         "rendered": rendered,
         "cost": cost,
         "deploy": "not performed -- Phase 6 renders and checks only; a deploy needs an explicit yes",
+        # The instance this phase creates is empty. This says what the earlier
+        # phases prepared for it, in the order it must be applied, and what a
+        # person still owes before any of it reaches the target. Nothing here
+        # is applied by this phase.
+        "prepared": prepared_summary,
     }
     return _finish(plan, rendered)
 
