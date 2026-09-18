@@ -153,6 +153,14 @@ Measured on `DBMIG_APP` with Phase 4b compiled: PostgreSQL open, 8 effort
 points across 7 items, 86% of stored code converting automatically, one object
 needing a person — so no recommendation, by design.
 
+**Superseded 2026-09-17 by the model-tier seed.** `DBMIG_APP` now measures
+**46% automatic** — 6 of 13 convertible by rule, 6 routed to the model tier,
+1 manual. The estate changed, not the converter; see
+`phase-04b-convert.md`. The consequence for this phase is that the PostgreSQL
+case is now a genuine commercial judgement rather than a formality: 7 objects
+need work of some kind, and whether that is worth ending the Oracle licence is
+exactly the weighing this phase publishes rather than decides.
+
 **2026-09-12 — Multitenant reason corrected in code.** The `CONTEXTUAL_FEATURES`
 wording in `sizing/policy.py` now says that a single PDB is included in every
 edition *and* that a non-CDB target uses no Multitenant at all, naming RDS 19c

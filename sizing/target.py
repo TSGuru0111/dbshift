@@ -15,10 +15,20 @@ not a decision input, because most of them are unused. What matters is the
 handful this estate actually uses, weighed against the stored code that must
 be rewritten -- and Phase 4b already measured that exactly, by compiling it.
 
-No model runs here. A recommendation is produced, but it is arithmetic over
-rules, and the reason for every point of it is recorded. Where Phase 4b has
-run, its real compile results are used in preference to any estimate; the
-`evidence` field on each item says which.
+**The evidence is assembled here and no model touches it.** Blockers, effort
+items and their weights are arithmetic over reviewed rules, and the reason for
+every point is recorded. Where Phase 4b has run, its real compile results are
+used in preference to any estimate; the `evidence` field on each item says
+which.
+
+The *recommendation* over that evidence is a separate matter, and since
+2026-09-17 a model may propose it -- `sizing/propose_target.py`, bounded by
+`sizing/validate_target.py` exactly as `propose.py` is bounded by
+`validate.py`. `assess()` still defaults to the deterministic recommendation,
+so nothing changes for a caller that does not ask for the model. Two properties
+hold either way: a **blocked path is never put to a model**, because a blocker
+is a fact rather than a weighting; and a recommendation may not claim more
+confidence than its evidence tier carries.
 """
 
 from __future__ import annotations
@@ -127,8 +137,57 @@ _HANDWORK = ("MANUAL", "MODEL_REQUIRED", "REJECTED")
 
 
 def _code_items(conversion: dict | None, object_count: int | None) -> tuple[list[dict], dict]:
-    """Effort from stored code, measured where possible and estimated otherwise."""
+    """Effort from stored code, measured where possible and estimated otherwise.
+
+    Three evidence tiers, in descending order of authority:
+
+      proven/measured  a Phase 4b plan (`conversion["totals"]`). Objects were
+                       converted, and on the proven tier compiled for real.
+      classified       a `convert.project` projection. Objects were routed
+                       against the construct catalogue; nothing was converted.
+      absent           nothing is known, and that is said rather than guessed.
+
+    The classified tier exists so Phase 3 can weigh the heterogeneous path
+    without first running a conversion against a PostgreSQL target -- which
+    would presume the decision this phase makes.
+    """
     items: list[dict] = []
+
+    # A projection arrives in the summary shape already, carrying its own
+    # basis. Passed through with effort items that name it a projection.
+    if conversion and conversion.get("basis") == "classified":
+        ready = conversion.get("ready") or 0
+        handwork = conversion.get("handwork") or 0
+        model_tier = conversion.get("model_tier") or 0
+        manual = conversion.get("manual") or 0
+        excluded = conversion.get("excluded_broken_on_source") or 0
+        if ready:
+            items.append(_item(
+                "effort", f"{ready} stored objects project as automatic",
+                "Every construct in these objects is in the deterministic tier, so the "
+                "rules are expected to convert them without a model. Nothing has been "
+                "converted or compiled yet -- Phase 4b confirms or corrects this.",
+                "convert.project classification", weight=0))
+        if model_tier:
+            items.append(_item(
+                "effort", f"{model_tier} stored objects need a drafted rewrite",
+                "Each uses a construct whose faithful translation needs judgement rather "
+                "than substitution. A model drafts it and the same five gates decide, "
+                "including a real compile; a person reviews the draft.",
+                "convert.project classification", weight=2 * model_tier))
+        if manual:
+            items.append(_item(
+                "effort", f"{manual} stored objects have no PostgreSQL equivalent",
+                "A person writes these from nothing. This is the most expensive kind of "
+                "stored-code work and the least reducible by tooling.",
+                "convert.project classification", weight=3 * manual))
+        if excluded:
+            items.append(_item(
+                "effort", f"{excluded} stored objects are broken on the source",
+                "These do not compile on Oracle today, so they are excluded rather than "
+                "converted. They are an estate problem on either path.",
+                "collector invalid_objects", weight=0))
+        return items, dict(conversion)
 
     if conversion and conversion.get("totals"):
         totals = conversion["totals"]
@@ -139,9 +198,17 @@ def _code_items(conversion: dict | None, object_count: int | None) -> tuple[list
         convertible = ready + handwork + blocked
         summary = {
             "measured": True,
+            # A plan with nothing blocked on the compile gate was compiled for
+            # real; one with blocked objects never reached a target.
+            "basis": "measured" if blocked else "proven",
             "convertible": convertible,
             "ready": ready,
             "handwork": handwork,
+            # The same split the classified tier reports, so a reader and the
+            # recommendation see "drafts to review" apart from "rewrites to
+            # author" on either tier.
+            "model_tier": totals.get("MODEL_REQUIRED", 0),
+            "manual": totals.get("MANUAL", 0) + totals.get("REJECTED", 0),
             "blocked": blocked,
             "excluded_broken_on_source": excluded,
             "pct_automatic": round(100 * ready / convertible) if convertible else None,
@@ -186,7 +253,8 @@ def _code_items(conversion: dict | None, object_count: int | None) -> tuple[list
     return items, summary
 
 
-def assess(facts: dict, conversion: dict | None = None) -> dict:
+def assess(facts: dict, conversion: dict | None = None, use_bedrock: bool = False,
+           model_id: str | None = None, client=None) -> dict:
     """Evidence for and against each target. Chooses nothing."""
     used = _feature_names(facts.get("features_detected", []))
     structural = facts.get("structural") or {}
@@ -257,57 +325,52 @@ def assess(facts: dict, conversion: dict | None = None) -> dict:
     return {
         "paths": paths,
         "stored_code": code_summary,
-        "recommended": _recommend(paths, code_summary),
+        "recommended": _recommend(paths, code_summary, use_bedrock=use_bedrock,
+                                  model_id=model_id, client=client),
     }
 
 
-def _recommend(paths: dict, code: dict) -> dict:
+def _recommend(paths: dict, code: dict, use_bedrock: bool = False,
+               model_id: str | None = None, client=None) -> dict:
     """A recommendation with its reasoning, which the client may ignore.
 
-    Deliberately conservative. PostgreSQL is recommended only when the estate
-    shows no blocker AND its stored code has actually been proven to convert.
-    An unmeasured estate gets "insufficient evidence", never a guess.
+    The cascade that used to live here is now
+    `propose_target.heuristic_target_proposal` -- unchanged in what it decides,
+    except that it recommends on *projected* evidence with the confidence
+    labelled a projection, where it previously refused to answer at all. That
+    refusal is what made Phase 3 depend on Phase 4b having run against a
+    PostgreSQL target, which put the target decision behind work that presumed
+    it.
+
+    With `use_bedrock`, a model proposes instead and `validate_target` checks
+    it. The validated result is returned, carrying its own `checks` so a reader
+    sees every place the rules corrected the model.
     """
-    pg = paths[POSTGRESQL]
-    if not pg["possible"]:
-        names = ", ".join(b["subject"] for b in pg["blockers"])
-        return {
-            "target": ORACLE,
-            "confidence": "high",
-            "reason": f"PostgreSQL is blocked outright by {names}. "
-                      "The homogeneous path carries the estate as it stands.",
+    from . import propose_target, validate_target
+
+    proposal = propose_target.propose_target(
+        paths, code, use_bedrock=use_bedrock, model_id=model_id, client=client)
+    if not use_bedrock:
+        # Nothing to bound: the heuristic *is* the rules. Returned in the
+        # historical shape so existing readers are unaffected.
+        return {k: proposal[k] for k in ("target", "confidence", "reason")} | {
+            "evidence_basis": proposal.get("evidence_basis"),
+            "source": proposal["source"],
         }
-    if not code.get("measured"):
-        return {
-            "target": None,
-            "confidence": "insufficient evidence",
-            "reason": "No PostgreSQL blocker was found, but the stored code has not been "
-                      "converted or compiled, and that is the cost that decides this. Run "
-                      "Phase 4b against a PostgreSQL target, then read this again.",
-        }
-    if code.get("blocked"):
-        return {
-            "target": None,
-            "confidence": "insufficient evidence",
-            "reason": f"{code['blocked']} converted object(s) were never compiled, because no "
-                      "PostgreSQL target was configured when Phase 4b ran. Compile them "
-                      "before treating the heterogeneous path as costed.",
-        }
-    if code.get("handwork"):
-        return {
-            "target": None,
-            "confidence": "a judgement, not a verdict",
-            "reason": f"{code['pct_automatic']}% of the stored code converts and compiles "
-                      f"automatically, but {code['handwork']} object(s) need a person. "
-                      "Whether that is worth the licence saving is a commercial decision, "
-                      "not a technical one.",
-        }
+
+    decided = validate_target.validate_target(proposal, {"paths": paths, "stored_code": code})
     return {
-        "target": POSTGRESQL,
-        "confidence": "high",
-        "reason": "No blocking feature, and every convertible stored object was rewritten "
-                  "by rule and compiled on PostgreSQL. The heterogeneous path is open, and "
-                  "it ends the Oracle licence.",
+        "target": decided["target"],
+        "confidence": decided["confidence"],
+        "reason": decided["reason"],
+        "evidence_basis": decided["evidence_basis"],
+        "source": decided["source"],
+        "model_id": decided.get("model_id"),
+        "model_error": decided.get("model_error"),
+        "checks": decided["checks"],
+        "override_count": decided["override_count"],
+        "warning_count": decided["warning_count"],
+        "agreed_with_proposal": decided["agreed_with_proposal"],
     }
 
 
