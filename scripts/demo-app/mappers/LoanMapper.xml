@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  SEEDED APPLICATION SQL — not a real application. See CustomerMapper.xml.
+
+  This file carries the cases that are harder than a substitution, plus the two
+  MyBatis-specific extraction problems a naive scanner gets wrong:
+
+    - `<if>`, `<where>` and `<foreach>` make a statement's text incomplete. The
+      extractor must keep the dynamic tags, because stripping them produces SQL
+      that parses and is not the SQL the application sends.
+    - `${}` is string interpolation and `#{}` is a bind parameter. Treating
+      them alike loses the distinction between a parameter and an injection
+      site, which is a correctness *and* security matter on rewrite.
+-->
+<mapper namespace="com.dbmig.app.dao.LoanMapper">
+
+  <!-- APPSQL-015 CONNECT_BY
+       Oracle's hierarchical query becomes WITH RECURSIVE. The shape of the CTE
+       depends on the hierarchy's direction and its termination condition, and
+       LEVEL has no direct equivalent — it is synthesised in the recursive
+       term. There is no mechanical rewrite. -->
+  <select id="loanApprovalChain" resultMap="chainRow">
+    SELECT loan_id, customer_id, LEVEL AS depth
+      FROM loan
+     START WITH loan_id = #{rootLoanId}
+   CONNECT BY PRIOR customer_id = customer_id
+     ORDER SIBLINGS BY disbursed_on
+  </select>
+
+  <!-- APPSQL-016 LISTAGG
+       LISTAGG becomes string_agg, but the ON OVERFLOW clause has no
+       equivalent and the ordering must move inside the aggregate. -->
+  <select id="loanIdsByCustomer" resultType="string">
+    SELECT LISTAGG(l.loan_id, ',') WITHIN GROUP (ORDER BY l.disbursed_on) AS loan_ids
+      FROM loan l
+     WHERE l.customer_id = #{customerId}
+  </select>
+
+  <!-- APPSQL-017 TRUNC_DATE, APPSQL-018 MONTHS_BETWEEN, APPSQL-019 ADD_MONTHS
+       Oracle's date arithmetic functions have PostgreSQL equivalents with
+       different signatures and different rounding. MONTHS_BETWEEN returns a
+       fraction; the PostgreSQL idiom does not. -->
+  <select id="loanAgeReport" resultMap="ageRow">
+    SELECT l.loan_id,
+           TRUNC(l.disbursed_on) AS disbursed_day,
+           MONTHS_BETWEEN(SYSDATE, l.disbursed_on) AS months_open,
+           ADD_MONTHS(l.disbursed_on, 12) AS first_review_due
+      FROM loan l
+     WHERE l.loan_status = #{status}
+  </select>
+
+  <!-- APPSQL-020 SUBSTR_NEGATIVE, APPSQL-021 INSTR
+       Oracle SUBSTR accepts a negative start offset counting from the end;
+       PostgreSQL's substring() does not and returns a different result rather
+       than an error. INSTR has no PostgreSQL equivalent with the same
+       occurrence argument. -->
+  <select id="loanRefTail" resultType="string">
+    SELECT SUBSTR(l.loan_id, -4) AS ref_tail,
+           INSTR(l.loan_id, '-', 1, 2) AS second_dash
+      FROM loan l
+     WHERE l.loan_id = #{loanId}
+  </select>
+
+  <!-- APPSQL-022 ROWID
+       ROWID is an Oracle physical address. PostgreSQL's ctid is not stable
+       across updates or VACUUM, so an application that round-trips a ROWID has
+       to be redesigned around the primary key instead. -->
+  <select id="findByRowid" resultMap="loan">
+    SELECT ROWID AS row_addr, loan_id, principal_amt
+      FROM loan
+     WHERE ROWID = #{rowAddr}
+  </select>
+
+  <!-- APPSQL-023 NUMBER_CAST, APPSQL-024 DYNAMIC_ORDER_BY
+       `${orderBy}` is interpolated, not bound: the rewrite must keep it
+       interpolated (MyBatis semantics) while the reviewer notes it as an
+       injection site. A converter that turns ${} into #{} changes behaviour
+       and breaks the query. -->
+  <select id="searchLoans" resultMap="loan">
+    SELECT l.loan_id, l.principal_amt, l.interest_rate
+      FROM loan l
+    <where>
+      <if test="customerId != null">
+        AND l.customer_id = #{customerId}
+      </if>
+      <if test="minAmount != null">
+        AND l.principal_amt &gt;= TO_NUMBER(#{minAmount})
+      </if>
+      <if test="statuses != null and statuses.size() > 0">
+        AND l.loan_status IN
+        <foreach item="s" collection="statuses" open="(" separator="," close=")">
+          #{s}
+        </foreach>
+      </if>
+    </where>
+     ORDER BY ${orderBy}
+  </select>
+
+  <!-- APPSQL-025 INSERT_RETURNING_INTO
+       Oracle's RETURNING INTO with a bind is not PostgreSQL's RETURNING, and
+       MyBatis handles the generated key differently on each engine. -->
+  <insert id="createLoan">
+    <selectKey keyProperty="loanId" resultType="long" order="BEFORE">
+      SELECT loan_seq.NEXTVAL FROM DUAL
+    </selectKey>
+    INSERT INTO loan (loan_id, customer_id, principal_amt, interest_rate,
+                      loan_status, disbursed_on)
+    VALUES (#{loanId}, #{customerId}, #{principalAmt}, #{interestRate},
+            'P', SYSDATE)
+  </insert>
+
+  <resultMap id="loan" type="com.dbmig.app.model.Loan">
+    <id     property="loanId"       column="LOAN_ID"/>
+    <result property="principalAmt" column="PRINCIPAL_AMT"/>
+    <result property="interestRate" column="INTEREST_RATE"/>
+  </resultMap>
+
+  <resultMap id="chainRow" type="com.dbmig.app.model.ChainRow">
+    <id     property="loanId"     column="LOAN_ID"/>
+    <result property="customerId" column="CUSTOMER_ID"/>
+    <result property="depth"      column="DEPTH"/>
+  </resultMap>
+
+  <resultMap id="ageRow" type="com.dbmig.app.model.AgeRow">
+    <id     property="loanId"          column="LOAN_ID"/>
+    <result property="disbursedDay"    column="DISBURSED_DAY"/>
+    <result property="monthsOpen"      column="MONTHS_OPEN"/>
+    <result property="firstReviewDue"  column="FIRST_REVIEW_DUE"/>
+  </resultMap>
+
+</mapper>

@@ -1,0 +1,322 @@
+{
+  "_why": "Application SQL needs its own catalogue. convert/constructs.json covers PL/SQL bodies and has no row for FROM DUAL, the (+) outer join, MINUS, optimizer hints, || concatenation or seq.NEXTVAL -- none of which appear in a stored procedure often enough to matter, and all of which are everywhere in application SQL. Same entry schema as the PL/SQL catalogue so appsql/gates.py reuses its parity logic unchanged.",
+  "_tiers": "rule = one correct deterministic rewrite. model = a faithful rewrite needs judgement. manual = no correct automatic rewrite exists; report it and route it to a person.",
+  "_residue": "residue=true means the Oracle form must NOT survive in the output. The parity gate fails a conversion that still carries it. residue=false is for constructs whose Oracle spelling is legal PostgreSQL (|| and FOR UPDATE NOWAIT) where the defect is semantic rather than syntactic.",
+  "constructs": [
+    {
+      "id": "DUAL",
+      "name": "FROM DUAL",
+      "pattern": "\\bFROM\\s+DUAL\\b",
+      "tier": "rule",
+      "postgres": "omit the FROM clause",
+      "marker": null,
+      "residue": true,
+      "note": "PostgreSQL allows a SELECT with no FROM. Inside a MERGE USING clause the subquery still needs a row source, so the rewrite is context-dependent."
+    },
+    {
+      "id": "SEQ_NEXTVAL",
+      "name": "sequence.NEXTVAL",
+      "pattern": "\\b\\w+\\.NEXTVAL\\b",
+      "tier": "rule",
+      "postgres": "nextval('sequence')",
+      "marker": "\\bnextval\\s*\\(",
+      "residue": true,
+      "note": "The sequence name becomes a quoted string literal, so case folding matters: CUSTOMER_SEQ.NEXTVAL is nextval('customer_seq') against a lower-cased target."
+    },
+    {
+      "id": "SEQ_CURRVAL",
+      "name": "sequence.CURRVAL",
+      "pattern": "\\b\\w+\\.CURRVAL\\b",
+      "tier": "rule",
+      "postgres": "currval('sequence')",
+      "marker": "\\bcurrval\\s*\\(",
+      "residue": true,
+      "note": "Same shape as NEXTVAL. PostgreSQL raises if currval is called before nextval in the session, where Oracle raises ORA-08002 -- different SQLSTATE, same intent."
+    },
+    {
+      "id": "OUTER_JOIN_PLUS",
+      "name": "(+) outer join operator",
+      "pattern": "\\(\\s*\\+\\s*\\)",
+      "tier": "model",
+      "postgres": "LEFT JOIN ... ON",
+      "marker": "\\b(LEFT|RIGHT|FULL)\\s+(OUTER\\s+)?JOIN\\b",
+      "residue": true,
+      "note": "Removed from PostgreSQL entirely. Which table becomes the outer side depends on which side carried the (+), and a comma-join with several predicates must be re-expressed as an explicit join tree -- not a token swap."
+    },
+    {
+      "id": "ROWNUM",
+      "name": "ROWNUM",
+      "pattern": "\\bROWNUM\\b",
+      "tier": "model",
+      "postgres": "LIMIT / OFFSET, or row_number() OVER ()",
+      "marker": "\\b(LIMIT|OFFSET|row_number)\\b",
+      "residue": true,
+      "note": "ROWNUM is assigned before ORDER BY in the same query block, which is why the pagination idiom nests twice. Flattening it returns different rows; the ORDER BY must stay inside the subquery."
+    },
+    {
+      "id": "CONCAT_PIPE",
+      "name": "|| concatenation over a nullable column",
+      "pattern": "\\|\\|",
+      "tier": "model",
+      "postgres": "|| with COALESCE, or concat()",
+      "marker": "\\|\\|",
+      "residue": false,
+      "note": "The operator is identical and the behaviour is not. NULL || 'x' is 'x' in Oracle and NULL in PostgreSQL, so concatenation over a nullable column silently yields NULL where it used to yield text. concat() ignores NULLs and is usually the faithful rewrite."
+    },
+    {
+      "id": "EMPTY_STRING_NULL",
+      "name": "empty string treated as NULL",
+      "pattern": "''(?!')",
+      "tier": "manual",
+      "postgres": "no equivalent -- '' is a distinct non-NULL value",
+      "marker": null,
+      "residue": false,
+      "note": "There is no rewrite. Oracle stores '' as NULL; PostgreSQL stores a zero-length string. Every IS NULL test, unique constraint and NOT NULL column over a column the application writes '' into behaves differently. validate/crossengine.py reports the same difference on the data side as empty_string_is_null."
+    },
+    {
+      "id": "NVL",
+      "name": "NVL()",
+      "pattern": "\\bNVL\\s*\\(",
+      "tier": "rule",
+      "postgres": "COALESCE()",
+      "marker": "\\bCOALESCE\\s*\\(",
+      "residue": true,
+      "note": "Identical two-argument null-coalescing semantics."
+    },
+    {
+      "id": "NVL2",
+      "name": "NVL2()",
+      "pattern": "\\bNVL2\\s*\\(",
+      "tier": "model",
+      "postgres": "CASE WHEN x IS NOT NULL THEN a ELSE b END",
+      "marker": "\\bCASE\\b",
+      "residue": true,
+      "note": "Three-argument form with no PostgreSQL equivalent. The CASE rewrite evaluates the test expression once where NVL2 also does, so the translation is safe but not mechanical."
+    },
+    {
+      "id": "DECODE",
+      "name": "DECODE()",
+      "pattern": "\\bDECODE\\s*\\(",
+      "tier": "rule",
+      "postgres": "CASE WHEN",
+      "marker": "\\bCASE\\b",
+      "residue": true,
+      "note": "DECODE compares NULL equal to NULL and CASE does not, so a DECODE carrying a NULL search value needs an explicit IS NULL branch."
+    },
+    {
+      "id": "TO_CHAR_FORMAT",
+      "name": "TO_CHAR() with a format model",
+      "pattern": "\\bTO_CHAR\\s*\\([^)]*'[^']*'",
+      "tier": "model",
+      "postgres": "to_char() with a PostgreSQL format model",
+      "marker": "\\bto_char\\s*\\(",
+      "residue": true,
+      "note": "The format models differ in case handling and padding. Oracle's MON depends on NLS_DATE_LANGUAGE and PostgreSQL's on lc_time, so a wrong model reads correctly in English and breaks elsewhere.",
+      "case_sensitive_residue": true,
+      "case_note": "Oracle TO_CHAR and PostgreSQL to_char are the same name in two engines, so a case-insensitive residue check rejects the correct conversion."
+    },
+    {
+      "id": "TO_DATE",
+      "name": "TO_DATE()",
+      "pattern": "\\bTO_DATE\\s*\\(",
+      "tier": "rule",
+      "postgres": "to_date() or to_timestamp()",
+      "marker": "\\bto_(date|timestamp)\\s*\\(",
+      "residue": true,
+      "note": "to_date returns a PostgreSQL DATE, which carries no time. Where the Oracle value needed its time component the rewrite is to_timestamp, so the target column type decides which.",
+      "case_sensitive_residue": true,
+      "case_note": "Oracle TO_DATE and PostgreSQL to_date differ only by case."
+    },
+    {
+      "id": "TO_NUMBER",
+      "name": "TO_NUMBER()",
+      "pattern": "\\bTO_NUMBER\\s*\\(",
+      "tier": "rule",
+      "postgres": "CAST(... AS numeric)",
+      "marker": "\\b(CAST|::\\s*numeric)\\b",
+      "residue": true,
+      "note": "Oracle's TO_NUMBER tolerates surrounding whitespace that a bare cast rejects, so a column holding padded text needs trim() first.",
+      "case_sensitive_residue": true,
+      "case_note": "Oracle TO_NUMBER and PostgreSQL to_number differ only by case."
+    },
+    {
+      "id": "MINUS",
+      "name": "MINUS",
+      "pattern": "^\\s*MINUS\\s*$",
+      "tier": "rule",
+      "postgres": "EXCEPT",
+      "marker": "\\bEXCEPT\\b",
+      "residue": true,
+      "note": "A keyword swap and genuinely nothing more. Deliberately in the rule tier: it must never reach the model."
+    },
+    {
+      "id": "OPTIMIZER_HINT",
+      "name": "optimizer hint",
+      "pattern": "/\\*\\+[\\s\\S]*?\\*/",
+      "tier": "manual",
+      "postgres": "no equivalent; the hint is dropped",
+      "marker": null,
+      "residue": false,
+      "note": "A hint is a comment, so PostgreSQL ignores it silently rather than failing. Nothing breaks and the plan may regress, which makes this the one construct that must be REPORTED rather than converted -- a dropped hint nobody saw is a performance incident after cutover."
+    },
+    {
+      "id": "MERGE",
+      "name": "MERGE INTO",
+      "pattern": "\\bMERGE\\s+INTO\\b",
+      "tier": "model",
+      "postgres": "MERGE (15+) or INSERT ... ON CONFLICT",
+      "marker": "\\b(MERGE|ON\\s+CONFLICT)\\b",
+      "residue": false,
+      "note": "PostgreSQL 15 added MERGE, so the Oracle spelling can survive -- but ON CONFLICT is usually the better rewrite and needs a unique constraint to name. The target's major version decides, which makes this a judgement."
+    },
+    {
+      "id": "SYSDATE",
+      "name": "SYSDATE",
+      "pattern": "\\bSYSDATE\\b",
+      "tier": "rule",
+      "postgres": "date_trunc('second', LOCALTIMESTAMP)",
+      "marker": "\\b(LOCALTIMESTAMP|CURRENT_TIMESTAMP|now)\\b",
+      "residue": true,
+      "note": "Oracle DATE has second precision. A bare LOCALTIMESTAMP is microsecond, so a value the application writes never equals a value it compares against."
+    },
+    {
+      "id": "SYSTIMESTAMP",
+      "name": "SYSTIMESTAMP",
+      "pattern": "\\bSYSTIMESTAMP\\b",
+      "tier": "rule",
+      "postgres": "CURRENT_TIMESTAMP",
+      "marker": "\\bCURRENT_TIMESTAMP\\b",
+      "residue": true,
+      "note": "Both carry a time zone. CURRENT_TIMESTAMP is the direct equivalent."
+    },
+    {
+      "id": "FOR_UPDATE_NOWAIT",
+      "name": "FOR UPDATE NOWAIT",
+      "pattern": "\\bFOR\\s+UPDATE\\s+(NOWAIT|SKIP\\s+LOCKED)\\b",
+      "tier": "model",
+      "postgres": "FOR UPDATE NOWAIT (same syntax, different error)",
+      "marker": "\\bFOR\\s+UPDATE\\b",
+      "residue": false,
+      "note": "The syntax is accepted unchanged. Oracle raises ORA-00054 and PostgreSQL SQLSTATE 55P03, so application code catching the Oracle code stops handling lock contention and the failure surfaces as an unhandled exception under load."
+    },
+    {
+      "id": "CONNECT_BY",
+      "name": "CONNECT BY",
+      "pattern": "\\bCONNECT\\s+BY\\b",
+      "tier": "model",
+      "postgres": "WITH RECURSIVE",
+      "marker": "\\bWITH\\s+RECURSIVE\\b",
+      "residue": true,
+      "note": "LEVEL must be synthesised in the recursive term, ORDER SIBLINGS BY has no equivalent, and cycle detection is explicit where Oracle offers NOCYCLE. The CTE's shape depends on the hierarchy's direction."
+    },
+    {
+      "id": "LISTAGG",
+      "name": "LISTAGG()",
+      "pattern": "\\bLISTAGG\\s*\\(",
+      "tier": "model",
+      "postgres": "string_agg()",
+      "marker": "\\bstring_agg\\s*\\(",
+      "residue": true,
+      "note": "The WITHIN GROUP ordering moves inside the aggregate call, and ON OVERFLOW has no equivalent -- PostgreSQL has no 4000-byte limit to overflow."
+    },
+    {
+      "id": "TRUNC",
+      "name": "TRUNC()",
+      "pattern": "\\bTRUNC\\s*\\(",
+      "tier": "model",
+      "postgres": "date_trunc() or trunc()",
+      "marker": "\\b(date_trunc|trunc)\\s*\\(",
+      "residue": true,
+      "note": "TRUNC is overloaded on number and date in Oracle; PostgreSQL has separate functions, so the argument's type decides the rewrite.",
+      "case_sensitive_residue": true,
+      "case_note": "Oracle TRUNC and PostgreSQL trunc/date_trunc differ only by case."
+    },
+    {
+      "id": "MONTHS_BETWEEN",
+      "name": "MONTHS_BETWEEN()",
+      "pattern": "\\bMONTHS_BETWEEN\\s*\\(",
+      "tier": "model",
+      "postgres": "no direct equivalent; EXTRACT over an interval",
+      "marker": "\\b(EXTRACT|INTERVAL)\\b",
+      "residue": true,
+      "note": "Oracle returns a fractional month count on a 31-day convention. The PostgreSQL idiom returns whole months, so a threshold comparison changes which rows match."
+    },
+    {
+      "id": "ADD_MONTHS",
+      "name": "ADD_MONTHS()",
+      "pattern": "\\bADD_MONTHS\\s*\\(",
+      "tier": "model",
+      "postgres": "d + n * INTERVAL '1 month'",
+      "marker": "\\bINTERVAL\\b",
+      "residue": true,
+      "note": "ADD_MONTHS clamps to month end: 31 Jan plus one month is 28 Feb, where the interval form gives 3 March. A review date computed either way differs by days."
+    },
+    {
+      "id": "SUBSTR_NEGATIVE",
+      "name": "SUBSTR() with a negative offset",
+      "pattern": "\\bSUBSTR\\s*\\([^)]*,\\s*-\\s*\\d+",
+      "tier": "model",
+      "postgres": "right(), or substring() with a computed offset",
+      "marker": "\\b(right|substring)\\s*\\(",
+      "residue": true,
+      "note": "Oracle counts a negative start from the end of the string. PostgreSQL's substring() returns a different result rather than raising, so the defect is silent.",
+      "case_sensitive_residue": true,
+      "case_note": "Oracle SUBSTR and PostgreSQL substring share a prefix; the residue check must not match the lower-case PostgreSQL form."
+    },
+    {
+      "id": "INSTR",
+      "name": "INSTR()",
+      "pattern": "\\bINSTR\\s*\\(",
+      "tier": "model",
+      "postgres": "position(), or a regexp for the 4-argument form",
+      "marker": "\\b(position|strpos|regexp_instr)\\s*\\(",
+      "residue": true,
+      "note": "position() takes no start or occurrence argument, so INSTR(s, sub, pos, n) needs a regexp or a lateral join to reproduce.",
+      "case_sensitive_residue": true,
+      "case_note": "Oracle INSTR appears inside PostgreSQL's regexp_instr, so the residue check must be case-sensitive and anchored."
+    },
+    {
+      "id": "ROWID",
+      "name": "ROWID",
+      "pattern": "\\bROWID\\b",
+      "tier": "manual",
+      "postgres": "no stable equivalent (ctid is not stable)",
+      "marker": null,
+      "residue": true,
+      "note": "ctid changes on UPDATE and VACUUM. An application that round-trips a ROWID to identify a row must be redesigned around the primary key; no rewrite of the SQL alone is correct."
+    },
+    {
+      "id": "MYBATIS_INTERPOLATION",
+      "name": "${} string interpolation",
+      "pattern": "\\$\\{\\s*\\w+\\s*\\}",
+      "tier": "manual",
+      "postgres": "unchanged -- must stay interpolated",
+      "marker": "\\$\\{",
+      "residue": false,
+      "note": "A MyBatis construct, not an Oracle one, and the commonest way an automated converter breaks a mapper: rewriting ${orderBy} to #{orderBy} produces a bound parameter where a column name is needed, failing at runtime rather than at conversion. It is also an injection site a reviewer must flag."
+    },
+    {
+      "id": "SELECTKEY_SEQUENCE",
+      "name": "MyBatis selectKey over a sequence",
+      "pattern": "<selectKey",
+      "tier": "model",
+      "postgres": "INSERT ... RETURNING, or a DEFAULT nextval column",
+      "marker": "\\b(RETURNING|nextval)\\b",
+      "residue": false,
+      "note": "MyBatis handles generated keys differently per engine. The idiomatic PostgreSQL rewrite drops selectKey in favour of RETURNING, which changes the mapper's structure rather than only its SQL."
+    },
+    {
+      "id": "RESERVED_WORD_OBJECT",
+      "name": "a table or column whose name is a PostgreSQL keyword",
+      "pattern": "(?i)\\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\\s+\"?(ORDER|USER|SESSION|COMMENT|LEVEL|CHECK|GROUP|LIMIT|OFFSET|WINDOW|COLUMN|DEFAULT)\"?\\b|\\b(?:SELECT|WHERE|SET|BY|,)\\s*\"?(ORDER|COMMENT|LEVEL|USER|DEFAULT)\"?\\s*(?:=|,|$)",
+      "tier": "manual",
+      "postgres": "the name Phase 4c assigned -- ORDER becomes order_col",
+      "marker": null,
+      "residue": false,
+      "note": "Oracle allows ORDER, USER, COMMENT and LEVEL as unquoted identifiers where PostgreSQL reserves them, so Phase 4c renames the object on the target rather than quoting it forever. Every application statement naming it then points at an object the target does not have -- and the statement still parses on Oracle, so nothing catches it before cutover. 4d cannot invent the new name because the rename is 4c's decision; it reports the statement so a person applies 4c's mapping.",
+      "cross_phase": "convert/ddl.py ident() -- the reserved_word note"
+    }
+  ],
+  "_case_sensitive_residue": "Some constructs are a function Oracle spells in upper case and PostgreSQL in lower case -- TO_CHAR/to_char, TRUNC/trunc, TO_DATE/to_date. For those the residue check runs case-sensitively, because a case-insensitive one rejects the correct conversion for using the PostgreSQL spelling. Set case_sensitive_residue on such an entry.",
+  "_cross_phase": "RESERVED_WORD_OBJECT exists because Phase 4c renames target objects whose Oracle names are PostgreSQL keywords. 4c identifies the rename; only 4d can find the application statements that must follow it."
+}
