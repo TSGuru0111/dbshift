@@ -41,8 +41,12 @@ from collector import run as collector_run
 from convert import inventory as convert_inventory
 from convert import plan as convert_plan
 from convert import target as convert_target
+from appsql import plan as appsql_plan
+from convert import ddl as convert_ddl
+from convert import ddl_run as convert_ddl_run
 from cutover import run as cutover_run
 from blocker import gate as blocker_gate
+from blocker import sct_gate as blocker_sct_gate
 from blocker import policy as blocker_policy
 from botocore.exceptions import ClientError
 from killswitch import run as killswitch_run
@@ -53,17 +57,29 @@ from dms import run as dms_run
 from provision import deploy as provision_deploy
 from provision import overrides as provision_overrides
 from provision import policy as provision_policy
+from provision import records as prov_records
 from provision import run as provision_run
 from provision import verify as provision_verify
 from validate import context as validate_context
 from validate import run as validate_run
 from remediate import plan as remediate_plan
+from remediate import sct_plan as remediate_sct_plan
 from report import build as report_build
 from report import export as report_export
 from report import render as report_render
 from sizing import run as sizing_run
 from sizing import target as sizing_target
 from sizing import utilization as sizing_utilization
+# Phase 2, the real-AWS-SCT path. Separate from `assess` and not a replacement
+# for it -- SCT reports schema and stored-code conversion; the 50 rules report
+# the OPS, SEC, DQ and PERF findings that Phases 3, 5 and 7 read.
+from sct import export as sct_export
+from sct import parse as sct_parse
+from sct import route as sct_route
+from sct import runner as sct_runner
+from sct import targets as sct_targets_mod
+from sct import toolchain as sct_toolchain
+from sct.hosts import local as sct_local_host
 from collector import mode as migration_mode
 from collector.db import in_binds  # noqa: F401  (kept for custom probe authors)
 from collector.probes import PROBES
@@ -105,6 +121,13 @@ class State:
     rehearsal_dsn: str | None = None
     rehearsal: Any = None
     conversion: dict | None = None
+    # Phase 4d. Separate from `conversion` because it is a different
+    # phase over a different artefact -- application mapper files, which
+    # no other phase reads.
+    appsql: dict | None = None
+    # Phase 4c. The target's table structure -- a third artefact
+    # alongside 4b's stored code and 4d's application SQL.
+    schema_ddl: dict | None = None
     pg_target: Any = None          # convert.target.PgTarget; password in memory only
     pg_dsn: str | None = None
     gate: dict | None = None
@@ -116,6 +139,15 @@ class State:
     provision_overrides: dict = field(default_factory=lambda: {
         "instance_class": None, "configuration": None})
     migrate_owner_password: str | None = None   # memory only, for a fresh export
+    # Phase 2, the real-AWS-SCT path. Keyed by target id, because SCT assesses
+    # one target platform at a time -- the dropdown re-runs it rather than
+    # filtering one result, so each target keeps its own record.
+    sct: dict = field(default_factory=dict)
+    # Phases 4 and 5 over SCT's action items. Held separately from the
+    # rules-engine records so a reader is never unsure which assessment a
+    # decision came from.
+    sct_remediation: dict | None = None
+    sct_gate: dict | None = None
 
 
 STATE = State()
@@ -269,6 +301,15 @@ def get_state():
         "checks": STATE.checks,
         "has_discovery": STATE.manifest is not None,
         "has_assessment": STATE.assessment is not None,
+        # The SCT path's own state. Reported here so the reload path can restore
+        # Phases 2, 4 and 5 without probing three endpoints and guessing from
+        # their 409s -- and so "which assessment is this console holding" is
+        # answerable in one call.
+        "sct_targets_assessed": sorted(STATE.sct),
+        "has_sct_assessment": bool(STATE.sct),
+        "has_sct_remediation": STATE.sct_remediation is not None,
+        "has_sct_gate": STATE.sct_gate is not None,
+        "model_mode": _model_mode(),
         "has_sizing": STATE.sizing is not None,
         "engine": STATE.engine,
         "engine_label": sizing_target.LABEL[STATE.engine],
@@ -803,6 +844,389 @@ def assessment_json_download():
     )
 
 
+# --------------------------------------------------------------- Phase 2, AWS SCT
+#
+# The real tool, not our rules. Three things this path does that the rules path
+# cannot, and one it must never do:
+#
+#   - it runs AWS SCT itself, so the verdict is AWS's
+#   - the PDF and CSV are **SCT's own files, served verbatim**
+#   - the target is a dropdown, because SCT assesses one platform at a time
+#
+# and it must never present itself as a replacement for `assess/`: SCT does not
+# look at OPS, SEC, DQ or PERF findings, and Phases 3, 5 and 7 read those.
+
+
+@app.get("/api/sct/targets")
+def sct_targets():
+    """The dropdown. Out-of-scope targets are listed and marked, never hidden.
+
+    A client asks about Aurora and Redshift; a dropdown that omitted them would
+    look like the tool could not do it. They carry no migration engine, which is
+    what stops one leaking into Phase 3 as a path.
+    """
+    return {
+        "targets": sct_targets_mod.for_console(),
+        "default": sct_targets_mod.DEFAULT_TARGET_ID,
+        "assessed": sorted(STATE.sct),
+    }
+
+
+@app.get("/api/sct/preflight")
+def sct_preflight():
+    """The three prerequisites, each with how to fix it. Free, no password.
+
+    Reported rather than discovered at run time because all three are manual
+    installs, and a missing one otherwise surfaces as a Java stack trace inside
+    a batch run -- which tells a client nothing.
+    """
+    tc = sct_toolchain.discover()
+    return {
+        **tc.as_dict(),
+        "host": sct_local_host.NAME,
+        "host_note": (
+            "SCT runs on this machine because the source is a local Oracle. In a "
+            "customer environment it runs on an EC2 instance inside their VPC, where "
+            "their existing Direct Connect or VPN reaches their database."
+        ),
+    }
+
+
+@app.get("/api/sct/assess")
+def sct_assess(target: str = "", force: bool = False):
+    """Run AWS SCT for one target, streaming its output.
+
+    Not gated on `STATE.manifest`: SCT reads the source database itself and does
+    not need our discovery run. It does need the connection, so it is gated on
+    being connected -- the password lives in process memory only.
+    """
+    if not STATE.connected or not STATE.password:
+        raise HTTPException(409, "connect to the source first")
+
+    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    try:
+        target_row = sct_targets_mod.get(target_id)
+    except sct_targets_mod.UnknownTarget as exc:
+        raise HTTPException(400, str(exc)) from None
+
+    def work(emit):
+        emit({"event": "stage", "stage": "preflight",
+              "detail": f"AWS SCT -> {target_row['label']}"})
+        tc = sct_toolchain.discover()
+        if not tc.ready:
+            missing = [c.detail for c in tc.checks if c.status != "ok"]
+            emit({"event": "error", "message": "AWS SCT prerequisites are not met",
+                  "detail": "; ".join(missing), "toolchain": tc.as_dict()})
+            return
+
+        if not target_row["in_scope"]:
+            # Allowed -- a client asks for the comparison -- but never silently.
+            emit({"event": "note", "level": "warn",
+                  "message": f"{target_row['label']} is out of DBShift's migration scope",
+                  "detail": target_row["scope_note"]})
+
+        emit({"event": "stage", "stage": "run",
+              "detail": "SCT is reading the source and building its report"})
+
+        rec = sct_runner.assess(
+            target_id=target_id,
+            dsn=STATE.dsn or collector_config.DEFAULT_DSN,
+            user=STATE.user or collector_config.DEFAULT_USER,
+            password=STATE.password,
+            schemas=list(STATE.schemas) or [STATE.schema],
+            collector_run_id=STATE.run_id or "",
+            on_line=lambda line: emit({"event": "sct", "line": line[:400]}),
+            reuse_cached=not force,
+        )
+
+        if not rec.get("ok"):
+            emit({
+                "event": "error",
+                "message": rec.get("reason") or "SCT did not complete",
+                # SCT's own errors. Its exit code is not trustworthy: it returns
+                # 0 with a failed AddSource and an empty report.
+                "detail": " | ".join(rec.get("sct_errors") or []) or None,
+                "sct_errors": rec.get("sct_errors") or [],
+                "exit_code_said_ok": rec.get("exit_code_said_ok"),
+            })
+            return
+
+        parsed = {}
+        arte = sct_runner.artefact_paths(rec)
+        for csv_path in arte["csv"]:
+            parsed = sct_parse.parse_csv_file(csv_path)
+            break
+
+        STATE.sct[target_id] = {"record": rec, "parsed": parsed}
+        emit({"event": "done", "target": target_id, **_sct_summary(target_id)})
+
+    return _stream(work)
+
+
+def _sct_summary(target_id: str) -> dict:
+    """One target's SCT result, shaped for the console."""
+    held = STATE.sct.get(target_id) or {}
+    rec = held.get("record") or {}
+    parsed = held.get("parsed") or {}
+    arte = sct_runner.artefact_paths(rec)
+    return {
+        "target": rec.get("target") or {},
+        "assessed_at_utc": rec.get("assessed_at_utc"),
+        "from_cache": rec.get("from_cache", False),
+        "source": rec.get("source") or {},
+        "action_item_count": parsed.get("action_item_count", 0),
+        "occurrence_count": parsed.get("occurrence_count", 0),
+        "by_complexity": parsed.get("by_complexity") or {},
+        "occurrences_by_complexity": parsed.get("occurrences_by_complexity") or {},
+        "complexity_meaning": parsed.get("complexity_meaning") or {},
+        "issues": sct_route.annotate(parsed.get("issues") or []),
+        # The segregation Phase 4 and Phase 5 both act on: where the work lands
+        # (source / target / decision / human) and who may do it. Deterministic,
+        # from `sct/route.py` -- the model never decides any of it.
+        "segregation": sct_route.segregate(parsed.get("issues") or []),
+        # A column SCT added that this parser does not understand. Surfaced, not
+        # dropped, so an SCT upgrade is visible instead of silently lossy.
+        "unmapped_columns": parsed.get("unmapped_columns") or [],
+        "artefacts": {
+            "pdf": [Path(p).name for p in arte["pdf"]],
+            "csv": [Path(p).name for p in arte["csv"]],
+        },
+        "has_pdf": bool(arte["pdf"]),
+        "has_csv": bool(arte["csv"]),
+    }
+
+
+@app.get("/api/sct/assessment")
+def sct_assessment(target: str = ""):
+    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    if target_id not in STATE.sct:
+        raise HTTPException(409, f"AWS SCT has not assessed {target_id} yet")
+    return _sct_summary(target_id)
+
+
+def _sct_disposition(target_id: str, path: Path, ext: str) -> str:
+    """A `Content-Disposition` a browser will actually honour.
+
+    SCT names its CSV after the virtual target, so the real filename contains a
+    space and parentheses -- `PostgreSQL_3cPostgreSQL (virtual)3e.csv`. Edge
+    rejects that inside a quoted filename and falls back to a GUID with no
+    extension, which then will not open. Sanitised the same way
+    `report/export.py` has always done it.
+    """
+    name = sct_export.safe_filename(f"aws-sct-{target_id}-{path.stem}.{ext}")
+    return f'attachment; filename="{name}"'
+
+
+def _sct_artefact(target_id: str, kind: str) -> Path:
+    held = STATE.sct.get(target_id)
+    if not held:
+        raise HTTPException(409, f"AWS SCT has not assessed {target_id} yet")
+    paths = sct_runner.artefact_paths(held["record"]).get(kind) or []
+    if not paths:
+        raise HTTPException(404, f"SCT produced no {kind.upper()} for {target_id}")
+    return Path(paths[0])
+
+
+@app.get("/api/sct/report.pdf")
+def sct_report_pdf(target: str = ""):
+    """**SCT's own PDF, byte for byte.**
+
+    Deliberately not re-rendered. `report/export.py` produces a PDF in SCT's
+    *shape* from our rules and says so on every page; this is the real thing,
+    and re-generating it would forfeit the only difference that matters.
+    """
+    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    path = _sct_artefact(target_id, "pdf")
+    return Response(
+        content=path.read_bytes(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": _sct_disposition(target_id, path, "pdf")},
+    )
+
+
+@app.get("/api/sct/report.xlsx")
+def sct_report_xlsx(target: str = ""):
+    """SCT's own CSV as a workbook, with its data unaltered.
+
+    SCT writes CSV, not xlsx, and a client asks for Excel. So the CSV's rows are
+    placed in a sheet exactly as SCT wrote them -- frozen header, filters on --
+    alongside a sheet naming the tool, version and run that produced them. No
+    value is recomputed; the only thing added is the container.
+    """
+    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    path = _sct_artefact(target_id, "csv")
+    rec = (STATE.sct[target_id]["record"] or {})
+    data = sct_export.workbook_from_sct_csv(path, rec)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": _sct_disposition(target_id, path, "xlsx")},
+    )
+
+
+@app.get("/api/sct/report.csv")
+def sct_report_csv(target: str = ""):
+    """SCT's own CSV, byte for byte."""
+    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    path = _sct_artefact(target_id, "csv")
+    return Response(
+        content=path.read_bytes(),
+        media_type="text/csv",
+        headers={"Content-Disposition": _sct_disposition(target_id, path, "csv")},
+    )
+
+
+def _mode_record() -> dict:
+    """The migration mode declared in Phase 1.
+
+    From the discovery manifest when one exists, else the session's own
+    declaration, else an undeclared full load -- which is visible as an
+    assumption rather than presented as a decision.
+    """
+    manifest_mode = (STATE.manifest or {}).get("migration_mode")
+    if manifest_mode:
+        return manifest_mode
+    return migration_mode.decide(
+        STATE.migration_mode if STATE.mode_declared else None,
+        chosen_by=STATE.mode_chosen_by,
+        declared=STATE.mode_declared,
+    )
+
+
+def _pg_target_from_env():
+    """The PostgreSQL target for Phase 4's target-side dry run, if configured.
+
+    Falls back to the environment when the console has no Phase 4b target
+    registered, so the SCT path works without first driving Convert. Absence is
+    reported by the gate, not guessed at here.
+    """
+    try:
+        from convert.target import PgTarget
+        return PgTarget.from_env()
+    except Exception:  # noqa: BLE001 -- the gate says what is missing
+        return None
+
+
+def _sct_issues_for(target_id: str) -> list[dict] | None:
+    """The annotated SCT action items for one target, or None if not assessed."""
+    held = STATE.sct.get(target_id)
+    if not held:
+        return None
+    return sct_route.annotate((held.get("parsed") or {}).get("issues") or [])
+
+
+@app.get("/api/sct/remediate")
+def sct_remediate(target: str = "", approve: str = ""):
+    """Phase 4 over SCT's action items, streaming per item.
+
+    Streams because the model tier is involved: a live draft takes seconds per
+    item, and a screen that sat blank for a minute would look broken.
+    """
+    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    issues = _sct_issues_for(target_id)
+    if issues is None:
+        raise HTTPException(409, f"AWS SCT has not assessed {target_id} yet")
+
+    def work(emit):
+        emit({"event": "stage", "stage": "route",
+              "detail": f"{len(issues)} action items, routed by where the fix belongs"})
+
+        pg_target = STATE.pg_target or _pg_target_from_env()
+        rehearsal = _rehearsal_target()
+        emit({"event": "stage", "stage": "targets",
+              "detail": f"oracle rehearsal: {'configured' if rehearsal else 'not configured'}"
+                        f" | postgresql: {'configured' if pg_target else 'not configured'}"})
+
+        approvals = {str(i.get("issue_code")): approve for i in issues} if approve else {}
+        entries = []
+        for n, issue in enumerate(issues, start=1):
+            emit({"event": "item", "index": n, "total": len(issues),
+                  "issue_code": issue.get("issue_code"),
+                  "where": issue.get("where"), "who": issue.get("who"),
+                  "title": (issue.get("title") or "")[:70]})
+            entry = remediate_sct_plan.plan_item(
+                issue, model_mode=_model_mode(), rehearsal_target=rehearsal,
+                pg_target=pg_target, approvals=approvals,
+            )
+            entries.append(entry)
+            emit({"event": "item_done", "index": n,
+                  "issue_code": entry["issue_code"], "status": entry["status"],
+                  "generated_by": entry.get("generated_by"),
+                  "has_sql": bool(entry.get("sql")),
+                  "reason": (entry.get("reason") or "")[:120]})
+
+        plan = remediate_sct_plan.build(
+            {"issues": issues, "target": {"id": target_id}},
+            model_mode="off",   # entries are already planned; this only shapes totals
+        )
+        plan["entries"] = entries
+        by_status: dict = {}
+        for e in entries:
+            by_status[e["status"]] = by_status.get(e["status"], 0) + 1
+        plan["totals"].update({
+            "items": len(entries),
+            "by_status": by_status,
+            "with_statement": sum(1 for e in entries if e.get("sql")),
+            "ready": sum(1 for e in entries
+                         if e["status"] == remediate_sct_plan.READY_TO_APPLY),
+            "blocked": sum(1 for e in entries
+                           if e["status"] == remediate_sct_plan.BLOCKED),
+            "rejected": sum(1 for e in entries
+                            if e["status"] == remediate_sct_plan.REJECTED),
+            "needs_a_person": sum(1 for e in entries if e["status"] in
+                                  (remediate_sct_plan.HUMAN_AUTHORED,
+                                   remediate_sct_plan.DECISION_REQUIRED)),
+        })
+        STATE.sct_remediation = plan
+
+        out_dir = Path(__file__).resolve().parent.parent / "remediate" / "output"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "sct_remediation_plan.json").write_text(
+            json.dumps(plan, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+
+        emit({"event": "complete", **plan["totals"], "model_mode": _model_mode()})
+
+    return _stream(work)
+
+
+@app.get("/api/sct/remediation")
+def sct_remediation():
+    if not STATE.sct_remediation:
+        raise HTTPException(409, "no SCT remediation plan yet")
+    return STATE.sct_remediation
+
+
+@app.get("/api/sct/gate")
+def sct_gate_endpoint(target: str = ""):
+    """Phase 5 over SCT's action items. Deterministic -- no stream to watch.
+
+    CDC readiness comes from the connect preflight's own facts, not from SCT and
+    not from a default: SCT never reads redo, and a gate that reported "ready"
+    because it failed to look would be worse than no gate.
+    """
+    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    issues = _sct_issues_for(target_id)
+    if issues is None:
+        raise HTTPException(409, f"AWS SCT has not assessed {target_id} yet")
+
+    decision = blocker_sct_gate.evaluate(
+        {"issues": issues, "target": {"id": target_id},
+         "collector_run_id": STATE.run_id},
+        # STATE.facts is what the preflight read from v$database on connect.
+        facts=STATE.facts,
+        migration_mode_record=_mode_record(),
+        remediation=STATE.sct_remediation,
+        waivers=STATE.waivers,
+    )
+    STATE.sct_gate = decision
+
+    out_dir = Path(__file__).resolve().parent.parent / "blocker" / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "sct_gate_decision.json").write_text(
+        json.dumps(decision, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    return decision
+
+
 class UtilizationRequest(BaseModel):
     filename: str = "utilization.csv"
     content: str
@@ -1136,6 +1560,132 @@ def conversion():
     if not STATE.conversion:
         raise HTTPException(409, "no conversion plan yet")
     return STATE.conversion
+
+
+class AppSqlRequest(BaseModel):
+    # Where the application's mapper files live. Relative paths resolve against
+    # the project root so the console's default works without absolute paths.
+    root: str = "scripts/demo-app/mappers"
+    # Whether the judgement cases go to the model tier. Off by default: the
+    # rules cost nothing and a model run bills.
+    model: bool = False
+
+
+@app.post("/api/appsql")
+def appsql_run(req: AppSqlRequest):
+    """Phase 4d. Converts the SQL embedded in the application's mapper files.
+
+    Needs no discovery run and no assessment: the input is a directory of
+    mapper XML in the client's source repository, which is the point -- AWS SCT
+    reads a schema and never sees these statements, so a client who clears
+    every SCT action item can still break on the first ROWNUM.
+
+    Applies nothing. No mapper file is written, and the parse gate creates
+    nothing on the target.
+    """
+    root = Path(req.root).expanduser()
+    if not root.is_absolute():
+        root = Path(__file__).resolve().parent.parent / root
+    if not root.is_dir():
+        raise HTTPException(400, f"not a directory: {root}")
+
+    # Phase 4c's DDL, when this session has it: the parse gate builds a shadow
+    # schema from it and rolls it back, so a statement is parsed against the
+    # schema the application will actually meet. Without it the gate reports
+    # blocked rather than pretending an empty database proves anything.
+    ddl_plan = STATE.schema_ddl
+    if ddl_plan is None:
+        stored = Path(__file__).resolve().parent.parent / "convert" / "output" / "schema_ddl.json"
+        if stored.exists():
+            ddl_plan = json.loads(stored.read_text(encoding="utf-8"))
+
+    result = appsql_plan.build(
+        root,
+        model_mode="live" if req.model else "off",
+        target=STATE.pg_target,
+        ddl_plan=ddl_plan,
+    )
+    STATE.appsql = result
+    appsql_plan.write(result)
+    return result
+
+
+@app.get("/api/appsql")
+def appsql_get():
+    if not STATE.appsql:
+        raise HTTPException(409, "no application SQL plan yet")
+    return STATE.appsql
+
+
+@app.post("/api/schemaddl")
+def schema_ddl_run():
+    """Phase 4c. The DDL a PostgreSQL target needs: tables, keys, checks, indexes.
+
+    Needs the discovery run and nothing else. DMS would create missing tables
+    itself using a fixed mapping that knows nothing about the estate -- every
+    NUMBER becomes numeric, and no constraints or indexes at all -- so this
+    generates them properly from the same discovery data the rest of the
+    pipeline uses.
+
+    Compiles against the registered PostgreSQL inside a transaction that is
+    rolled back, so the database is left exactly as found. Applies nothing.
+    """
+    if not STATE.run_dir:
+        raise HTTPException(409, "no discovery run yet")
+
+    owner = STATE.schemas[0] if STATE.schemas else None
+    if not owner:
+        raise HTTPException(409, "no schema selected in the discovery run")
+
+    plan = convert_ddl_run.build(STATE.run_dir.name, owner)
+
+    # The sequences the DDL's DEFAULT nextval(...) clauses refer to. They are
+    # another phase's output, created as scaffolding inside the rolled-back
+    # transaction so the dependency is exercised rather than sidestepped.
+    #
+    # This is derived in the CLI's main(), not in build(), so the first version
+    # of this endpoint left it unset and 24 of 30 statements failed with
+    # `relation "dbmig_app.seq_comm_id" does not exist` -- a compile failure
+    # manufactured by the caller, not by the DDL.
+    plan["sequences_needed"] = [
+        convert_ddl.ident(s["sequence_name"])
+        for s in prov_records._dataset(STATE.run_dir.name, "sequences")
+        if s.get("sequence_owner") == owner or s.get("owner") == owner
+    ]
+
+    # The compile is what makes this phase evidence rather than a guess. With
+    # no target it reports that it did not run, never that it passed.
+    t = STATE.pg_target
+    if t is not None:
+        try:
+            plan["compile"] = convert_ddl_run.compile_check(
+                plan, f"{t.host}:{t.port}/{t.database}", t.user, t.password)
+        except Exception as exc:                      # noqa: BLE001
+            plan["compile"] = {"ran": 0, "failed": 0, "ok": False,
+                               "rolled_back": False,
+                               "failures": [{"statement": "connect",
+                                             "error": str(exc)[:300]}]}
+    else:
+        plan["compile"] = {"ran": 0, "failed": 0, "ok": None, "rolled_back": None,
+                           "failures": [],
+                           "not_run_because": "no PostgreSQL target is registered, so "
+                                              "nothing is proven to compile"}
+
+    STATE.schema_ddl = plan
+    out = Path(__file__).resolve().parent.parent / "convert" / "output"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "schema_ddl.json").write_text(
+        json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+    (out / "schema.sql").write_text(
+        "\n\n".join(convert_ddl.statements_in_order(plan)) + "\n", encoding="utf-8")
+    return plan
+
+
+@app.get("/api/schemaddl")
+def schema_ddl_get():
+    if not STATE.schema_ddl:
+        raise HTTPException(409, "no schema DDL plan yet")
+    return STATE.schema_ddl
 
 
 def _report_data() -> dict:

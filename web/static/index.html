@@ -22,7 +22,15 @@
   --ease:cubic-bezier(.2,0,0,1);
   /* Panels are bordered; the shadow is a hairline lift, not an ambient glow. */
   --shadow:0 1px 2px rgba(17,26,34,.06);
+  /* One shell width for brand, rail and main, so they stay aligned. 1180px
+     left a desktop monitor's right third empty while the action-item table
+     truncated object names; the breakpoints below spend that width on the
+     table's own columns rather than on a second column of groups, which was
+     tried and reverted -- see the note on .sctrow. */
+  --shell:1180px;
 }
+@media(min-width:1400px){ :root{ --shell:1340px } }
+@media(min-width:1700px){ :root{ --shell:1560px } }
 @media (prefers-color-scheme:dark){
   :root{
     --ground:#0C1116; --chrome:#080C11; --surface:#131C24; --surface-2:#1A242D;
@@ -54,7 +62,7 @@ button{font:inherit}
 
 /* ---------- chrome + stage rail ---------- */
 header{background:var(--chrome);color:#E8EEF2;padding:14px 24px 0}
-.brand{display:flex;align-items:baseline;gap:12px;max-width:1180px;margin:0 auto;flex-wrap:wrap}
+.brand{display:flex;align-items:baseline;gap:12px;max-width:var(--shell);margin:0 auto;flex-wrap:wrap}
 .brand h1{font-size:16px;font-weight:600;letter-spacing:-.01em}
 .brand .tag{font-size:13px;color:#8FA5B3}
 .brand .right{margin-left:auto;display:flex;align-items:center;gap:14px}
@@ -63,7 +71,7 @@ header{background:var(--chrome);color:#E8EEF2;padding:14px 24px 0}
 .linkbtn:hover{color:#E8EEF2}
 .linkbtn[aria-pressed="true"]{color:var(--accent-ink);border-bottom-color:var(--accent-ink)}
 
-.rail{max-width:1180px;margin:0 auto;display:flex;gap:0;padding:18px 0 0}
+.rail{max-width:var(--shell);margin:0 auto;display:flex;gap:0;padding:18px 0 0}
 .stage{flex:1;position:relative;padding:0 12px 16px 0;cursor:default;text-align:left;
   background:none;border:none;color:inherit;min-width:0}
 .stage:not(:last-child)::after{content:"";position:absolute;top:12px;left:calc(50% + 12px);
@@ -92,7 +100,7 @@ header{background:var(--chrome);color:#E8EEF2;padding:14px 24px 0}
 }
 
 /* ---------- layout ---------- */
-main{max-width:1180px;margin:0 auto;padding:32px 24px 96px}
+main{max-width:var(--shell);margin:0 auto;padding:32px 24px 96px}
 .view{display:none}
 .view.on{display:block;animation:rise .32s var(--ease) both}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
@@ -311,6 +319,33 @@ tr:last-child td{border-bottom:none}
 .pagenav:empty{display:none}
 .mt{margin-top:24px}.mt-s{margin-top:12px}
 .spread{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
+/* The SCT remediation and gate rows. A class rather than inline styles so the
+   grid can collapse on a phone -- five fixed columns overflowed by 164px at
+   400px, which the Phases 1-5 drive caught. */
+.sctrow{display:grid;grid-template-columns:78px 50px minmax(0,1fr) 180px 160px;
+  gap:10px;align-items:baseline}
+/* Phase 4b's second column holds an object type, not a 4-digit SCT code, and
+   "package body" wrapped to two lines in 50px. Widened for that panel only,
+   so the SCT rows keep their tighter code column. */
+#convList .sctrow{grid-template-columns:82px 104px minmax(0,1fr) 180px 160px}
+@media(max-width:860px){
+  #convList .sctrow{grid-template-columns:82px 104px minmax(0,1fr)}
+}
+.sctrow>.obj{font-size:12px;color:var(--ink-3);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.sctrow>.act{font-size:12px;color:var(--ink-2)}
+.sctgrid{display:grid;grid-template-columns:70px 50px minmax(0,1fr) auto;
+  gap:10px;align-items:baseline}
+@media(max-width:860px){
+  /* Object and action move under the title rather than off the screen. */
+  .sctrow{grid-template-columns:78px 50px minmax(0,1fr);row-gap:2px}
+  .sctrow>.obj,.sctrow>.act{grid-column:3}
+  .sctgrid{grid-template-columns:70px 50px minmax(0,1fr)}
+  .sctgrid>:nth-child(4){grid-column:3}
+}
+@media(min-width:1400px){
+  .sctrow{grid-template-columns:78px 50px minmax(0,1fr) minmax(180px,.42fr) minmax(160px,.3fr)}
+}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -418,11 +453,16 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-assess">
     <div class="head">
       <h2>Assessment</h2>
-      <p>Every rule is a row in a table with a SQL predicate, a severity and a remediation
-         level. Severity comes from the rule, never decided at runtime — so the same estate
-         always scores the same.</p>
+      <p><b>AWS Schema Conversion Tool</b> — AWS's own verdict, with the PDF and CSV it
+         writes itself. Each action item is routed by where the fix belongs.</p>
     </div>
-    <div class="spread" style="margin-bottom:16px">
+
+    <!-- The 50-rule engine still runs, headlessly: Phases 3, 7, 9 and 10 read
+         its record, and the CDC-readiness evidence the gate needs comes from
+         the Connect preflight. It is no longer the assessment a client reads,
+         so its result panel is hidden rather than deleted -- deleting the
+         elements would break the render paths those phases still call. -->
+    <div class="spread" style="margin-bottom:16px;display:none" id="rulesRunRow">
       <button class="btn" id="btnAssess">Run assessment</button>
       <span class="mono" id="assessMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
     </div>
@@ -468,7 +508,82 @@ tr:last-child td{border-bottom:none}
         <div class="mono mt-s" id="issueCount" style="font-size:12.5px;color:var(--ink-3)"></div>
       </div>
     </div>
-    <div id="assessEmpty" class="panel"><div class="empty">Run discovery first, then assess.</div></div>
+    <!-- The rules engine's empty state. Hidden with its panel: SCT needs only a
+         connection, so "run discovery first" is no longer true of this screen. -->
+    <div id="assessEmpty" class="panel" style="display:none"><div class="empty">Run discovery first, then assess.</div></div>
+
+    <!-- ---- AWS SCT: the assessment ---- -->
+    <div>
+      <div class="panel pad" id="sctPre" style="display:none">
+        <div class="eyebrow">Prerequisites</div>
+        <div id="sctPreList" class="mono" style="font-size:12.5px;line-height:1.9"></div>
+        <div class="mono mt-s" id="sctHostNote"
+             style="font-size:12px;color:var(--ink-3);max-width:86ch"></div>
+      </div>
+
+      <div class="spread mt-s" style="gap:10px;flex-wrap:wrap;align-items:center">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <label for="sctTarget" style="font-size:12.5px;color:var(--ink-2)">Target</label>
+          <select id="sctTarget" class="mono"
+                  style="font-size:12.5px;padding:7px 9px;border:1px solid var(--line);
+                         border-radius:6px;background:var(--bg);color:var(--ink)"></select>
+          <button class="btn" id="btnSct">Run AWS SCT</button>
+          <label style="font-size:12px;color:var(--ink-3);display:flex;gap:5px;align-items:center">
+            <input type="checkbox" id="sctForce"> re-run, ignore cache</label>
+        </div>
+        <span class="mono" id="sctMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
+      </div>
+      <div id="sctScopeNote" class="mt-s" style="display:none"></div>
+
+      <div id="sctLive" style="display:none"><div class="ticker" id="sctTicker"></div></div>
+
+      <div id="sctResult" style="display:none">
+        <div class="split mt">
+          <div class="panel pad">
+            <div class="eyebrow">Action items by complexity</div>
+            <div class="bars" id="sctBars"></div>
+            <p class="why mt-s" style="font-size:12px;color:var(--ink-3);margin-bottom:0">
+              SCT grades by the work a person must do, not by severity.</p>
+          </div>
+          <div class="panel pad">
+            <div class="eyebrow">Headline</div>
+            <div class="tiles" style="border:none;grid-template-columns:repeat(2,1fr)"
+                 id="sctTiles"></div>
+          </div>
+        </div>
+
+        <!-- Where the work lands. SCT grades effort and stops there; this is the
+             other axis, and it is the one a plan is built from. -->
+        <div class="mt">
+          <div class="eyebrow">Where the fix belongs</div>
+          <div id="sctSegregation"></div>
+          <div id="sctUnmappedRoutes" class="mt-s" style="display:none"></div>
+        </div>
+
+        <div class="mt">
+          <div class="spread" style="align-items:flex-end;gap:12px;flex-wrap:wrap">
+            <div class="eyebrow" style="margin:0">SCT action items</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <a class="btn ghost sm" id="btnSctPdf" href="/api/sct/report.pdf"
+                 style="text-decoration:none;display:inline-block"
+                 title="SCT's own PDF, served byte for byte">PDF</a>
+              <a class="btn ghost sm" id="btnSctXlsx" href="/api/sct/report.xlsx"
+                 style="text-decoration:none;display:inline-block"
+                 title="SCT's own CSV rows in a workbook, unmodified, plus a provenance sheet">Excel</a>
+              <a class="btn ghost sm" id="btnSctCsv" href="/api/sct/report.csv"
+                 style="text-decoration:none;display:inline-block"
+                 title="SCT's own CSV, served byte for byte">CSV</a>
+            </div>
+          </div>
+          <p class="why mt-s" style="font-size:12px;color:var(--ink-3)">
+            <b>AWS SCT's own files</b>, byte for byte — not re-rendered.</p>
+          <div id="sctUnmapped" class="mt-s" style="display:none"></div>
+          <div id="sctTable" class="tblwrap"></div>
+          <div class="mono mt-s" id="sctCount"
+               style="font-size:12.5px;color:var(--ink-3)"></div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- ============ 4. TARGET ============ -->
@@ -552,13 +667,46 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-remediate">
     <div class="head">
       <h2>Remediation plan</h2>
-      <p>This phase <b>plans fixes and applies nothing</b>. Every proposed statement carries
-         rollback SQL or it is rejected at generation time, and passes five gates before it could
-         reach any database. A gate whose infrastructure is missing reports blocked rather than
-         passing quietly — register a rehearsal copy below and the dry run becomes real.</p>
+      <p>AI drafts each fix and proposes how to solve it. <b>A person reviews and
+         approves before anything reaches the target</b> — this phase applies
+         nothing.</p>
     </div>
 
-    <div class="split" style="margin-bottom:16px">
+    <!-- ---- AWS SCT action items: what Phase 4 now acts on ---- -->
+    <div style="margin-bottom:20px">
+      <div class="spread" style="gap:10px;flex-wrap:wrap;align-items:center">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="btnSctRemediate">Draft fixes for SCT items</button>
+          <label style="font-size:12px;color:var(--ink-3);display:flex;gap:5px;align-items:center">
+            <input type="checkbox" id="sctRemApprove"> hold approval as
+          </label>
+          <input id="sctRemApprover" placeholder="you@example.com" spellcheck="false"
+                 autocomplete="off" style="font-size:12.5px;padding:6px 8px;border:1px solid
+                 var(--line);border-radius:6px;background:var(--bg);color:var(--ink);width:190px">
+        </div>
+        <span class="mono" id="sctRemMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
+      </div>
+      <!-- The reasoning lives in docs/phases/phase-04-remediate.md and in the
+           per-group tooltips. It does not belong above the data. -->
+
+      <div id="sctRemLive" style="display:none"><div class="ticker" id="sctRemTicker"></div></div>
+      <div id="sctRemResult" style="display:none">
+        <div class="tiles mt" id="sctRemTiles"></div>
+        <div id="sctRemGroups" class="mt"></div>
+      </div>
+      <div id="sctRemEmpty" class="panel"><div class="empty">Run the AWS SCT assessment first,
+        then draft fixes for its action items.</div></div>
+    </div>
+
+    <!-- The 50-rule remediation path. Still here and still working; no longer
+         what the phase leads with, because SCT is the assessment a client
+         reads. Hidden rather than deleted -- Phase 6's render reads
+         STATE.remediation, and the rehearsal registration below belongs to it. -->
+    <details style="margin-bottom:16px">
+      <summary style="cursor:pointer;font-size:12.5px;color:var(--ink-3)">
+        Technical: the 50-rule remediation path and the rehearsal database</summary>
+
+    <div class="split" style="margin-bottom:16px;margin-top:12px">
       <div class="panel pad">
         <div class="eyebrow">Fix generation</div>
         <div class="status" id="genStatus"><span class="led"></span>
@@ -611,25 +759,28 @@ tr:last-child td{border-bottom:none}
         <div class="mono mt-s" id="routedCount" style="font-size:12.5px;color:var(--ink-3)"></div></div>
     </div>
     <div id="remEmpty" class="panel"><div class="empty">Run the assessment first, then plan remediations.</div></div>
+    </details>
   </section>
 
   <!-- ============ 5b. CONVERT PL/SQL ============ -->
   <section class="view" id="view-convert">
     <div class="head">
       <h2>Convert stored code to PostgreSQL</h2>
-      <p>For the day the target is not Oracle. Every procedure, function, package, trigger and
-         type is rewritten as PL/pgSQL — by <b>rules first</b>, a model only where judgement is
-         needed, and a person where PostgreSQL has no equivalent. Each conversion passes five gates,
-         including a <b>real compile on PostgreSQL</b> inside a transaction that is rolled back.
-         <b>Nothing is applied anywhere.</b> This is the part AWS's own migration accelerator
-         leaves as manual work.</p>
+      <p>Every procedure, function, package, trigger and type rewritten as PL/pgSQL — rules
+         first, the model where judgement is needed. Each conversion is <b>compiled on a real
+         PostgreSQL and rolled back</b>, then <b>reviewed and approved by a person before
+         anything reaches the target</b>. This phase applies nothing.</p>
     </div>
 
     <div class="split" style="margin-bottom:16px">
       <div class="panel pad">
         <div class="eyebrow">Where a conversion comes from</div>
+        <!-- Deliberately says nothing until the server answers. Hardcoding a
+             mode here is how a false claim survives: this card read "static
+             stand-ins -- not model output" on a console whose model tier was
+             live, because the wording was baked into the markup. -->
         <div class="status" id="convGenStatus"><span class="led"></span>
-          <span>Rules, then static stand-ins — <b>not model output</b></span></div>
+          <span>Checking the model tier…</span></div>
         <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
           A construct with exactly one correct translation is rewritten by a rule and the reason is
           recorded. Anything needing judgement goes to the <b>model tier</b>, and what it writes is
@@ -674,18 +825,159 @@ tr:last-child td{border-bottom:none}
     <div id="convEmpty" class="panel"><div class="empty">Run discovery first, then convert the stored code.</div></div>
   </section>
 
+  <!-- ============ 5a. SCHEMA DDL (4c) ============
+       The target's table structure. DMS would improvise this: it creates
+       missing tables with a fixed mapping that knows nothing about the estate
+       and creates no constraints or indexes at all, so a migration that trusts
+       it arrives with no primary keys and no access paths. -->
+  <section class="view" id="view-schemaddl">
+    <div class="head">
+      <h2>Build the target's schema</h2>
+      <p>Tables, keys, checks and indexes for PostgreSQL, generated from what discovery
+         recorded. <b>DMS would improvise this</b> — it creates missing tables with a fixed
+         mapping that turns every <span class="mono">NUMBER</span> into
+         <span class="mono">numeric</span>, and creates <b>no constraints and no indexes at
+         all</b>. Every statement here is executed on a real PostgreSQL and
+         <b>rolled back</b>. This phase applies nothing.</p>
+    </div>
+
+    <div class="split" style="margin-bottom:16px">
+      <div class="panel pad">
+        <div class="eyebrow">The order, and why it is not alphabetical</div>
+        <div id="ddlOrder" class="mt-s"></div>
+        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
+          Constraints and indexes come <b>after</b> the load. Validating a foreign key row by
+          row during a bulk insert is the slowest possible way to do it, and an index
+          maintained during a load is rebuilt far faster afterwards. This is the same order
+          Phase 7's Data Pump path uses for the homogeneous case.</p>
+      </div>
+      <div class="panel pad">
+        <div class="eyebrow">What proves this DDL</div>
+        <div class="status" id="ddlTargetStatus"><span class="led"></span>
+          <span>Checking the target…</span></div>
+        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
+          Every statement runs on the registered PostgreSQL inside one transaction, which is
+          then <b>rolled back</b> — so the database is left exactly as found and the DDL is
+          still proven to execute. Register a target on <b>Convert PL/SQL</b>; without one
+          this phase reports that the compile <b>did not run</b>, never that it passed.</p>
+      </div>
+    </div>
+
+    <div class="spread" style="margin-bottom:16px">
+      <button class="btn" id="btnSchemaDdl">Generate schema DDL</button>
+      <span class="mono" id="ddlMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
+    </div>
+
+    <div id="ddlResult" style="display:none">
+      <div class="tiles mt" id="ddlTiles"></div>
+      <div id="ddlNotesBox" class="mt-s"></div>
+      <div class="mt"><div class="eyebrow">Every statement, in the order PostgreSQL needs them</div>
+        <div id="ddlGroups"></div></div>
+      <div class="mt"><div class="eyebrow">What a reviewer must know</div>
+        <div id="ddlNoteList"></div></div>
+    </div>
+    <div id="ddlEmpty" class="panel"><div class="empty">Run discovery first, then generate the
+      DDL the target needs.</div></div>
+  </section>
+
+  <!-- ============ 5b. APPLICATION SQL (4d) ============
+       The layer AWS SCT cannot see. SCT reads a database; these statements
+       live in mapper XML in a source repository, so a client who clears every
+       SCT action item and migrates still breaks on the first ROWNUM. -->
+  <section class="view" id="view-appsql">
+    <div class="head">
+      <h2>Convert the application's SQL</h2>
+      <p>The Oracle SQL embedded in the application, not in the database — <b>AWS SCT never
+         reads this</b>, because it inspects a schema and these statements live in mapper
+         files in a source repository. Extracted, routed by construct, rewritten rules-first,
+         and gated the same way stored code is. This phase applies nothing.</p>
+    </div>
+
+    <div class="split" style="margin-bottom:16px">
+      <div class="panel pad">
+        <div class="eyebrow">What is scanned</div>
+        <div class="field" style="margin-bottom:8px">
+          <input id="appsqlRoot" placeholder="path to the mapper files"
+                 value="scripts/demo-app/mappers" spellcheck="false"></div>
+        <div class="spread">
+          <label class="chk" style="margin-bottom:0"><input type="checkbox" id="appsqlModel">
+            <span>Draft the judgement cases with the model tier</span></label>
+        </div>
+        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
+          MyBatis <span class="mono">&lt;if&gt;</span>, <span class="mono">&lt;where&gt;</span> and
+          <span class="mono">&lt;foreach&gt;</span> tags are <b>kept</b>: stripping them yields SQL
+          that parses and is not the SQL the application sends. <span class="mono">${…}</span> stays
+          interpolated — rewriting it to <span class="mono">#{…}</span> turns a column name into a
+          bound literal and the query fails at runtime, not at conversion.</p>
+      </div>
+      <div class="panel pad">
+        <div class="eyebrow">What proves a rewrite</div>
+        <div class="status" id="appsqlTargetStatus"><span class="led"></span>
+          <span>Checking the target…</span></div>
+        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
+          Two separate questions, and merging them is how a converter passes while being wrong.
+          <b>Parse</b> asks whether the target accepts the statement — cheap, one connection.
+          <b>Result</b> asks whether it returns the same rows as the Oracle original over the same
+          data — and it is the only check that catches a <span class="mono">ROWNUM</span> pagination
+          rewrite that parses perfectly and returns a different page. Without a target both report
+          <b>blocked</b>, never a silent pass.</p>
+      </div>
+    </div>
+
+    <div class="spread" style="margin-bottom:16px">
+      <button class="btn" id="btnAppsql">Convert application SQL</button>
+      <span class="mono" id="appsqlMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
+    </div>
+
+    <div id="appsqlResult" style="display:none">
+      <div class="tiles mt" id="appsqlTiles"></div>
+      <div id="appsqlNotes" class="mt-s"></div>
+      <div class="mt"><div class="eyebrow">Every statement, grouped by what happens to it</div>
+        <div id="appsqlGroups"></div></div>
+    </div>
+    <div id="appsqlEmpty" class="panel"><div class="empty">Point this at the application's mapper
+      files and run it. Nothing else in the pipeline reads them.</div></div>
+  </section>
+
   <!-- ============ 6. GATE ============ -->
   <section class="view" id="view-gate">
     <div class="head">
       <h2>Blocker gate</h2>
-      <p>The last deterministic step before anything costs money or touches a target.
-         <b>Nothing downstream runs while a critical finding is open.</b> A blocker can be
-         accepted, but never anonymously — a waiver needs a named approver and a real reason,
-         and both are recorded.</p>
+      <p>Nothing downstream runs while a blocker is open. Each one says
+         <b>where it must be fixed</b>.</p>
     </div>
 
-    <div class="spread" style="margin-bottom:16px">
-      <button class="btn" id="btnGate">Evaluate gate</button>
+    <div class="spread" style="margin-bottom:12px">
+      <button class="btn" id="btnSctGate">Evaluate gate</button>
+      <span class="mono" id="sctGateMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
+    </div>
+
+    <div id="sctGateResult" style="display:none">
+      <div class="panel pad" id="sctGateVerdict"></div>
+
+      <div class="mt">
+        <div class="eyebrow">Where the work belongs</div>
+        <div id="sctGateGroups"></div>
+      </div>
+
+      <div class="mt"><div class="eyebrow">Change data capture readiness</div>
+        <div id="sctGateCdc"></div></div>
+
+      <div class="mt"><div class="eyebrow">Downstream phases</div>
+        <div class="checks" id="sctPhaseList"></div></div>
+
+      <div class="mt" id="sctUnroutedWrap" style="display:none"></div>
+    </div>
+    <div id="sctGateEmpty" class="panel"><div class="empty">Run the AWS SCT assessment first,
+      then evaluate the gate.</div></div>
+
+    <!-- The 50-rule gate. Unchanged and still evaluated; kept for the phases
+         that read its record (6, 7, 9) and for comparison. -->
+    <details style="margin-top:20px">
+      <summary style="cursor:pointer;font-size:12.5px;color:var(--ink-3)">
+        Technical: the 50-rule gate, for comparison</summary>
+    <div class="spread" style="margin:12px 0">
+      <button class="btn ghost sm" id="btnGate">Evaluate the rules gate</button>
       <span class="mono" id="gateMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
     </div>
 
@@ -703,6 +995,7 @@ tr:last-child td{border-bottom:none}
         <div class="acc" id="waivedList"></div></div>
     </div>
     <div id="gateEmpty" class="panel"><div class="empty">Run the assessment first, then evaluate the gate.</div></div>
+    </details>
   </section>
 
   <!-- ============ 7. PROVISION ============ -->
@@ -1106,6 +1399,8 @@ const STAGES = [
   {id:'target',    label:'Target & Sizing',n:3},
   {id:'remediate', label:'Remediate',      n:4},
   {id:'convert',   label:'Convert PL/SQL', n:'4b'},
+  {id:'schemaddl', label:'Schema DDL',     n:'4c'},
+  {id:'appsql',    label:'Application SQL',n:'4d'},
   {id:'gate',      label:'Blocker gate',   n:5},
   {id:'provision', label:'Provision',      n:6},
   {id:'migrate',   label:'Migrate',        n:7},
@@ -1114,12 +1409,13 @@ const STAGES = [
   {id:'report',    label:'Report',         n:10},
 ];
 const IDLE_STAGES = {connect:'active', discover:'idle', assess:'idle', target:'idle',
-                     remediate:'idle', convert:'idle', gate:'idle', provision:'idle', migrate:'idle',
+                     remediate:'idle', convert:'idle', schemaddl:'idle', appsql:'active', gate:'idle', provision:'idle', migrate:'idle',
                      validate:'idle', cutover:'idle', report:'idle'};
 let current = 'connect';
 let stageState = {...IDLE_STAGES};
-let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', convert:'', gate:'', provision:'', migrate:'', validate:'', cutover:'', report:''};
+let stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', convert:'', schemaddl:'', appsql:'', gate:'', provision:'', migrate:'', validate:'', cutover:'', report:''};
 let ISSUES = [], sevFilter = new Set(), catFilter = new Set();
+let APPSQL = null;   // Phase 4d's plan, as the server returned it
 
 function renderRail(){
   $('#rail').innerHTML = STAGES.map(s => {
@@ -1211,6 +1507,7 @@ async function loadState(){
     MODE_DECLARED = s.migration_mode_declared; CDC_READY = s.cdc_readiness;
     renderModes();
   }
+  renderConvGenStatus(s.model_mode);
   if (!s.connected) return;
   applyConnected(s.checks, s.facts);
 
@@ -1225,12 +1522,61 @@ async function loadState(){
     setStage('discover', 'done', 'restored');
     $('#btnAssess').disabled = false;
     $('#btnSize').disabled = false;
+    // **Phase 4b needs discovery, not an assessment.** `/api/convert` requires
+    // only `STATE.run_dir` -- it reads the stored-code inventory, never the
+    // findings. It was armed off `has_assessment` because the rules assessment
+    // used to be the gate for everything; once that panel left the screen, 4b
+    // became unreachable in the console while its endpoint worked fine.
+    $('#btnConvert').disabled = false;
+    if (stageState['convert'] === 'idle') setStage('convert', 'active');
+    // Phase 4c reads the same discovery run: columns, tables and constraints.
+    $('#btnSchemaDdl').disabled = false;
+    if (stageState['schemaddl'] === 'idle') setStage('schemaddl', 'active');
   }
+  // A stored SCT assessment arms Phases 4 and 5 on reload, the same way a
+  // stored rules assessment does. Without this a refresh left the SCT screens
+  // complete and their buttons dead -- the bug the 4b/10 drive found once
+  // already, in the other direction.
+  try {
+    const sctStored = await fetch('/api/sct/assessment?target=rds-postgresql');
+    if (sctStored.ok) {
+      // Do not overwrite a result this session has already rendered. The same
+      // race as below: this restore is awaited on load and can land after the
+      // operator has started work.
+      if (!SCT) { SCT = await sctStored.json(); renderSct(); }
+      setStage('assess', 'done', `${SCT.action_item_count} action items`);
+      for (const id of ['target', 'remediate', 'convert', 'gate', 'report']) {
+        if (stageState[id] === 'idle') setStage(id, 'active');
+      }
+      for (const b of ['#btnSctRemediate', '#btnSctGate']) {
+        const el = $(b); if (el) el.disabled = false;
+      }
+      // **Only show an empty state where there is nothing to show.** This
+      // block is awaited on load, so it can finish *after* a run the operator
+      // started -- showing the empty panel unconditionally wiped a completed
+      // remediation off the screen, which the Phases 1-5 drive caught as
+      // "Remediate: produced a rendered outcome" failing while the endpoint
+      // itself finished in under a minute.
+      const rem = await fetch('/api/sct/remediation');
+      if (rem.ok) {
+        await renderSctRemediation();
+        setStage('remediate', 'done', 'restored');
+      } else if ($('#sctRemResult').style.display === 'none') {
+        $('#sctRemEmpty').style.display = '';
+      }
+      if ($('#sctGateResult').style.display === 'none') {
+        $('#sctGateEmpty').style.display = '';
+      }
+    }
+  } catch (e) { /* no SCT run yet; the screens say so themselves */ }
+
   if (s.has_assessment) {
     setStage('assess', 'done', 'restored');
     // Everything that only needs an assessment is unlocked, not just the next
     // one along. Target needs the collector run; Remediate, Gate and Report
-    // need the assessment. All of them are satisfied here.
+    // need the assessment. Convert (4b) needs neither -- it is armed by
+    // discovery above -- and is left in this list only so a rules-first run
+    // still opens the stage.
     for (const id of ['target', 'remediate', 'convert', 'gate', 'report']) {
       if (stageState[id] === 'idle') setStage(id, 'active');
     }
@@ -1295,6 +1641,11 @@ function applyConnected(checks, facts){
   renderFacts(facts);
   $('#btnDiscover').disabled = false;
   $('#discEmpty').querySelector('.empty').textContent = 'Run discovery to inventory the estate.';
+  // The SCT panel arms on connect, not on the assessment: SCT reads the source
+  // database itself and does not need our discovery run. It does need the
+  // connection, which is what holds the password in process memory.
+  loadSctTargets();
+  loadSctPreflight();
 }
 
 function renderChecks(checks){
@@ -1402,7 +1753,9 @@ $('#btnDiscover').onclick = () => {
       setStage('discover', 'done', `${d.datasets} datasets · ${fmt(d.total_rows)} rows`);
       // Target only needs the collector run, so discovery unlocks it too --
       // matching the reload path, which enables #btnSize off has_discovery.
-      for (const id of ['assess', 'target']) {
+      // 4b joins these: `/api/convert` needs only the discovery run, so it is
+      // reachable as soon as discovery finishes. See the reload path.
+      for (const id of ['assess', 'target', 'convert']) {
         if (stageState[id] === 'idle') setStage(id, 'active');
       }
       $('#discMeta').textContent =
@@ -1410,6 +1763,10 @@ $('#btnDiscover').onclick = () => {
         (d.failed && d.failed.length ? ` · ${d.failed.length} failed queries` : '');
       $('#btnAssess').disabled = false;
       $('#btnSize').disabled = false;
+      $('#btnConvert').disabled = false;
+      $('#btnSchemaDdl').disabled = false;
+      if (stageState['convert'] === 'idle') setStage('convert', 'active');
+      if (stageState['schemaddl'] === 'idle') setStage('schemaddl', 'active');
       await renderDiscovery();
       btn.disabled = false;
       $('#toAssess').style.display = '';
@@ -1493,6 +1850,9 @@ $('#btnAssess').onclick = () => {
       // Convert was only enabled on the reload path, so after a live assessment
       // the stage opened with a dead button until the page was refreshed.
       $('#btnConvert').disabled = false;
+      $('#btnSchemaDdl').disabled = false;
+      if (stageState['convert'] === 'idle') setStage('convert', 'active');
+      if (stageState['schemaddl'] === 'idle') setStage('schemaddl', 'active');
       $('#btnGate').disabled = false;
       $('#remEmpty').querySelector('.empty').textContent = 'Plan remediations for these findings.';
       $('#gateEmpty').querySelector('.empty').textContent = 'Evaluate the gate for these findings.';
@@ -1662,6 +2022,360 @@ function renderIssues(){
 
 $('#btnViewTable').onclick = () => { issueView = 'table';  renderIssues(); };
 $('#btnViewDetail').onclick = () => { issueView = 'detail'; renderIssues(); };
+
+/* ---------------- AWS SCT (Phase 2, the real tool) ----------------
+   Separate from the 50 rules above, and not a replacement: SCT reports schema
+   and stored-code conversion for a chosen target, and never looks at the OPS,
+   SEC, DQ or PERF findings that Phases 3, 5 and 7 read.
+
+   The target is a dropdown because SCT assesses one platform at a time -- it is
+   a project setting, not a report filter -- so changing it re-runs SCT. Results
+   are cached per target so switching back is instant. */
+const SCT_COMPLEXITY = ['simple', 'medium', 'complex', 'decision'];
+// SCT's complexity is the work a person must do. The colour mirrors the
+// severity chips only so the eye can scan both tables the same way; the value
+// itself is never presented as a severity.
+const SCT_SEV_FOR = {decision:'CRITICAL', complex:'HIGH', medium:'MEDIUM', simple:'LOW'};
+let sctTargets = [], sctSort = {key:'complexity', dir:1}, SCT = null;
+
+async function loadSctTargets(){
+  try {
+    const d = await (await fetch('/api/sct/targets')).json();
+    sctTargets = d.targets || [];
+    // Out-of-scope targets are listed and marked, never hidden -- a client asks
+    // about Aurora and Redshift, and omitting them would look like SCT could
+    // not do it. They carry no migration engine, so Phase 3 cannot take one.
+    $('#sctTarget').innerHTML = sctTargets.map(t =>
+      `<option value="${esc(t.id)}"${t.default ? ' selected' : ''}>${esc(t.label)}${
+        t.in_scope ? '' : '  — out of scope'}</option>`).join('');
+    showSctScopeNote();
+  } catch (e) { /* the panel simply stays empty; preflight explains why */ }
+}
+
+function showSctScopeNote(){
+  const t = sctTargets.find(x => x.id === $('#sctTarget').value);
+  const box = $('#sctScopeNote');
+  if (!t) { box.style.display = 'none'; return; }
+  box.style.display = '';
+  box.innerHTML = t.in_scope
+    ? `<div class="note info" style="font-size:12.5px">${esc(t.scope_note)}</div>`
+    : `<div class="note warn" style="font-size:12.5px"><b>${esc(t.label)} is out of
+       DBShift's migration scope.</b> ${esc(t.scope_note)} SCT will assess it for comparison;
+       it is not a migration path, and no later phase will accept it.</div>`;
+}
+
+async function loadSctPreflight(){
+  try {
+    const d = await (await fetch('/api/sct/preflight')).json();
+    const mark = {ok:'[ok]', missing:'[--]', unusable:'[XX]'};
+    $('#sctPre').style.display = d.ready ? 'none' : '';
+    $('#sctPreList').innerHTML = (d.checks || []).map(c =>
+      `<div style="color:${c.status === 'ok' ? 'var(--ink-2)' : 'var(--bad, #b4232a)'}">
+         ${mark[c.status] || '[??]'} <b>${esc(c.name)}</b>: ${esc(c.detail)}
+         ${c.status !== 'ok' && c.remedy
+            ? `<div style="color:var(--ink-3);padding-left:20px">→ ${esc(c.remedy)}</div>` : ''}
+       </div>`).join('');
+    $('#sctHostNote').textContent = d.host_note || '';
+    $('#btnSct').disabled = !d.ready;
+    if (!d.ready) $('#sctMeta').textContent = 'prerequisites missing — see below';
+    return d.ready;
+  } catch (e) { $('#btnSct').disabled = true; return false; }
+}
+
+$('#sctTarget').onchange = async () => {
+  showSctScopeNote();
+  // A target already assessed shows its stored result immediately rather than
+  // asking for a re-run that takes minutes.
+  const id = $('#sctTarget').value;
+  try {
+    const r = await fetch('/api/sct/assessment?target=' + encodeURIComponent(id));
+    if (r.ok) { SCT = await r.json(); renderSct(); }
+    else { $('#sctResult').style.display = 'none'; $('#sctMeta').textContent = 'not assessed yet'; }
+  } catch (e) { $('#sctResult').style.display = 'none'; }
+};
+
+$('#btnSct').disabled = true;
+$('#btnSct').onclick = () => {
+  const btn = $('#btnSct'), id = $('#sctTarget').value;
+  btn.disabled = true;
+  $('#sctResult').style.display = 'none';
+  $('#sctLive').style.display = '';
+  $('#sctTicker').innerHTML = '';
+  $('#sctMeta').textContent = 'running AWS SCT…';
+  setStage('assess', 'busy', 'AWS SCT running');
+  const qs = `?target=${encodeURIComponent(id)}&force=${$('#sctForce').checked}`;
+  const es = new EventSource('/api/sct/assess' + qs);
+  let running = null;
+  const tick = (cls, nm, meta) => {
+    const el = document.createElement('div');
+    el.className = 'tick ' + cls;
+    el.innerHTML = `<span class="st"></span><span class="nm">${esc(nm)}</span>
+      <span class="meta">${esc(meta || '')}</span>`;
+    $('#sctTicker').appendChild(el); el.scrollIntoView({block:'nearest'});
+    return el;
+  };
+  es.onmessage = async ev => {
+    const d = JSON.parse(ev.data);
+    if (d.event === 'stage') {
+      if (running) running.className = 'tick done';
+      running = tick('run', d.stage, d.detail);
+    } else if (d.event === 'note') {
+      tick(d.level === 'warn' ? 'err' : 'done', d.message, d.detail);
+    } else if (d.event === 'sct') {
+      // SCT's own log line. Only the command boundaries are worth a row; the
+      // rest would bury them -- it logs its entire settings block at startup.
+      const m = /GENERAL (INFO|ERROR|WARNING)\s+(\w+) (started|finished)/.exec(d.line);
+      if (m) {
+        if (m[3] === 'started') { if (running) running.className = 'tick done';
+                                  running = tick('run', m[2], 'running'); }
+        else if (running) { running.querySelector('.meta').textContent = 'done'; }
+      } else if (/ ERROR /.test(d.line) && running) {
+        running.className = 'tick err';
+        running.querySelector('.meta').textContent = d.line.slice(-90);
+      }
+    } else if (d.event === 'done') {
+      es.close();
+      if (running) running.className = 'tick done';
+      SCT = d;
+      renderSct();
+      // **SCT is the assessment now, so it advances the rail.** Previously only
+      // the 50-rule run did, which left the SCT screen complete but every later
+      // stage locked. The rules engine still runs headlessly for the phases that
+      // read its record; it no longer gates navigation.
+      const seg = d.segregation || {};
+      setStage('assess', 'done',
+        `${d.action_item_count} action items · ${(seg.totals || {}).human_only ?? 0} human-only`);
+      for (const id of ['target', 'remediate', 'convert', 'gate', 'report']) {
+        if (stageState[id] === 'idle') setStage(id, 'active');
+      }
+      // SCT is the assessment, so its run arms the phases that read it. The
+      // rules-engine buttons are armed too: their panels are collapsed, not
+      // removed, and Phase 6 still reads STATE.remediation.
+      for (const b of ['#btnSctRemediate', '#btnSctGate',
+                       '#btnRemediate', '#btnConvert', '#btnGate']) {
+        const el = $(b); if (el) el.disabled = false;
+      }
+      const remEmpty = $('#sctRemEmpty');
+      if (remEmpty) remEmpty.querySelector('.empty').textContent =
+        'Draft fixes for these SCT action items.';
+      const gateEmpty = $('#sctGateEmpty');
+      if (gateEmpty) gateEmpty.querySelector('.empty').textContent =
+        'Evaluate the gate for these SCT action items.';
+      btn.disabled = false;
+    } else if (d.event === 'error') {
+      es.close();
+      setStage('assess', 'active', 'SCT failed');
+      $('#sctMeta').textContent = 'SCT did not complete';
+      // SCT's own errors are the actionable part. Its exit code is not: it
+      // returns 0 with a failed AddSource and an empty report, which is why
+      // "exited 0" is never reported here as success.
+      const extra = (d.sct_errors || []).map(e =>
+        `<div class="mono" style="margin-top:6px;font-size:12px">${esc(e)}</div>`).join('');
+      $('#sctLive').insertAdjacentHTML('beforeend',
+        `<div class="note bad mt-s"><b>${esc(d.message)}</b>${extra}
+         ${d.exit_code_said_ok
+            ? `<div style="margin-top:8px">SCT exited 0 but produced no report.
+               An empty assessment is <b>not</b> a clean estate.</div>` : ''}</div>`);
+      btn.disabled = false;
+    }
+  };
+  es.onerror = () => { es.close(); btn.disabled = false;
+                       $('#sctMeta').textContent = 'connection lost'; };
+};
+
+function sortSctIssues(list){
+  const {key, dir} = sctSort;
+  const rank = c => SCT_COMPLEXITY.indexOf(c);
+  return [...list].sort((a, b) => {
+    let x, y;
+    if (key === 'complexity') { x = -rank(a.complexity); y = -rank(b.complexity); }
+    else if (key === 'occurrences') { x = a.occurrences; y = b.occurrences; }
+    // Sort the routing columns in their meaningful order, not alphabetically:
+    // source before target before decision, and automatic before human.
+    else if (key === 'where') {
+      const o = {source:0, target:1, decision:2, human:3};
+      x = o[a.where] ?? 9; y = o[b.where] ?? 9;
+    }
+    else if (key === 'who') {
+      const o = {auto:0, model:1, person:2};
+      x = o[a.who] ?? 9; y = o[b.who] ?? 9;
+    }
+    else { x = String(a[key] ?? '').toLowerCase(); y = String(b[key] ?? '').toLowerCase(); }
+    if (x < y) return -dir;
+    if (x > y) return dir;
+    return String(a.issue_code).localeCompare(String(b.issue_code));
+  });
+}
+
+const SCT_COLS = [
+  {key:'complexity',  label:'Complexity', w:'110px'},
+  {key:'issue_code',  label:'Code',       w:'70px'},
+  {key:'title',       label:'Action item'},
+  // The two columns the segregation adds, and the reason this screen is worth
+  // reading rather than just SCT's own PDF.
+  {key:'where',       label:'Fix where',  w:'150px'},
+  {key:'who',         label:'Who',        w:'134px'},
+  {key:'occurrences', label:'Occurrences', w:'100px', num:true},
+  {key:'object_type', label:'Object type', w:'108px'},
+];
+
+// Colour by actor, not by severity: "a person must write this" is the fact a
+// reader is scanning for, and it does not track SCT's complexity.
+const WHO_TONE = {auto:'LOW', model:'MEDIUM', person:'HIGH'};
+
+function renderSegregation(seg){
+  if (!seg || !seg.groups) { $('#sctSegregation').innerHTML = ''; return; }
+  const t = seg.totals || {};
+  $('#sctSegregation').innerHTML = `
+    <div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr))">
+      ${seg.groups.map(g => `
+        <div class="tile" title="${esc(g.meaning)}">
+          <div class="k">${esc(g.label)}</div>
+          <div class="v">${g.item_count}</div>
+          <div class="h">${g.occurrence_count} occurrence${g.occurrence_count === 1 ? '' : 's'}${
+            g.by_who.person ? ` · ${g.by_who.person} human-only` : ''}</div>
+        </div>`).join('')}
+    </div>
+    <div class="mono mt-s" style="font-size:12.5px;color:var(--ink-3)">
+      Of ${t.items} action items: <b>${t.automatable}</b> automatic ·
+      <b>${t.ai_draftable}</b> AI-drafted then gated ·
+      <b>${t.human_only}</b> human only.
+      Phase 4 drafts the first two; the third is routed to a person with the reason.
+    </div>`;
+
+  // An SCT code this build has never seen must be visible, not silently
+  // treated as safe -- it is routed to a person, and the screen says so.
+  const un = seg.unmapped || [];
+  $('#sctUnmappedRoutes').style.display = un.length ? '' : 'none';
+  if (un.length) $('#sctUnmappedRoutes').innerHTML =
+    `<div class="note warn" style="font-size:12.5px"><b>${un.length} action item${
+      un.length === 1 ? '' : 's'} not in the routing table</b> —
+     ${un.map(i => esc(i.issue_code)).join(', ')}. Routed to a person, because an
+     unmapped item treated as automatic is exactly what that table prevents. Add a row
+     to <span class="mono">sct/route.py</span> once each is understood.</div>`;
+}
+
+function renderSct(){
+  if (!SCT) return;
+  $('#sctLive').style.display = 'none';
+  $('#sctResult').style.display = '';
+
+  const t = SCT.target || {}, by = SCT.by_complexity || {}, occ = SCT.occurrences_by_complexity || {};
+  const total = SCT.action_item_count || 0;
+  const mean = SCT.complexity_meaning || {};
+
+  $('#sctMeta').textContent =
+    `${total} action item${total === 1 ? '' : 's'} · ${SCT.occurrence_count || 0} occurrences` +
+    (SCT.from_cache ? ' · cached, tick re-run for a fresh one' : '');
+
+  const max = Math.max(1, ...SCT_COMPLEXITY.map(c => by[c] || 0));
+  $('#sctBars').innerHTML = SCT_COMPLEXITY.map(c => `
+    <div class="bar" title="${esc(mean[c] || '')}">
+      <span>${esc(c)}</span>
+      <div class="track"><div class="fill" style="width:${Math.round((by[c] || 0) / max * 100)}%"></div></div>
+      <span class="val">${by[c] || 0}</span></div>`).join('');
+
+  $('#sctTiles').innerHTML = [
+    ['Action items', total, 'from AWS SCT'],
+    ['Occurrences', SCT.occurrence_count || 0, 'objects affected'],
+    ['Needs a person', (by.complex || 0) + (by.decision || 0), 'rewrite or decide'],
+    ['Automatic-ish', by.simple || 0, mean.simple || ''],
+  ].map(([k, v, h]) => `<div class="tile"><div class="k">${esc(k)}</div>
+      <div class="v">${fmt(v)}</div><div class="h">${esc(h)}</div></div>`).join('');
+
+  // Every download link carries the target, so the file matches what is shown.
+  const q = '?target=' + encodeURIComponent(t.id || $('#sctTarget').value);
+  $('#btnSctPdf').href  = '/api/sct/report.pdf'  + q;
+  $('#btnSctXlsx').href = '/api/sct/report.xlsx' + q;
+  $('#btnSctCsv').href  = '/api/sct/report.csv'  + q;
+  $('#btnSctPdf').style.display  = SCT.has_pdf ? '' : 'none';
+  $('#btnSctCsv').style.display  = SCT.has_csv ? '' : 'none';
+  $('#btnSctXlsx').style.display = SCT.has_csv ? '' : 'none';
+
+  // A column SCT added that the parser does not understand is surfaced, not
+  // dropped -- an SCT upgrade should be visible rather than silently lossy.
+  const un = SCT.unmapped_columns || [];
+  $('#sctUnmapped').style.display = un.length ? '' : 'none';
+  if (un.length) $('#sctUnmapped').innerHTML =
+    `<div class="note info" style="font-size:12.5px">SCT emitted
+     ${un.length} column${un.length === 1 ? '' : 's'} this build does not map:
+     <span class="mono">${un.map(esc).join(', ')}</span>. They are present in the
+     CSV and Excel downloads, which are SCT's own data.</div>`;
+
+  renderSegregation(SCT.segregation);
+
+  const rows = sortSctIssues(SCT.issues || []);
+  const head = SCT_COLS.map(c => {
+    const active = sctSort.key === c.key;
+    const arrow = active ? (sctSort.dir === 1 ? ' ↑' : ' ↓') : '';
+    return `<th data-sort="${c.key}" style="cursor:pointer;user-select:none${
+      c.w ? `;width:${c.w}` : ''}" title="Sort by ${esc(c.label)}">${esc(c.label)}${arrow}</th>`;
+  }).join('');
+
+  const body = rows.map((i, n) => `
+    <tr data-idx="${n}" style="cursor:pointer" title="Show SCT's recommendation">
+      <td><span class="sev ${SCT_SEV_FOR[i.complexity] || 'INFO'}"
+            title="${esc(i.complexity_meaning || '')}">${esc(i.complexity)}</span></td>
+      <td>${esc(i.issue_code)}</td>
+      <td style="font-family:inherit">${esc(i.title)}</td>
+      <td title="${esc(i.route_why || '')}">${esc(i.where_label || i.where || '')}${
+        i.route_mapped === false
+          ? '<span class="sub" style="display:block;color:var(--ink-3)">unmapped code</span>' : ''}</td>
+      <td><span class="sev ${WHO_TONE[i.who] || 'INFO'}"
+            title="${esc(i.clears_when || '')}">${esc(i.who_label || i.who || '')}</span></td>
+      <td style="text-align:right">${i.occurrences}</td>
+      <td>${esc(i.object_type)}</td>
+    </tr>
+    <tr class="rowdetail" data-for="${n}" style="display:none">
+      <td colspan="${SCT_COLS.length}" style="font-family:inherit">
+        <b>${esc(i.detail || i.title)}</b>
+        ${i.recommendation
+          ? `<div style="margin-top:6px;color:var(--ink-2)"><span style="color:var(--ink-3)">
+             SCT recommends:</span> ${esc(i.recommendation)}</div>` : ''}
+        <div style="margin-top:6px;color:var(--ink-3);font-size:12.5px">
+          Complexity <b>${esc(i.complexity)}</b> — ${esc(i.complexity_meaning || '')}.
+          This is SCT's grading of the work involved, not a severity.</div>
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+          <span style="color:var(--ink-3)">Fix where:</span>
+          <b>${esc(i.where_label || '')}</b> · <b>${esc(i.who_label || '')}</b>
+          <div style="margin-top:4px;color:var(--ink-2)">${esc(i.route_why || '')}</div>
+          ${i.clears_when
+            ? `<div style="margin-top:4px"><span style="color:var(--ink-3)">Clears when:</span>
+               ${esc(i.clears_when)}</div>` : ''}
+          ${(i.blocks || []).length
+            ? `<div style="margin-top:4px"><span style="color:var(--ink-3)">Blocks:</span>
+               <span class="mono">${i.blocks.map(esc).join(', ')}</span></div>` : ''}
+        </div>
+        ${i.object_name
+          ? `<div style="margin-top:8px"><span style="color:var(--ink-3)">Object:</span>
+             <span class="mono">${esc(i.owner ? i.owner + '.' : '')}${esc(i.object_name)}</span></div>`
+          : ''}
+      </td>
+    </tr>`).join('');
+
+  $('#sctTable').innerHTML = rows.length
+    ? `<table class="tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+    : `<div class="note info">AWS SCT reported no action items for
+       ${esc(t.label || 'this target')}. On a homogeneous target that is the expected
+       result and is itself the finding; it is not the same as an estate with nothing
+       wrong with it — the 50-rule assessment above covers what SCT does not look at.</div>`;
+
+  $('#sctTable').querySelectorAll('th[data-sort]').forEach(th => th.onclick = () => {
+    const k = th.dataset.sort;
+    sctSort = {key:k, dir: sctSort.key === k ? -sctSort.dir : 1};
+    renderSct();
+  });
+  $('#sctTable').querySelectorAll('tr[data-idx]').forEach(tr => tr.onclick = () => {
+    const d = $('#sctTable').querySelector(`tr.rowdetail[data-for="${tr.dataset.idx}"]`);
+    if (d) d.style.display = d.style.display === 'none' ? '' : 'none';
+  });
+
+  const shown = rows.reduce((a, i) => a + i.occurrences, 0);
+  $('#sctCount').textContent = rows.length
+    ? `${rows.length} action item${rows.length === 1 ? '' : 's'}, ${shown} occurrences` +
+      ' · click a row for SCT’s recommendation, a heading to sort'
+    : '';
+}
 
 /* ---------------- target decision ---------------- */
 $('#btnSize').disabled = true;
@@ -2010,6 +2724,10 @@ function adviceBlock(e){
 
 /* ---------------- convert PL/SQL (Phase 4b) ---------------- */
 $('#btnConvert').disabled = true;
+$('#btnSchemaDdl').disabled = true;
+// Phase 4d reads mapper files, not the database, so it needs no run and no
+// assessment to arm. That independence is the phase's whole point.
+$('#btnAppsql').disabled = false;
 let CONV = null;
 
 // Plain words. A client reads "Compiled — needs your approval", not READY_FOR_APPROVAL.
@@ -2031,6 +2749,54 @@ const CONV_HINT = {
 };
 const CONV_SOURCE = {rule:'deterministic rule', static_fixture:'static fixture — not model output',
                      bedrock:'Bedrock model'};
+// ---------------------------------------------------------------- Phase 4d
+//
+// Labels say what was *established*, never more. CONVERTED_UNPROVEN exists
+// because "ready" about a statement nothing ran against an engine is a false
+// claim -- the same distinction Phase 3 makes between converted and compiled
+// stored code.
+const APPSQL_LABEL = {
+  APPROVED:              'Approved',
+  READY_FOR_APPROVAL:    'Proven — needs your approval',
+  CONVERTED_UNPROVEN:    'Rewritten, not yet proven',
+  BLOCKED:               'Waiting on a target',
+  REJECTED:              'Refused by a gate',
+  NEEDS_MODEL_TIER:      'Needs the model tier',
+  MANUAL:                'Needs a person',
+};
+const APPSQL_HINT = {
+  APPROVED:           'every gate passed and a person signed it',
+  READY_FOR_APPROVAL: 'the target parsed it and it returned the same rows; a person must approve',
+  CONVERTED_UNPROVEN: 'the rewrite is complete and accounted for, but nothing ran it against an engine',
+  BLOCKED:            'the parse and result gates need a PostgreSQL target',
+  REJECTED:           'a gate found a problem, shown on the statement',
+  NEEDS_MODEL_TIER:   'outside the deterministic rules; turn on the model tier',
+  MANUAL:             'no correct automatic rewrite exists — the reason is on the statement',
+};
+const APPSQL_TONE = {
+  APPROVED:'LOW', READY_FOR_APPROVAL:'LOW', CONVERTED_UNPROVEN:'MEDIUM',
+  BLOCKED:'MEDIUM', REJECTED:'CRITICAL', NEEDS_MODEL_TIER:'HIGH', MANUAL:'HIGH',
+};
+const APPSQL_ACTION = {
+  APPROVED:           'Nothing further',
+  READY_FOR_APPROVAL: 'Approve, then edit the mapper',
+  CONVERTED_UNPROVEN: 'Register a target, re-run',
+  BLOCKED:            'Register a target, re-run',
+  REJECTED:           'Rewrite by hand',
+  NEEDS_MODEL_TIER:   'Turn on the model tier',
+  MANUAL:             'Assign to an engineer',
+};
+// One short word per state for the 78px chip. **Not the full label**: `.sev`
+// is white-space:nowrap, so "needs a person" overflowed the chip. The label
+// stays on the group heading and the chip's tooltip, which have room.
+const APPSQL_CHIP = {
+  APPROVED:'approved', READY_FOR_APPROVAL:'proven', CONVERTED_UNPROVEN:'unproven',
+  BLOCKED:'blocked', REJECTED:'rejected', NEEDS_MODEL_TIER:'model', MANUAL:'a person',
+};
+const APPSQL_ORDER = ['REJECTED','MANUAL','NEEDS_MODEL_TIER','BLOCKED','CONVERTED_UNPROVEN',
+                      'READY_FOR_APPROVAL','APPROVED'];
+const APPSQL_SOURCE = {rule:'deterministic rule', bedrock:'Bedrock model', none:'nothing drafted'};
+
 const CONV_ORDER = ['APPROVED','READY_FOR_APPROVAL','BLOCKED','REJECTED','MODEL_REQUIRED','MANUAL',
                     'EXCLUDED_BROKEN_ON_SOURCE','ABSORBED_INTO_BODY'];
 
@@ -2100,6 +2866,343 @@ $('#btnConvert').onclick = () => {
   es.onerror = () => { es.close(); btn.disabled = false; setStage('convert','active','connection lost'); };
 };
 
+// ---------------------------------------------------------------- Phase 4c
+//
+// Groups are the DDL's own execution order, not alphabetical: the load sits
+// between the tables and the constraints, and that ordering is the phase's
+// main claim. `plan.order` carries it with a reason per step, so the screen
+// reads it rather than restating it.
+let DDL = null;
+
+const DDL_GROUP_TONE = {
+  schema:'INFO', tables:'LOW', primary_unique:'LOW',
+  foreign:'MEDIUM', check:'MEDIUM', indexes:'INFO',
+};
+const NOTE_TONE = {error:'CRITICAL', warn:'HIGH', info:'INFO'};
+
+$('#btnSchemaDdl').onclick = async () => {
+  const btn = $('#btnSchemaDdl');
+  btn.disabled = true;
+  $('#ddlEmpty').style.display = 'none';
+  $('#ddlMeta').textContent = 'generating…';
+  setStage('schemaddl', 'busy', 'generating');
+  try {
+    const r = await fetch('/api/schemaddl', {method:'POST'});
+    const d = await r.json();
+    if (!r.ok) {
+      setStage('schemaddl', 'active', 'failed');
+      $('#ddlMeta').textContent = '';
+      $('#ddlEmpty').style.display = '';
+      $('#ddlEmpty').innerHTML = r.status === 404
+        ? `<div class="note bad" style="margin:0"><b>This server does not have the
+             Phase 4c endpoint.</b> The page reloaded but the server process did not, and
+             Python does not hot-reload. Stop it and start it again:
+             <div class="mono" style="margin-top:8px">.\\.venv\\Scripts\\python.exe -m
+             uvicorn web.server:app --port 8765</div></div>`
+        : `<div class="note bad" style="margin:0">${esc(d.detail || 'the run failed')}</div>`;
+      return;
+    }
+    renderSchemaDdl(d);
+    const c = d.counts || {};
+    const compiled = d.compile && d.compile.ok ? `${d.compile.ran} compiled and rolled back`
+                                               : 'not compiled';
+    setStage('schemaddl', 'done', `${c.tables || 0} tables`);
+    $('#ddlMeta').textContent =
+      `${esc(d.estate)} · ${c.tables || 0} tables · ${compiled} · nothing applied`;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+function renderSchemaDdl(d){
+  DDL = d;
+  $('#ddlResult').style.display = '';
+  $('#ddlEmpty').style.display = 'none';
+
+  const c = d.counts || {};
+  $('#ddlTiles').innerHTML = [
+    ['Tables', c.tables ?? 0, 'columns only, so the load has somewhere to go'],
+    ['Keys', (c.primary_unique ?? 0) + (c.foreign ?? 0),
+     `${c.primary_unique ?? 0} primary/unique · ${c.foreign ?? 0} foreign`],
+    ['Indexes', c.indexes ?? 0, 'built after the load, never during it'],
+    ['Needs a reviewer', (c.notes_error ?? 0) + (c.notes_warn ?? 0),
+     `${c.notes_error ?? 0} error · ${c.notes_warn ?? 0} warning`],
+  ].map(([k, v, h]) => `<div class="tile"><div class="k">${esc(k)}</div>
+      <div class="v">${fmt(v)}</div><div class="h">${esc(h)}</div></div>`).join('');
+
+  // The compile is the phase's evidence. Said before the statements, and it
+  // never reads as a pass when it did not run.
+  const cm = d.compile || {};
+  let box;
+  if (cm.ok === true) {
+    box = `<div class="note info" style="font-size:13px"><b>${cm.ran} statement(s) executed on
+      PostgreSQL and rolled back.</b> Nothing remains on the target — the DDL is proven to
+      execute and the database is exactly as it was.</div>`;
+  } else if (cm.ok === null || cm.not_run_because) {
+    box = `<div class="note warn" style="font-size:13px"><b>The compile did not run.</b>
+      ${esc(cm.not_run_because || 'no PostgreSQL target is registered')}, so this DDL is
+      generated but unproven. Register a target on <b>Convert PL/SQL</b> and run again.</div>`;
+  } else {
+    box = `<div class="note bad" style="font-size:13px"><b>${cm.failed} statement(s) failed on
+      PostgreSQL.</b> ${(cm.failures || []).slice(0, 3).map(f =>
+        `<div class="mono" style="margin-top:6px;font-size:12px">${esc(f.error || '')}</div>`)
+        .join('')}</div>`;
+  }
+  $('#ddlNotesBox').innerHTML = box;
+
+  // The execution order, with the reason for each step.
+  $('#ddlOrder').innerHTML = (d.order || []).map(([key, why], i) => {
+    const n = (d.counts || {})[key];
+    const load = key === 'primary_unique'
+      ? `<div class="mono" style="font-size:12px;color:var(--accent);margin:6px 0 6px 26px">
+           ↑ THE DATA LOAD happens here</div>` : '';
+    return `${load}<div style="display:flex;gap:10px;align-items:baseline;margin-top:4px">
+      <span class="mono" style="color:var(--ink-3);font-size:12px">${i + 1}</span>
+      <span style="font-size:13px"><b>${esc(key.replace(/_/g, '/'))}</b>${
+        n ? ` <span style="color:var(--ink-3)">· ${n}</span>` : ''}
+        <div style="color:var(--ink-2);font-size:12.5px">${esc(why)}</div></span></div>`;
+  }).join('');
+
+  // Statements, grouped in execution order. Each group's rows are the SQL
+  // itself -- there is no per-statement metadata to tabulate, so the row is
+  // the object name and the body is the statement.
+  const GROUPS = (d.order || []).map(([k]) => k).filter(k => k !== 'schema');
+  $('#ddlGroups').innerHTML = [
+    `<div class="mt-s"><div class="eyebrow">schema</div>
+      <pre class="mono" style="white-space:pre-wrap;margin:6px 0 0;font-size:12.5px">${
+        esc(d.schema || '')}</pre></div>`,
+    ...GROUPS.filter(k => (d[k] || []).length).map(k => {
+      const items = d[k];
+      const tone = DDL_GROUP_TONE[k] || 'INFO';
+      return `<div class="mt-s"><div class="eyebrow">${esc(k.replace(/_/g, ' / '))}
+        <span style="color:var(--ink-3);font-weight:400"> — ${items.length}</span></div>
+        <div class="acc">${items.map(sql => {
+          // First identifier after CREATE/ALTER, for the row label.
+          const m = /(?:CREATE\s+(?:TABLE|INDEX|UNIQUE\s+INDEX)|ALTER\s+TABLE)\s+([\w.]+)/i
+            .exec(sql);
+          const name = m ? m[1] : (sql.split(/\s+/).slice(0, 3).join(' '));
+          const kind = /^\s*ALTER/i.test(sql) ? 'alter' : 'create';
+          return `<details>
+            <summary class="sctgrid">
+              <span class="sev ${tone}">${esc(kind)}</span>
+              <span class="mono">${esc(k === 'foreign' ? 'fk' : k === 'check' ? 'chk'
+                : k === 'indexes' ? 'idx' : k === 'primary_unique' ? 'key' : 'tbl')}</span>
+              <span class="mono">${esc(name)}</span>
+              <span style="color:var(--ink-3);font-size:12px">${sql.split('\n').length} line${
+                sql.split('\n').length === 1 ? '' : 's'}</span>
+            </summary>
+            <pre class="mono" style="white-space:pre-wrap;margin:0;padding:10px 14px;
+              font-size:12.5px">${esc(sql)}</pre></details>`;
+        }).join('')}</div></div>`;
+    })].join('');
+
+  // Notes, worst first. These are the things that change on the target and
+  // that a person has to accept -- a renamed reserved word, an untranslated
+  // check, a type mapping.
+  const notes = [...(d.notes || [])].sort(
+    (a, b) => ({error:0, warn:1, info:2}[a.severity] ?? 3)
+            - ({error:0, warn:1, info:2}[b.severity] ?? 3));
+  const byKind = {};
+  for (const n of notes) (byKind[n.kind] ||= []).push(n);
+  $('#ddlNoteList').innerHTML = Object.entries(byKind).map(([kind, list]) => {
+    const worst = list[0].severity;
+    return `<div class="mt-s"><div class="eyebrow">${esc(kind.replace(/_/g, ' '))}
+      <span style="color:var(--ink-3);font-weight:400"> — ${list.length}</span></div>
+      <div class="acc">${list.map(n => `<details>
+        <summary class="sctgrid">
+          <span class="sev ${NOTE_TONE[n.severity] || 'INFO'}">${esc(n.severity)}</span>
+          <span class="mono">${esc(kind === 'type_mapping' ? 'type' : kind.slice(0, 8))}</span>
+          <span class="mono">${esc(n.subject)}</span>
+          <span></span>
+        </summary>
+        <div style="padding:10px 14px;font-size:12.5px;color:var(--ink-2)">${
+          esc(n.detail)}</div></details>`).join('')}</div></div>`;
+  }).join('');
+}
+
+// ---------------------------------------------------------------- Phase 4d
+$('#btnAppsql').onclick = async () => {
+  const btn = $('#btnAppsql');
+  btn.disabled = true;
+  $('#appsqlEmpty').style.display = 'none';
+  $('#appsqlMeta').textContent = 'extracting…';
+  setStage('appsql', 'busy', 'extracting');
+  try {
+    const r = await fetch('/api/appsql', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: $('#appsqlRoot').value.trim(),
+                            model: $('#appsqlModel').checked})});
+    const d = await r.json();
+    if (!r.ok) {
+      setStage('appsql', 'active', 'failed');
+      $('#appsqlMeta').textContent = '';
+      $('#appsqlEmpty').style.display = '';
+      // A bare 404 here almost always means the server process predates this
+      // endpoint: the browser reloaded index.html but Python does not
+      // hot-reload, so the page shows a panel the server has never heard of.
+      // Saying "Not Found" and stopping sent a reader hunting for a bug in the
+      // phase. Naming the actual cause is the whole difference.
+      $('#appsqlEmpty').innerHTML = r.status === 404
+        ? `<div class="note bad" style="margin:0"><b>This server does not have the
+             Phase 4d endpoint.</b> The page was reloaded but the server process was
+             not, and Python does not hot-reload. Stop it and start it again:
+             <div class="mono" style="margin-top:8px">.\\.venv\\Scripts\\python.exe -m
+             uvicorn web.server:app --port 8765</div></div>`
+        : `<div class="note bad" style="margin:0">${esc(d.detail || 'the run failed')}</div>`;
+      return;
+    }
+    renderAppsql(d);
+    const proven = (d.totals.READY_FOR_APPROVAL || 0) + (d.totals.APPROVED || 0);
+    setStage('appsql', 'done', `${d.statement_count} statements`);
+    $('#appsqlMeta').textContent =
+      `${d.file_count} file(s) · ${d.statement_count} statements · ` +
+      `${d.pct_statements_deterministic}% converted by rule · ${proven} proven · nothing applied`;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+function renderAppsql(d){
+  APPSQL = d;
+  $('#appsqlResult').style.display = '';
+  $('#appsqlEmpty').style.display = 'none';
+
+  const t = d.totals || {};
+  const manual = t.MANUAL || 0;
+  // The deterministic figure is reported over *statements*, not constructs. A
+  // statement carrying one unhandleable construct is declined whole, so the
+  // construct figure overstates what converts -- 8 of 26 constructs against
+  // 2 of 16 statements on the demo app. Quoting the construct number would
+  // flatter the tooling.
+  $('#appsqlTiles').innerHTML = [
+    ['Statements', d.statement_count, `in ${d.file_count} mapper file(s)`],
+    ['By rule', d.by_source.rule || 0,
+     `${d.pct_statements_deterministic}% of statements, deterministic`],
+    ['AI-drafted', d.by_source.bedrock || 0,
+     d.model_mode === 'live' ? 'gated, never auto-applied' : 'the model tier is off'],
+    ['Need a person', manual, 'no correct automatic rewrite'],
+  ].map(([k, v, h]) => `<div class="tile"><div class="k">${esc(k)}</div>
+      <div class="v">${fmt(v)}</div><div class="h">${esc(h)}</div></div>`).join('');
+
+  // What the run could not establish, said before the results rather than
+  // buried under them.
+  const notes = [];
+  if (!d.target_configured) notes.push(
+    `<b>No PostgreSQL target.</b> The parse and result gates reported <b>blocked</b>, so no
+     rewrite here is proven. Register a target on <b>Convert PL/SQL</b> and run again.`);
+  if (!d.results_compared) notes.push(
+    `<b>No result comparison ran.</b> Nothing has confirmed that a rewritten statement returns
+     the same rows as the Oracle original — the only check that catches a
+     <span class="mono">ROWNUM</span> rewrite which parses and returns a different page.`);
+  if (d.model_mode !== 'live' && (t.NEEDS_MODEL_TIER || 0))
+    notes.push(`<b>${t.NEEDS_MODEL_TIER} statements need judgement</b> and the model tier is off,
+                so nothing was drafted for them.`);
+  if (d.unrenderable_count) notes.push(
+    `<b>${d.unrenderable_count} statement(s) cannot be sent to an engine at all</b> — they carry
+     <span class="mono">\${…}</span> interpolation, so a column name is unknown until runtime.
+     Parsing a guessed rendering would validate a query the application never sends.`);
+  $('#appsqlNotes').innerHTML = notes.length
+    ? `<div class="note warn" style="font-size:13px">${notes.join('<br><br>')}</div>` : '';
+
+  const byStatus = {};
+  for (const e of d.entries || []) (byStatus[e.status] ||= []).push(e);
+
+  const head = `<div class="sctrow" style="padding:4px 14px;font-size:11px;
+      letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)">
+      <span>state</span><span>kind</span><span>statement</span>
+      <span class="obj">constructs</span><span class="act">what to do</span></div>`;
+
+  $('#appsqlGroups').innerHTML = APPSQL_ORDER.filter(st => byStatus[st]).map(st => {
+    const items = byStatus[st];
+    const tone = APPSQL_TONE[st] || 'INFO';
+    return `<div class="mt-s"><div class="eyebrow">${esc(APPSQL_LABEL[st] || st)}
+      <span style="color:var(--ink-3);font-weight:400"> — ${items.length} ·
+        ${esc(APPSQL_HINT[st] || '')}</span></div>
+      ${head}
+      <div class="acc">${items.map(e => `
+        <details>
+          <summary class="sctrow">
+            <span class="sev ${tone}" title="${esc(APPSQL_LABEL[e.status]
+              || e.status)}">${esc(APPSQL_CHIP[e.status] || e.status.toLowerCase())}</span>
+            <span class="mono">${esc(e.kind)}</span>
+            <span>${esc(e.statement_id)}
+              ${e.dynamic ? `<span style="color:var(--ink-3);font-size:12px"
+                title="Its text depends on runtime parameters, so there is a family of statements rather than one."> · dynamic</span>` : ''}
+              ${e.interpolations.length ? `<span style="color:var(--ink-3);font-size:12px"
+                title="A \${} site: a column or table name supplied at runtime, and an injection surface."> · interpolated</span>` : ''}
+            </span>
+            <span class="mono obj" title="${esc(e.constructs.map(x => x.id).join(', '))}">${
+              esc(e.constructs.length === 1 ? e.constructs[0].id
+                  : e.constructs.length + ' constructs')}</span>
+            <span class="act">${esc(APPSQL_ACTION[e.status] || '')}</span>
+          </summary>
+          <div style="padding:12px 14px 14px">
+            <div style="font-size:14px"><b>${esc(APPSQL_ACTION[e.status] || '')}</b>
+              <span style="color:var(--ink-3);font-size:12.5px">
+                · ${esc(e.file)} · ${esc(APPSQL_SOURCE[e.source || 'none'] || e.source)}${
+                e.model_id ? ' · ' + esc(e.model_id) : ''}</span></div>
+
+            ${e.reason ? `<div class="note info mt-s" style="font-size:12.5px">${
+              esc(e.reason)}</div>` : ''}
+
+            <div class="split2 mt-s" style="gap:12px">
+              <div>
+                <div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+                     color:var(--ink-3)">Oracle, as the application sends it</div>
+                <pre class="mono" style="white-space:pre-wrap;margin:4px 0 0;font-size:12px">${
+                  esc(e.oracle_sql)}</pre></div>
+              <div>
+                <div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+                     color:var(--ink-3)">PostgreSQL, proposed</div>
+                ${e.postgresql_sql
+                  ? `<pre class="mono" style="white-space:pre-wrap;margin:4px 0 0;font-size:12px">${
+                      esc(e.postgresql_sql)}</pre>`
+                  : `<div style="margin-top:4px;font-size:12.5px;color:var(--ink-3)">
+                       Nothing was drafted.</div>`}</div>
+            </div>
+
+            ${e.caveat ? `<div class="note warn mt-s" style="font-size:12.5px">
+              <b>Check before approving:</b> ${esc(e.caveat)}</div>` : ''}
+
+            ${e.manual ? `<div class="note warn mt-s" style="font-size:12.5px">
+              <b>${esc(e.manual.construct)} — why no rewrite exists</b>
+              <div style="margin-top:6px">${esc(e.manual.why_no_draft)}</div></div>` : ''}
+
+            <div class="mt-s">
+              <div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+                   color:var(--ink-3)">What had to change, and why it is not a text swap</div>
+              <div class="acc" style="margin-top:6px">${e.constructs.map(x => `
+                <details><summary class="sctgrid">
+                  <span class="sev ${x.tier === 'manual' ? 'HIGH'
+                    : x.tier === 'model' ? 'MEDIUM' : 'LOW'}">${esc(x.tier)}</span>
+                  <span class="mono">${esc(x.id)}</span>
+                  <span>${esc(x.name)} → ${esc(x.postgres)}</span>
+                  <span style="color:var(--ink-3);font-size:12px">×${x.count}</span>
+                </summary>
+                <div style="padding:8px 14px;font-size:12.5px;color:var(--ink-2)">${
+                  esc(x.note)}</div></details>`).join('')}</div>
+            </div>
+
+            ${e.gates && e.gates.length ? `<div class="mt-s">
+              ${e.gates.map(g => `<div class="mono" style="font-size:12px;color:${
+                g.status === 'fail' ? 'var(--bad)' : 'var(--ink-3)'}">
+                ${g.status === 'pass' ? '[ok]' : g.status === 'fail' ? '[XX]' : '[--]'}
+                ${esc(g.gate)} — ${esc(g.detail)}</div>`).join('')}
+              </div>` : ''}
+
+            ${e.bind_params.length || e.interpolations.length ? `
+              <div class="mt-s" style="font-size:12.5px">
+                ${e.bind_params.length ? `<span style="color:var(--ink-3)">Bind parameters:</span>
+                  <span class="mono">${e.bind_params.map(esc).join(', ')}</span>` : ''}
+                ${e.interpolations.length ? `<span style="color:var(--ink-3);margin-left:${
+                  e.bind_params.length ? '14px' : '0'}">Interpolated (injection surface):</span>
+                  <span class="mono">${e.interpolations.map(x => '${'+esc(x)+'}').join(', ')}</span>` : ''}
+              </div>` : ''}
+          </div>
+        </details>`).join('')}</div></div>`;
+  }).join('');
+}
+
 async function renderConversion(){
   const p = await (await fetch('/api/conversion')).json();
   CONV = p;
@@ -2114,15 +3217,140 @@ async function renderConversion(){
     notes.push(`<div class="note info">Every convertible object on this estate was handled by the deterministic rules. The model tier had nothing to do — that is the result, not a gap.</div>`);
   $('#convNotes').innerHTML = notes.join('');
 
-  $('#convList').innerHTML = p.entries.map(convCard).join('');
+  // Grouped into a table rather than one flat list of cards. 90 objects as
+  // undifferentiated cards read as a wall: a reader could not see at a glance
+  // which ones were their problem. The five-column row is the same one the SCT
+  // panels and Phase 4d use, so a reader moving between the screens is not
+  // learning a second layout.
+  const byStatus = {};
+  for (const e of p.entries) (byStatus[e.status] ||= []).push(e);
+
+  const head = `<div class="sctrow" style="padding:4px 14px;font-size:11px;
+      letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)">
+      <span>state</span><span>type</span><span>object</span>
+      <span class="obj">where it came from</span><span class="act">what to do</span></div>`;
+
+  $('#convList').innerHTML = CONV_ORDER.filter(st => byStatus[st]).map(st => {
+    const items = byStatus[st];
+    const tone = CONV_TONE[st] || 'INFO';
+    return `<div class="mt-s"><div class="eyebrow">${esc(CONV_LABEL[st] || st)}
+      <span style="color:var(--ink-3);font-weight:400"> — ${items.length} ·
+        ${esc(CONV_HINT[st] || '')}</span></div>
+      ${head}
+      <div class="acc">${items.map(e => convRow(e, tone)).join('')}</div></div>`;
+  }).join('');
   $('#convResult').style.display = '';
 }
 
-// One object: what it was, what it became, what changed and why, the DDL, the gates.
-function convCard(e){
+// Severity tone per outcome, so the eye lands on the work first. Keyed to the
+// same palette the SCT panels use.
+const CONV_TONE = {
+  APPROVED:'LOW', READY_FOR_APPROVAL:'LOW', BLOCKED:'MEDIUM', REJECTED:'CRITICAL',
+  MODEL_REQUIRED:'HIGH', MANUAL:'HIGH', EXCLUDED_BROKEN_ON_SOURCE:'MEDIUM',
+  ABSORBED_INTO_BODY:'INFO',
+};
+
+// The chip word for the state column, which is 78px wide. **Not the full
+// label**: `.sev` is `white-space:nowrap`, so putting "Compiled — needs your
+// approval" here overflowed the chip across the type and object columns and
+// made the whole table unreadable. The SCT panels have always used one short
+// word for the same reason; the full label stays on the group heading, where
+// there is room for it, and on the chip's tooltip.
+const CONV_CHIP = {
+  APPROVED:                 'approved',
+  READY_FOR_APPROVAL:       'compiled',
+  BLOCKED:                  'blocked',
+  REJECTED:                 'rejected',
+  MODEL_REQUIRED:           'model',
+  MANUAL:                   'a person',
+  EXCLUDED_BROKEN_ON_SOURCE:'broken',
+  ABSORBED_INTO_BODY:       'absorbed',
+};
+
+// What to do next. A status names a state; this names the task, which is what a
+// reader is actually looking for.
+const CONV_ACTION = {
+  APPROVED:                 'Nothing further',
+  READY_FOR_APPROVAL:       'Approve it, then apply',
+  BLOCKED:                  'Register a PostgreSQL target',
+  REJECTED:                 'Rewrite by hand',
+  MODEL_REQUIRED:           'Turn on the model tier',
+  MANUAL:                   'Assign to an engineer',
+  EXCLUDED_BROKEN_ON_SOURCE:'Fix it on Oracle first',
+  ABSORBED_INTO_BODY:       'Nothing to do',
+};
+
+// One row, collapsed. The detail below is `convCard`'s body, unchanged: the
+// table replaces how objects are *found*, not what they say once opened.
+function convRow(e, tone){
   const conv = e.conversion;
-  const label = CONV_LABEL[e.status] || e.status;
-  const src = e.source ? CONV_SOURCE[e.source] || e.source : (e.route || '').toLowerCase().replace(/_/g,' ');
+  const src = e.source ? CONV_SOURCE[e.source] || e.source
+                       : (e.route || '').toLowerCase().replace(/_/g, ' ');
+  const found = (e.constructs_found || []).length;
+  return `<details>
+    <summary class="sctrow">
+      <span class="sev ${tone}" title="${esc(CONV_LABEL[e.status] || e.status)}">${
+        esc(CONV_CHIP[e.status] || e.status.toLowerCase())}</span>
+      <span class="mono">${esc(e.object_type.toLowerCase())}</span>
+      <span>${esc(e.owner)}.${esc(e.object_name)}
+        ${found ? `<span style="color:var(--ink-3);font-size:12px"
+          title="Oracle constructs the classifier found in this object."> · ${found} construct${
+          found === 1 ? '' : 's'}</span>` : ''}
+        ${conv && conv.caveat ? `<span style="color:var(--ink-3);font-size:12px"
+          title="${esc(conv.caveat)}"> · caveat</span>` : ''}
+      </span>
+      <span class="mono obj" title="${esc(src)}">${esc(src)}</span>
+      <span class="act">${esc(CONV_ACTION[e.status] || '')}</span>
+    </summary>
+    ${convBody(e)}</details>`;
+}
+
+// One object: what it was, what it became, what changed and why, the DDL, the gates.
+// **What a person must confirm before a conversion is applied.**
+// 4b already proves a great deal -- the DDL compiled on a real PostgreSQL
+// inside a rolled-back transaction -- but it said none of that on screen, so a
+// reviewer could not tell what was already checked and what was still theirs.
+// Built from the object's own state rather than written per object: what needs
+// human eyes follows from which gates passed and who wrote the conversion.
+function convVerify(e){
+  const conv = e.conversion;
+  const items = [];
+  const gates = e.gates || [];
+  const passed = g => (gates.find(x => x.gate === g) || {}).status === 'pass';
+
+  if (conv && e.source === 'bedrock') {
+    items.push('A model wrote this. Read it against the Oracle source above — '
+      + 'the compile proves it parses, not that it means the same thing.');
+  }
+  if (passed('compile')) {
+    items.push('Already proven: the DDL was created on a real PostgreSQL and '
+      + 'rolled back. It compiles. Behaviour is still yours to confirm.');
+  } else if (gates.length) {
+    items.push('Not compile-proven yet — see the gates below before trusting it.');
+  }
+  (conv ? (conv.constructs || []) : [])
+    .filter(c => c.handling !== 'translated')
+    .forEach(c => items.push('Left for a person: '
+      + ((e.constructs_found || []).find(f => f.id === c.oracle) || {}).name
+      + (c.note ? ' — ' + c.note : '')));
+  if (conv && conv.confidence != null && conv.confidence < 0.85) {
+    items.push('The model reported confidence ' + conv.confidence
+      + ' — lower than its usual, so read this one closely.');
+  }
+  if (!conv) {
+    items.push('No conversion was produced, so there is nothing to review — '
+      + 'this object is written by a person.');
+  }
+  items.push('Nothing here has been applied to any target. Approval is recorded '
+    + 'against a named person in Phase 4b apply, not in this screen.');
+  return items;
+}
+
+// The detail a row opens onto: why, the constructs, what changed, the DDL, the
+// gates. Split out of `convCard` when the list became a table -- the body is
+// the same either way, and duplicating it is how the two drift apart.
+function convBody(e){
+  const conv = e.conversion;
   const names = Object.fromEntries((e.constructs_found || []).map(c => [c.id, c]));
   const nameOf = id => (names[id] || {}).name || (id === 'AUTHID_DEFINER' ? 'definer-rights execution (Oracle default)' : id);
   const changes = conv ? (conv.constructs || []).map(c => {
@@ -2133,10 +3361,9 @@ function convCard(e){
   }).join('') : '';
   const found = (e.constructs_found || []).map(c =>
     `<span class="chip" style="cursor:default" title="${esc(c.note || '')}">${esc(c.name)} · ${esc(c.tier)}</span>`).join('');
-  return `<details class="item"><summary>
-      <span class="title">${esc(e.owner)}.${esc(e.object_name)}<span class="sub">${esc(e.object_type.toLowerCase())} · ${esc(src)}${conv && conv.creates ? ' · creates ' + esc(conv.creates.join(', ')) : ''}</span></span>
-      <span></span><span class="count">${esc(label)}</span></summary>
-    <div class="body">
+  return `<div class="body" style="padding:12px 14px 14px">
+      ${conv && conv.creates ? `<div style="font-size:12.5px;color:var(--ink-3);
+        margin-bottom:8px">Creates <span class="mono">${esc(conv.creates.join(', '))}</span></div>` : ''}
       ${conv && conv.explain ? `<p class="why">${esc(conv.explain)}</p>` : ''}
       ${!conv && e.reason ? `<p class="why">${esc(e.reason)}</p>` : ''}
       ${conv && conv.caveat ? `<p class="why"><b>Check this.</b> ${esc(conv.caveat)}</p>` : ''}
@@ -2145,9 +3372,386 @@ function convCard(e){
       ${conv ? `<div class="eyebrow" style="margin:14px 0 6px">PostgreSQL</div>
         <div class="tblwrap"><table><tbody><tr>
           <td style="white-space:pre-wrap;max-width:none">${esc(conv.ddl)}</td></tr></tbody></table></div>` : ''}
+      <div class="note warn" style="margin-top:14px;font-size:12.5px">
+        <b>Before this is applied, a person confirms</b>
+        <ul style="margin:6px 0 0;padding-left:18px;line-height:1.65">${
+          convVerify(e).map(v => `<li>${esc(v)}</li>`).join('')}</ul></div>
       ${e.gates && e.gates.length ? `<div class="eyebrow" style="margin:14px 0 6px">Gates</div>
         <div class="checks">${e.gates.map(gateRow).join('')}</div>` : ''}
-    </div></details>`;
+    </div>`;
+}
+
+/* ---------------- Phase 4 over AWS SCT's action items ----------------
+   AI drafts what can be drafted. Where a fix belongs and who may make it comes
+   from sct/route.py -- a reviewed table, not the model -- and a drafted
+   statement is gated against the engine its route names. The Oracle allow-list
+   is never widened to admit target DDL. */
+let SCTREM = null;
+
+// Tone plus a short label. The raw status constants are what the record
+// carries and what an operator greps for, but as chips they are unreadable and
+// they set the column width -- HUMAN_AUTHORED_REQUIRED is 23 characters of
+// shouting for "a person writes it". The full constant stays in the tooltip.
+const SCT_STATUS = {
+  READY_TO_APPLY:          ['LOW',      'ready'],
+  AUTO_APPLY:              ['LOW',      'ready'],
+  ADVICE_DRAFTED:          ['MEDIUM',   'advice'],
+  BLOCKED:                 ['MEDIUM',   'blocked'],
+  HUMAN_AUTHORED_REQUIRED: ['HIGH',     'a person'],
+  DECISION_REQUIRED:       ['HIGH',     'decide'],
+  REJECTED:                ['CRITICAL', 'rejected'],
+};
+const sctStatus = st => SCT_STATUS[st] || ['INFO', String(st || '').toLowerCase()];
+
+// **What to do next.** A status names a state; this names the task, which is
+// what a reader is actually looking for. Keyed by status because the action
+// follows from how far the item got through the gates, not from the finding.
+const SCT_ACTION = {
+  READY_TO_APPLY:          'Apply it — every gate passed',
+  AUTO_APPLY:              'Apply it — every gate passed',
+  BLOCKED:                 'Name an approver, then apply',
+  REJECTED:                'Rewrite by hand — a gate refused the draft',
+  ADVICE_DRAFTED:          'Read the advice and act on the source',
+  HUMAN_AUTHORED_REQUIRED: 'Assign to an engineer',
+  DECISION_REQUIRED:       'Decide the approach first',
+};
+function sctAction(e){
+  // An item whose every occurrence is an Oracle-generated object is not work.
+  // Telling someone to "assign to an engineer" for DR$ and AQ$ tables is how a
+  // plan gets padded with tasks nobody can do.
+  if (e.all_internal) return 'Nothing to do — Oracle internals';
+  return SCT_ACTION[e.status] || 'Review it';
+}
+
+// What became of a drafted statement, rather than "AI-drafted, gated" on every
+// row regardless of outcome.
+function sctProvenance(e){
+  if (e.generated_by === 'template') return 'deterministic';
+  if (e.generated_by === 'bedrock')  return e.sql ? 'AI-drafted' : 'AI advice';
+  if (e.who === 'person')            return 'human only';
+  return 'not drafted';
+}
+
+$('#btnSctRemediate').disabled = true;
+$('#btnSctRemediate').onclick = () => {
+  const btn = $('#btnSctRemediate');
+  $('#sctRemEmpty').style.display = 'none';
+  $('#sctRemResult').style.display = 'none';
+  $('#sctRemLive').style.display = '';
+  $('#sctRemTicker').innerHTML = '';
+  setStage('remediate', 'busy', 'drafting');
+
+  const target = $('#sctTarget') ? $('#sctTarget').value : 'rds-postgresql';
+  // **A placeholder is not a value.** `you@example.com` was the input's
+  // placeholder, so the row read "hold approval as you@example.com" while
+  // sending an empty approver -- and every target-side fix then blocked on the
+  // approval gate with three gates already passed. Refuse to run rather than
+  // silently approving as nobody.
+  const wantApproval = $('#sctRemApprove').checked;
+  const approver = wantApproval ? ($('#sctRemApprover').value || '').trim() : '';
+  if (wantApproval && !approver) {
+    $('#sctRemApprover').focus();
+    $('#sctRemMeta').textContent = 'type the approver’s name or email — approval is recorded against a person';
+    return;
+  }
+  btn.disabled = true;
+  const qs = `?target=${encodeURIComponent(target)}&approve=${encodeURIComponent(approver)}`;
+  const es = new EventSource('/api/sct/remediate' + qs);
+  let running = null;
+
+  es.onmessage = async ev => {
+    const d = JSON.parse(ev.data);
+    if (d.event === 'stage') {
+      $('#sctRemTicker').insertAdjacentHTML('beforeend',
+        `<div class="tick done"><span class="st"></span><span class="nm">${esc(d.stage)}</span>
+         <span class="meta">${esc(d.detail)}</span></div>`);
+    } else if (d.event === 'item') {
+      if (running) running.className = 'tick done';
+      const el = document.createElement('div');
+      el.className = 'tick run';
+      el.innerHTML = `<span class="st"></span><span class="nm">${esc(d.issue_code)}</span>
+        <span class="meta">${esc(d.where)} · ${esc(d.title)}</span>`;
+      $('#sctRemTicker').appendChild(el);
+      el.scrollIntoView({block: 'nearest'});
+      running = el;
+      setStage('remediate', 'busy', `item ${d.index} of ${d.total}`);
+    } else if (d.event === 'item_done' && running) {
+      // Rejected is not a failure of the phase -- it is a gate doing its job,
+      // and the live run proved it catching Oracle syntax aimed at PostgreSQL.
+      running.className = d.status === 'REJECTED' ? 'tick err' : 'tick done';
+      running.querySelector('.meta').textContent =
+        `${d.status}${d.generated_by ? ' · ' + d.generated_by : ''}`;
+    } else if (d.event === 'complete') {
+      es.close();
+      if (running) running.className = 'tick done';
+      setStage('remediate', 'done',
+        `${d.items} items · ${d.needs_a_person} need a person`);
+      $('#sctRemMeta').textContent =
+        `${d.items} action items · ${d.ready} ready · ${d.rejected} rejected · ` +
+        `${d.needs_a_person} need a person · model ${d.model_mode}`;
+      await renderSctRemediation();
+      btn.disabled = false;
+    } else if (d.event === 'error') {
+      es.close();
+      setStage('remediate', 'active', 'failed');
+      $('#sctRemLive').insertAdjacentHTML('beforeend',
+        `<div class="note bad mt-s">${esc(d.message)}</div>`);
+      btn.disabled = false;
+    }
+  };
+  es.onerror = () => {
+    es.close(); btn.disabled = false;
+    setStage('remediate', 'active', 'connection lost');
+  };
+};
+
+async function renderSctRemediation(){
+  const r = await fetch('/api/sct/remediation');
+  if (!r.ok) return;
+  SCTREM = await r.json();
+  const t = SCTREM.totals || {};
+  $('#sctRemLive').style.display = 'none';
+  $('#sctRemEmpty').style.display = 'none';
+  $('#sctRemResult').style.display = '';
+
+  $('#sctRemTiles').innerHTML = [
+    ['Action items', t.items ?? 0, 'from AWS SCT'],
+    ['Ready to apply', t.ready ?? 0, 'every gate passed'],
+    ['Rejected', t.rejected ?? 0, 'a gate refused the statement'],
+    ['Need a person', t.needs_a_person ?? 0, 'no statement can be drafted'],
+  ].map(([k, v, h]) => `<div class="tile"><div class="k">${esc(k)}</div>
+      <div class="v">${fmt(v)}</div><div class="h">${esc(h)}</div></div>`).join('');
+
+  // Grouped by where the fix belongs -- the same four groups as the assessment,
+  // so a reader moving between the screens is not learning a second layout.
+  const order = ['source', 'target', 'decision', 'human'];
+  const byWhere = {};
+  for (const e of SCTREM.entries || []) (byWhere[e.where] ||= []).push(e);
+
+  $('#sctRemGroups').innerHTML = order.filter(w => byWhere[w]).map(w => {
+    const items = byWhere[w];
+    const person = items.filter(x => x.who === 'person').length;
+    const ready = items.filter(x => x.status === 'READY_TO_APPLY').length;
+    // A grid with five columns and no header is a puzzle. One header row per
+    // group, matching the row template exactly so the columns line up.
+    const head = `<div class="sctrow" style="padding:4px 14px;font-size:11px;
+        letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)">
+        <span>state</span><span>code</span><span>what SCT found</span>
+        <span class="obj">object</span><span class="act">what to do</span></div>`;
+    return `<div class="mt-s"><div class="eyebrow">${esc(items[0].where_label)}
+      <span style="color:var(--ink-3);font-weight:400"> — ${items.length}${
+        ready ? ` · ${ready} ready` : ''}${person ? ` · ${person} human-only` : ''}</span></div>
+      ${head}
+      <div class="acc">${items.map(e => {
+        const [tone, label] = sctStatus(e.status);
+        return `
+        <details>
+          <summary class="sctrow">
+            <span class="sev ${tone}" title="${esc(e.status)}">${esc(label)}</span>
+            <span class="mono">${esc(e.issue_code)}</span>
+            <span>${esc(e.title || '')}
+              ${(e.actionable_occurrences ?? e.occurrences) > 1
+                ? `<span style="color:var(--ink-3);font-size:12px"> ×${
+                    e.actionable_occurrences ?? e.occurrences}</span>` : ''}
+              ${e.all_internal
+                ? `<span style="color:var(--ink-3);font-size:12px"
+                     title="Every occurrence is an Oracle-generated object (DR$, AQ$ ...) that does not migrate. SCT reported it; there is nothing for a person to change."> · Oracle internals only</span>`
+                : (e.internal_occurrences
+                    ? `<span style="color:var(--ink-3);font-size:12px"
+                         title="${e.internal_occurrences} further occurrence(s) are Oracle-generated objects that do not migrate."> +${
+                        e.internal_occurrences} internal</span>` : '')}
+            </span>
+            <span class="mono obj"
+                  title="${esc((e.objects || []).join(', '))}">${
+              esc(e.objects && e.objects.length > 1
+                    ? e.objects.length + ' objects'
+                    : (e.object_name || ''))}</span>
+            <span class="act">${esc(sctAction(e))}</span>
+          </summary>
+          <div style="padding:12px 14px 14px">
+            <!-- The action first. The reasoning is context and used to sit
+                 above the answer, which is why the row read as an explanation
+                 rather than a task. -->
+            <div style="font-size:14px"><b>${esc(sctAction(e))}</b>
+              <span style="color:var(--ink-3);font-size:12.5px">
+                · ${esc(e.where_label || '')} · ${esc(sctProvenance(e))}${
+                e.model_id ? ' · ' + esc(e.model_id) : ''}</span></div>
+
+            ${e.sql ? `<div style="margin-top:10px">
+              <pre class="mono" style="white-space:pre-wrap;margin:0;font-size:12.5px">${
+                esc(e.sql)}</pre>
+              <details style="margin-top:4px"><summary style="cursor:pointer;
+                       font-size:12px;color:var(--ink-3)">rollback</summary>
+                <pre class="mono" style="white-space:pre-wrap;margin:4px 0 0;font-size:12.5px">${
+                  esc(e.rollback_sql || '')}</pre></details></div>` : ''}
+
+            ${(e.how || []).length ? `<div style="margin-top:12px">
+              <div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+                   color:var(--ink-3)">how to solve it</div>
+              <ol style="margin:6px 0 0;padding-left:20px;font-size:12.5px;
+                  line-height:1.65">${e.how.map(h =>
+                `<li>${esc(h)}</li>`).join('')}</ol></div>` : ''}
+
+            ${(e.verify || []).length ? `<div class="note warn"
+                 style="margin-top:12px;font-size:12.5px">
+              <b>A person must confirm before this is applied</b>
+              <ul style="margin:6px 0 0;padding-left:18px;line-height:1.65">${
+                e.verify.map(v => `<li>${esc(v)}</li>`).join('')}</ul>
+              ${e.caveat ? `<div style="margin-top:8px;padding-top:8px;
+                   border-top:1px solid var(--line)"><b>On this draft:</b>
+                   ${esc(e.caveat)}</div>` : ''}</div>`
+              : (e.caveat ? `<div class="note warn mt-s" style="font-size:12.5px">
+                  <b>Check before approving:</b> ${esc(e.caveat)}</div>` : '')}
+
+            ${(e.objects || []).length ? `<div style="margin-top:10px;font-size:12.5px">
+              <span style="color:var(--ink-3)">Affects:</span>
+              <span class="mono">${e.objects.slice(0, 12).map(esc).join(', ')}${
+                e.objects.length > 12 ? ` +${e.objects.length - 12} more` : ''}</span></div>` : ''}
+
+            <div style="margin-top:10px;font-size:12.5px">
+              <span style="color:var(--ink-3)">Done when:</span> ${esc(e.clears_when || '')}</div>
+
+            ${e.gates && e.gates.length ? `<div style="margin-top:10px">
+              ${e.gates.map(g => `<div class="mono" style="font-size:12px;color:${
+                g.status === 'fail' ? 'var(--bad, #b4232a)' : 'var(--ink-3)'}">
+                ${g.status === 'pass' ? '[ok]' : g.status === 'fail' ? '[XX]' : '[--]'}
+                ${esc(g.gate)}${g.status === 'pass' ? '' : ' — ' + esc(g.detail)}</div>`).join('')}
+              </div>` : ''}
+
+            <!-- SCT's own words and the routing rationale, last: useful, but
+                 not what the reader opened the row for. -->
+            <details style="margin-top:10px">
+              <summary style="cursor:pointer;font-size:12px;color:var(--ink-3)">
+                Why, and what AWS SCT said</summary>
+              <div style="margin-top:6px;font-size:12.5px;color:var(--ink-2)">${
+                esc(e.route_why || '')}</div>
+              ${e.sct_recommendation ? `<div style="margin-top:6px;font-size:12.5px">
+                <span style="color:var(--ink-3)">AWS SCT:</span>
+                ${esc(e.sct_recommendation)}</div>` : ''}
+              ${e.explain ? `<div style="margin-top:6px;font-size:12.5px">
+                <span style="color:var(--ink-3)">The draft's own note:</span>
+                ${esc(e.explain)}</div>` : ''}
+            </details>
+          </div>
+        </details>`;
+      }).join('')}</div></div>`;
+  }).join('');
+}
+
+/* ---------------- Phase 5 over AWS SCT's action items ----------------
+   Splits the halt by where the fix belongs, and reads CDC readiness from the
+   connect preflight rather than from SCT, which never looks at redo. */
+let SCTGATE = null;
+
+$('#btnSctGate').disabled = true;
+$('#btnSctGate').onclick = async () => {
+  const btn = $('#btnSctGate');
+  btn.disabled = true;
+  $('#sctGateEmpty').style.display = 'none';
+  setStage('gate', 'busy', 'evaluating');
+  try {
+    const target = $('#sctTarget') ? $('#sctTarget').value : 'rds-postgresql';
+    const r = await fetch('/api/sct/gate?target=' + encodeURIComponent(target));
+    if (!r.ok) {
+      const detail = await r.json().catch(() => ({}));
+      throw new Error(detail.detail || `HTTP ${r.status}`);
+    }
+    SCTGATE = await r.json();
+    renderSctGate();
+    setStage('gate', SCTGATE.verdict === 'HALT' ? 'active' : 'done',
+      SCTGATE.verdict === 'HALT'
+        ? `${SCTGATE.blockers.length + (SCTGATE.cdc_readiness.status === 'blocked' ? 1 : 0)} blocker(s)`
+        : SCTGATE.verdict.toLowerCase().replace(/_/g, ' '));
+    // Phase 6 opens only when nothing in scope is blocked. A HALT leaves it
+    // shut, which is the whole point of the gate.
+    if (SCTGATE.verdict !== 'HALT' && stageState['provision'] === 'idle') {
+      setStage('provision', 'active');
+    }
+  } catch (e) {
+    $('#sctGateEmpty').style.display = '';
+    $('#sctGateEmpty').querySelector('.empty').textContent = String(e.message || e);
+    setStage('gate', 'active', 'failed');
+  }
+  btn.disabled = false;
+};
+
+function renderSctGate(){
+  if (!SCTGATE) return;
+  const g = SCTGATE;
+  $('#sctGateResult').style.display = '';
+  $('#sctGateMeta').textContent =
+    `${g.action_items} action items · ${g.blockers.length} blocking · target ${g.target || '?'}`;
+
+  const tone = g.verdict === 'HALT' ? 'bad'
+             : g.verdict === 'PROCEED_WITH_WAIVERS' ? 'warn' : 'good';
+  $('#sctGateVerdict').innerHTML = `
+    <div class="status ${tone === 'bad' ? 'bad' : tone === 'warn' ? 'warn' : 'ok'}">
+      <span class="led"></span><b style="font-size:15px">${esc(g.verdict)}</b></div>
+    <p style="margin-top:10px;font-size:13.5px;color:var(--ink-2)">${esc(g.summary)}</p>`;
+
+  $('#sctGateGroups').innerHTML = (g.groups || []).filter(x => x.item_count).map(grp => `
+    <div class="mt-s">
+      <div class="eyebrow" title="${esc(grp.meaning)}">${esc(grp.label)}
+        <span style="color:var(--ink-3);font-weight:400"> — ${grp.item_count} · ${
+          grp.occurrence_count} occurrences${
+          grp.blocking_count ? ` · <b>${grp.blocking_count} blocking</b>` : ''}</span></div>
+      <div class="acc mt-s">${grp.items.map(i => {
+        const halting = (g.blockers || []).some(b => b.issue_code === i.issue_code);
+        const waived = (g.waived || []).some(b => b.issue_code === i.issue_code);
+        const label = halting ? 'HALT' : waived ? 'WAIVED' : 'work';
+        const sev = halting ? 'CRITICAL' : waived ? 'MEDIUM' : 'LOW';
+        return `<details>
+          <summary class="sctgrid">
+            <span class="sev ${sev}">${label}</span>
+            <span class="mono">${esc(i.issue_code)}</span>
+            <span>${esc(i.title || '')}</span>
+            <span style="color:var(--ink-3);font-size:12px">×${i.occurrences}</span>
+          </summary>
+          <div style="padding:10px 14px">
+            <div style="color:var(--ink-2)">${esc(i.why || '')}</div>
+            ${i.blocks_in_scope && i.blocks_in_scope.length
+              ? `<div style="margin-top:8px"><span style="color:var(--ink-3)">Blocks:</span>
+                 <span class="mono">${i.blocks_in_scope.map(esc).join(', ')}</span></div>` : ''}
+            ${i.not_in_scope_because
+              ? `<div class="note info mt-s" style="font-size:12.5px">${
+                   esc(i.not_in_scope_because)}</div>` : ''}
+            <div style="margin-top:6px"><span style="color:var(--ink-3)">Clears when:</span>
+              ${esc(i.clears_when || '')}</div>
+            <div style="margin-top:6px;color:var(--ink-3);font-size:12.5px">
+              ${esc(i.who_label || '')}${i.fix_drafted
+                ? ' · a fix is drafted in the Phase 4 plan' : ''}</div>
+          </div>
+        </details>`;
+      }).join('')}</div>
+    </div>`).join('');
+
+  const c = g.cdc_readiness || {};
+  const cdcTone = c.status === 'blocked' ? 'bad' : c.status === 'clear' ? 'good' : 'info';
+  $('#sctGateCdc').innerHTML = `
+    <div class="note ${cdcTone}" style="font-size:12.5px">
+      <b>${esc((c.status || '').replace(/_/g, ' '))}</b> — ${esc(c.detail || '')}
+      ${c.clears_when ? `<div style="margin-top:6px"><b>Clears when:</b>
+        ${esc(c.clears_when)}</div>` : ''}</div>`;
+
+  $('#sctPhaseList').innerHTML = Object.entries(g.by_phase || {}).map(([phase, st]) => {
+    const cls = st.status === 'blocked' ? 'fail'
+              : st.status === 'not_in_scope' ? 'warn' : 'pass';
+    const mark = st.status === 'blocked' ? '×' : st.status === 'not_in_scope' ? '!' : '✓';
+    return `<div class="check ${cls}">
+      <span class="mark">${mark}</span>
+      <div><div class="name">${esc(phase)}</div>
+        <div class="detail">${esc((st.blocked_by || []).join(', ') || st.why || 'clear')}</div>
+      </div></div>`;
+  }).join('');
+
+  const un = g.unrouted || [];
+  $('#sctUnroutedWrap').style.display = un.length ? '' : 'none';
+  if (un.length) $('#sctUnroutedWrap').innerHTML =
+    `<div class="note warn" style="font-size:12.5px"><b>${un.length} action item${
+      un.length === 1 ? '' : 's'} not in the routing table</b> —
+     ${un.map(i => esc(i.issue_code)).join(', ')}. Treated as work rather than halting on a
+     guess, and routed to a person. Add a row to
+     <span class="mono">sct/route.py</span> once each is understood.</div>`;
 }
 
 /* ---------------- blocker gate ---------------- */
@@ -3100,6 +4704,24 @@ function renderModeNote(){
   el.innerHTML = `<div class="note ok"><b>Full load + CDC.</b> The source is configured for
     replication, so the cutover can wait for CDC to catch up instead of holding a long
     outage.</div>`;
+}
+
+// The "where a conversion comes from" card used to be hardcoded to the static
+// wording, which outlived the blocked account the same way the server-side claim
+// did. The server decides the mode; this only reports it. The static and off
+// wordings keep the "not model output" warning, because in those modes it is true.
+function renderConvGenStatus(mode){
+  const el = $('#convGenStatus');
+  if (!el) return;
+  const copy = {
+    live:   ['ok', 'Rules first, then the <b>model tier</b> where judgement is needed — '
+                   + 'each conversion labelled with what wrote it'],
+    static: ['',   'Rules, then static stand-ins — <b>not model output</b>'],
+    off:    ['',   'Rules only — the model tier is <b>off</b>, anything else goes to a person'],
+  }[mode] || ['warn', 'The model tier could not be determined — <b>treat every '
+             + 'conversion as rule-authored until this says otherwise</b>'];
+  el.className = 'status' + (copy[0] ? ' ' + copy[0] : '');
+  el.innerHTML = `<span class="led"></span><span>${copy[1]}</span>`;
 }
 
 async function refreshModes(){
