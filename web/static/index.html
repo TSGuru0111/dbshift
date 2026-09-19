@@ -79,53 +79,142 @@ button{font:inherit}
 /* Type scale, fixed. 12.5 meta · 13.5 support · 14 body/controls · 15 intro · 22 title.
    Nothing functional below 12px; monospace is for data, not for labels. */
 
-/* ---------- chrome + stage rail ---------- */
-header{background:var(--chrome);color:var(--on-chrome);padding:14px 24px 0}
-.brand{display:flex;align-items:baseline;gap:12px;max-width:var(--shell);margin:0 auto;flex-wrap:wrap}
-.brand h1{font-size:16px;font-weight:600;letter-spacing:-.01em}
-.brand .tag{font-size:13px;color:var(--on-chrome-2)}
-.brand .right{margin-left:auto;display:flex;align-items:center;gap:14px}
-.linkbtn{background:none;border:none;color:var(--on-chrome-2);font-size:13px;cursor:pointer;padding:4px 2px;
-  border-bottom:1px solid transparent;transition:color .15s var(--ease);text-decoration:none}
-.linkbtn:hover{color:var(--on-chrome)}
-.linkbtn[aria-pressed="true"]{color:var(--accent-ink);border-bottom-color:var(--accent-ink)}
+/* ---------- the shell ---------- */
+/* One screen, and only one thing on it scrolls. The app is a fixed grid the
+   height of the viewport; the content pane is the single scroll container.
+   min-height:0 on every grid child is load-bearing, not tidiness: a grid
+   item defaults to min-height:auto and refuses to shrink under its content,
+   so without it the pane never scrolls, the page grows instead, and 400px
+   gains a horizontal overflow. */
+.app{display:grid;grid-template-columns:var(--sidebar) minmax(0,1fr);
+  height:100dvh;overflow:hidden}
 
-.rail{max-width:var(--shell);margin:0 auto;display:flex;gap:0;padding:18px 0 0}
-.stage{flex:1;position:relative;padding:0 12px 16px 0;cursor:default;text-align:left;
-  background:none;border:none;color:inherit;min-width:0}
-.stage:not(:last-child)::after{content:"";position:absolute;top:12px;left:calc(50% + 12px);
-  right:calc(-50% + 24px);height:1px;background:var(--g-navy-3)}
-.stage.done:not(:last-child)::after{background:var(--accent)}
-.stage .dot{width:24px;height:24px;border-radius:50%;border:1.5px solid var(--g-navy-3);
-  background:var(--chrome);display:grid;place-items:center;position:relative;z-index:1;
-  font-family:"IBM Plex Mono",monospace;font-size:12.5px;font-weight:500;color:var(--on-chrome-2);
-  transition:border-color .3s var(--ease),background .3s var(--ease),color .3s var(--ease)}
-.stage.active .dot{border-color:var(--accent);color:var(--on-accent);background:var(--accent)}
-.stage.done .dot{border-color:var(--accent);background:var(--accent);color:var(--on-accent)}
-.stage .label{font-size:13px;font-weight:500;color:var(--on-chrome-2);margin-top:8px;line-height:1.3;
-  transition:color .3s var(--ease)}
-.stage.active .label,.stage.done .label{color:var(--on-chrome)}
-.stage .sub{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--on-chrome-3);
-  margin-top:3px;min-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.stage.active .sub{color:var(--accent-ink)}
+.sidebar{background:var(--chrome);color:var(--on-chrome);min-width:0;min-height:0;
+  display:grid;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden}
+/* The lockup is a wide wordmark (732x359), so it is sized by width and given
+   its own line -- squeezed into a 26px square beside the text it was a smudge. */
+.brandmark{display:grid;gap:9px;padding:16px 14px 13px;
+  border-bottom:1px solid var(--g-navy-3);text-decoration:none;color:inherit;min-width:0}
+.brandmark .ico{width:74px;height:36px;flex:none}
+.brandmark .bt{font-family:Archivo,system-ui,sans-serif;font-size:14px;font-weight:600;
+  letter-spacing:.02em;color:var(--on-chrome-2);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.brandmark .bt b{font-weight:700;color:var(--on-chrome)}
+.sidefoot{padding:11px 14px 13px;border-top:1px solid var(--g-navy-3);
+  display:flex;align-items:center;gap:10px;color:var(--on-chrome-3)}
+/* Wordmarks are wide, service tiles are square, so they are sized separately
+   -- one rule for both left the Oracle lockup filling the sidebar. */
+.sidefoot .ico{width:58px;height:14px;opacity:.9;flex:none}
+.sidefoot .ico.sq{width:18px;height:18px}
+.sidefoot .sep{opacity:.55;font-size:12px}
+
+.workarea{display:grid;grid-template-rows:var(--topbar) minmax(0,1fr);
+  min-width:0;min-height:0;overflow:hidden}
+.topbar{background:var(--chrome);color:var(--on-chrome);display:flex;align-items:center;
+  gap:16px;padding:0 20px;border-bottom:1px solid var(--g-navy-3);min-width:0}
+.crumb{display:flex;align-items:baseline;gap:10px;min-width:0}
+.crumb h1{font-size:15px;font-weight:600;letter-spacing:-.01em;white-space:nowrap}
+.crumb .ph{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--on-chrome-3);
+  white-space:nowrap}
+.topbar .right{margin-left:auto;display:flex;align-items:center;gap:14px;flex:none}
+.linkbtn{background:none;border:none;color:var(--on-chrome-2);font-size:13px;cursor:pointer;padding:4px 2px;
+  border-bottom:1px solid transparent;transition:color .15s var(--ease);text-decoration:none;
+  white-space:nowrap}
+.linkbtn:hover{color:var(--on-chrome)}
+.linkbtn[aria-pressed="true"]{color:#fff;border-bottom-color:var(--attn)}
+
+/* ---------- stage rail, now a vertical sidebar list ---------- */
+.rail{display:flex;flex-direction:column;gap:2px;padding:6px 8px;
+  overflow-y:auto;min-height:0;scrollbar-width:thin;
+  scrollbar-color:var(--g-navy-3) transparent}
+.rail::-webkit-scrollbar{width:8px}
+.rail::-webkit-scrollbar-thumb{background:var(--g-navy-3);border-radius:4px}
+.stage{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:10px;
+  align-items:center;width:100%;text-align:left;background:none;border:none;
+  border-radius:6px;padding:7px 10px;color:inherit;cursor:default;position:relative;
+  min-width:0;transition:background .14s var(--ease)}
+.stage:not(.idle){cursor:pointer}
+.stage:hover:not(.idle){background:var(--g-navy-2)}
+.stage.active{background:var(--g-navy-2)}
+/* The brand orange marks where you are -- the one place it fills anything. */
+.stage.active::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:3px;
+  border-radius:0 3px 3px 0;background:var(--attn)}
+.stage .ico{width:17px;height:17px;justify-self:center;color:var(--on-chrome-3);
+  transition:color .2s var(--ease)}
+.stage.active .ico{color:#fff}
+.stage.done .ico{color:var(--on-chrome-2)}
+.stage .label{font-size:13px;font-weight:500;color:var(--on-chrome-2);line-height:1.3;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;
+  transition:color .2s var(--ease)}
+.stage.active .label{color:#fff}
+.stage.done .label{color:var(--on-chrome)}
+.stage.idle .label{color:var(--on-chrome-3)}
+/* The dot is the trailing status pip. It still carries the phase number as
+   text, because the drivers read it. */
+.stage .dot{min-width:21px;height:18px;padding:0 5px;border-radius:9px;display:grid;
+  place-items:center;border:1px solid var(--g-navy-3);background:transparent;
+  font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:500;
+  color:var(--on-chrome-3);
+  transition:background .25s var(--ease),color .25s var(--ease),border-color .25s var(--ease)}
+.stage.active .dot{border-color:var(--accent);background:var(--accent);color:var(--on-accent)}
+.stage.done .dot{border-color:var(--ok);background:var(--ok);color:#fff}
+/* 248px cannot hold a label and a status line side by side, so .sub sits on
+   its own row under the label. It stays in the DOM either way: the drivers
+   read the stage's whole textContent. */
+.stage .sub{grid-column:2;font-family:"IBM Plex Mono",monospace;font-size:10.5px;
+  color:var(--on-chrome-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  min-width:0;margin-top:1px}
+.stage .sub:empty{display:none}
+.stage.active .sub{color:var(--attn)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
 .stage.busy .dot{animation:pulse 1.4s var(--ease) infinite}
-/* Eleven stages do not fit a phone. The rail scrolls sideways and the active
-   stage is brought into view; the connectors stay continuous. */
-@media(max-width:860px){
-  .rail{overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
-  .rail::-webkit-scrollbar{display:none}
-  .stage{flex:0 0 124px}
+
+/* Under 900px the sidebar collapses to icons rather than sliding away. A
+   drawer would take the stage buttons off-screen, and the drivers click them
+   at 400px. clip-path hides the label without touching textContent. */
+@media(max-width:900px){
+  .app{grid-template-columns:56px minmax(0,1fr)}
+  .brandmark{padding:12px 0;justify-items:center}
+  .brandmark .ico{width:38px;height:19px}
+  .brandmark .bt,.sidefoot{display:none}
+  .rail{padding:6px 4px}
+  .stage{grid-template-columns:1fr;justify-items:center;padding:9px 2px}
+  .stage .label,.stage .sub{position:absolute;width:1px;height:1px;overflow:hidden;
+    clip-path:inset(50%);white-space:nowrap}
+  .stage .dot{position:absolute;top:1px;right:1px;min-width:15px;height:15px;
+    padding:0 3px;font-size:9px}
+  .stage.active::before{top:4px;bottom:4px}
+  .crumb .ph{display:none}
 }
 
 /* ---------- layout ---------- */
-main{max-width:var(--shell);margin:0 auto;padding:32px 24px 96px}
+/* The one scroll container on the page. */
+main{min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;padding:18px 22px 24px}
+main>.view.on{max-width:var(--shell);margin:0 auto}
 .view{display:none}
-.view.on{display:block;animation:rise .32s var(--ease) both}
-@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-.head{margin-bottom:24px}
-.head h2{font-size:24px;font-weight:700;letter-spacing:-.02em}
-.head p{color:var(--ink-2);margin-top:8px;max-width:68ch;font-size:15px;line-height:1.6}
+.view.on{display:block;animation:rise .28s var(--ease) both}
+@keyframes rise{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+/* The title moved to the topbar crumb; what is left here is a caption. The
+   h2 stays as the section's accessible name, just not painted twice. */
+.head{margin-bottom:14px}
+.head h2{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.head p{color:var(--ink-2);margin:0;font-size:13px;line-height:1.45;max-width:96ch}
+
+/* ---------- density helpers ---------- */
+/* A view that fills the pane exactly and scrolls nothing itself... */
+.view.fit{display:grid;grid-template-rows:auto minmax(0,1fr);gap:12px;height:100%;min-height:0}
+/* ...because the dense region inside it scrolls instead. */
+.scroller{overflow-y:auto;min-height:0;overscroll-behavior:contain}
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:16px;min-height:0}
+.duo>*{min-height:0;display:flex;flex-direction:column}
+@media(max-width:1100px){.duo{grid-template-columns:1fr}}
+/* An explainer that became a tooltip. Focusable so the text is reachable
+   from the keyboard, which a bare title= on a span is not. */
+.info{display:inline-grid;place-items:center;width:15px;height:15px;border-radius:50%;
+  border:1px solid var(--rule-strong);color:var(--ink-3);font-size:10px;font-weight:600;
+  font-family:Archivo,system-ui,sans-serif;cursor:help;flex:none;vertical-align:middle;
+  margin-left:5px;user-select:none}
+.info:hover,.info:focus-visible{border-color:var(--accent);color:var(--accent);outline:none}
 .panel{background:var(--surface);border:1px solid var(--rule);border-radius:4px;box-shadow:var(--shadow)}
 .pad{padding:24px}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:20px}
@@ -331,11 +420,16 @@ tr:last-child td{border-bottom:none}
 .note.warn{background:var(--warn-soft);color:var(--warn)}
 .note.ok{background:var(--ok-soft);color:var(--ok)}
 .empty{padding:40px 24px;text-align:center;color:var(--ink-3);font-size:14px}
-/* Sits above the content: a long findings list should not require scrolling to
-   the bottom to move on. */
-.pagenav{display:flex;justify-content:space-between;align-items:center;gap:14px;
-  margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid var(--rule)}
+/* Lives in the topbar. As a full-width bar above the content it cost ~57px of
+   viewport on every view -- exactly the budget the single-screen layout needs
+   -- and up here it costs nothing. */
+.pagenav{display:flex;align-items:center;gap:8px}
 .pagenav:empty{display:none}
+.pagenav .btn{padding:5px 11px;font-size:12.5px}
+.pagenav .btn.ghost{background:transparent;border-color:var(--g-navy-3);color:var(--on-chrome-2)}
+.pagenav .btn.ghost:hover:not(:disabled){border-color:var(--on-chrome-2);color:var(--on-chrome)}
+.pagenav .btn.ghost:disabled{opacity:.4}
+.pagenav .mono{color:var(--on-chrome-3)}
 .mt{margin-top:24px}.mt-s{margin-top:12px}
 .spread{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
 /* The SCT remediation and gate rows. A class rather than inline styles so the
@@ -370,22 +464,38 @@ tr:last-child td{border-bottom:none}
 </head>
 <body>
 
-<header>
-  <div class="brand">
-    <h1>DBShift</h1>
-    <span class="tag">Oracle → RDS migration console</span>
-    <div class="right">
-      <a class="linkbtn" href="/api/report" target="_blank" rel="noopener" id="navReport"
-         title="Phase 10 · Migration assessment report: SCT-style conversion assessment and DMS pre-migration assessment, built from this run's records">Report ↗</a>
-      <button class="linkbtn" id="navCatalogue" aria-pressed="false">Rules &amp; probes</button>
-    </div>
+<div class="app">
+
+<aside class="sidebar">
+  <div class="brandmark">
+    <svg class="ico" aria-hidden="true"><use href="#lg-ganit-dark"></use></svg>
+    <span class="bt">Ganit <b>DBShift</b></span>
   </div>
   <nav class="rail" id="rail"></nav>
+  <div class="sidefoot" title="Oracle to RDS for Oracle or RDS for PostgreSQL, on AWS">
+    <svg class="ico" aria-hidden="true"><use href="#lg-oracle"></use></svg>
+    <span class="sep">→</span>
+    <svg class="ico sq" aria-hidden="true"><use href="#lg-postgres"></use></svg>
+    <svg class="ico sq" aria-hidden="true"><use href="#lg-rds"></use></svg>
+    <svg class="ico" aria-hidden="true"><use href="#lg-aws"></use></svg>
+  </div>
+</aside>
+
+<div class="workarea">
+<header class="topbar">
+  <div class="crumb">
+    <h1 id="crumbTitle">Connect</h1>
+    <span class="ph" id="crumbPhase"></span>
+  </div>
+  <div class="right">
+    <div class="pagenav" id="pagenav"></div>
+    <a class="linkbtn" href="/api/report" target="_blank" rel="noopener" id="navReport"
+       title="Phase 10 · Migration assessment report: SCT-style conversion assessment and DMS pre-migration assessment, built from this run's records">Report ↗</a>
+    <button class="linkbtn" id="navCatalogue" aria-pressed="false">Rules &amp; probes</button>
+  </div>
 </header>
 
 <main>
-  <div class="pagenav" id="pagenav"></div>
-
   <!-- ============ 1. CONNECT ============ -->
   <section class="view on" id="view-connect">
     <div class="head">
@@ -1402,6 +1512,8 @@ tr:last-child td{border-bottom:none}
     </div>
   </section>
 </main>
+</div><!-- .workarea -->
+</div><!-- .app -->
 
 <!-- Vendor marks and UI icons, inlined. The console has to work at a
      client site with no route to the internet, so nothing here is
@@ -1445,20 +1557,20 @@ const fmt = n => (typeof n === 'number' ? n.toLocaleString() : n ?? '—');
 // is a prerequisite, not a phase -- numbering it shifted every other phase by
 // one and would have contradicted the docs in front of a client.
 const STAGES = [
-  {id:'connect',   label:'Connect',        n:null},
-  {id:'discover',  label:'Discover',       n:1},
-  {id:'assess',    label:'Assess',         n:2},
-  {id:'target',    label:'Target & Sizing',n:3},
-  {id:'remediate', label:'Remediate',      n:4},
-  {id:'convert',   label:'Convert PL/SQL', n:'4b'},
-  {id:'schemaddl', label:'Schema DDL',     n:'4c'},
-  {id:'appsql',    label:'Application SQL',n:'4d'},
-  {id:'gate',      label:'Blocker gate',   n:5},
-  {id:'provision', label:'Provision',      n:6},
-  {id:'migrate',   label:'Migrate',        n:7},
-  {id:'validate',  label:'Validate',       n:8},
-  {id:'cutover',   label:'Cutover',        n:9},
-  {id:'report',    label:'Report',         n:10},
+  {id:'connect',   label:'Connect',        n:null, icon:'plug'},
+  {id:'discover',  label:'Discover',       n:1,    icon:'scan'},
+  {id:'assess',    label:'Assess',         n:2,    icon:'gauge'},
+  {id:'target',    label:'Target & Sizing',n:3,    icon:'target'},
+  {id:'remediate', label:'Remediate',      n:4,    icon:'wrench'},
+  {id:'convert',   label:'Convert PL/SQL', n:'4b', icon:'code'},
+  {id:'schemaddl', label:'Schema DDL',     n:'4c', icon:'table'},
+  {id:'appsql',    label:'Application SQL',n:'4d', icon:'braces'},
+  {id:'gate',      label:'Blocker gate',   n:5,    icon:'gate'},
+  {id:'provision', label:'Provision',      n:6,    icon:'server'},
+  {id:'migrate',   label:'Migrate',        n:7,    icon:'flow'},
+  {id:'validate',  label:'Validate',       n:8,    icon:'checkshield'},
+  {id:'cutover',   label:'Cutover',        n:9,    icon:'switch'},
+  {id:'report',    label:'Report',         n:10,   icon:'doc'},
 ];
 const IDLE_STAGES = {connect:'active', discover:'idle', assess:'idle', target:'idle',
                      remediate:'idle', convert:'idle', schemaddl:'idle', appsql:'active', gate:'idle', provision:'idle', migrate:'idle',
@@ -1473,22 +1585,29 @@ function renderRail(){
   $('#rail').innerHTML = STAGES.map(s => {
     const st = stageState[s.id];
     const cls = [st === 'done' ? 'done' : '', st === 'active' || st === 'busy' ? 'active' : '',
-                 st === 'busy' ? 'busy' : ''].filter(Boolean).join(' ');
+                 st === 'busy' ? 'busy' : '', st === 'idle' ? 'idle' : ''].filter(Boolean).join(' ');
     const mark = st === 'done' ? '✓' : (s.n === null ? '·' : s.n);
-    // The dot carries the phase number; the label carries the name. Both on
-    // the label ran neighbours together ("Phase 1 · Discover Phase 2 · Assess").
-    return `<button class="stage ${cls}" data-stage="${s.id}" title="${s.n === null ? '' : 'Phase ' + s.n + ' · '}${esc(s.label)}">
-      <div class="dot">${mark}</div>
+    // The icon says what the stage is at a glance; the dot carries the phase
+    // number; the label carries the name. Both on the label ran neighbours
+    // together ("Phase 1 · Discover Phase 2 · Assess"). At 56px the label is
+    // clipped away and the icon is all that is left, so it has to carry.
+    const sub = stageSub[s.id];
+    return `<button class="stage ${cls}" data-stage="${s.id}"
+        ${st === 'idle' ? 'aria-disabled="true"' : ''}
+        title="${s.n === null ? '' : 'Phase ' + s.n + ' · '}${esc(s.label)}${sub ? ' — ' + esc(sub) : ''}">
+      <svg class="ico" aria-hidden="true"><use href="#ic-${s.icon}"></use></svg>
       <div class="label">${esc(s.label)}</div>
-      <div class="sub">${esc(stageSub[s.id])}</div></button>`;
+      <div class="dot">${mark}</div>
+      <div class="sub">${esc(sub)}</div></button>`;
   }).join('');
   document.querySelectorAll('.stage').forEach(el => el.onclick = () => {
     const id = el.dataset.stage;
     if (stageState[id] !== 'idle') show(id);
   });
-  // On a phone the rail scrolls; keep the current stage in view.
-  const cur = document.querySelector(`.stage[data-stage="${current}"]`);
-  if (cur && window.innerWidth <= 860) cur.scrollIntoView({block:'nearest', inline:'center'});
+  // The rail is a vertical scroller at every width now, not only on a phone.
+  // 'nearest' does nothing when the stage is already visible, so this never
+  // yanks the list around mid-run.
+  document.querySelector(`.stage[data-stage="${current}"]`)?.scrollIntoView({block:'nearest'});
 }
 
 function renderPageNav(){
@@ -1499,12 +1618,12 @@ function renderPageNav(){
   const nextLocked = next && stageState[next.id] === 'idle';
   const nextLabel = next ? (next.n === null ? next.label : `Phase ${next.n} · ${next.label}`) : '';
   nav.innerHTML = `
-    ${prev ? `<button class="btn ghost sm" onclick="show('${prev.id}')">&larr; ${esc(prev.label)}</button>`
-           : '<span></span>'}
+    ${prev ? `<button class="btn ghost sm" onclick="show('${prev.id}')" title="${esc(prev.label)}">&larr;</button>`
+           : ''}
     ${next ? `<button class="btn sm" ${nextLocked ? 'disabled' : ''}
                 onclick="show('${next.id}')"
                 title="${nextLocked ? 'Finish this stage first' : ''}">${esc(nextLabel)} &rarr;</button>`
-           : '<span class="mono" style="font-size:12.5px;color:var(--ink-3)">End of the pipeline</span>'}`;
+           : '<span class="mono" style="font-size:12px;color:var(--on-chrome-3)">End of the pipeline</span>'}`;
 }
 function show(id){
   const previous = current;
@@ -1532,7 +1651,15 @@ function show(id){
   // the locked properties are all decided in provision/overrides.py, so the
   // console cannot drift from what the render will actually accept.
   if (id === 'provision') loadProvOptions();
-  window.scrollTo({top:0, behavior:'smooth'});
+  // The view's own <h2> is hidden; the topbar carries the title now, so it has
+  // to be set here or the crumb goes stale one navigation behind.
+  const st = STAGES.find(s => s.id === id);
+  $('#crumbTitle').textContent = st ? st.label : 'Rules & probes';
+  $('#crumbPhase').textContent = st && st.n !== null ? 'Phase ' + st.n : '';
+  // The window does not scroll any more -- the content pane does. Left as
+  // window.scrollTo this is a silent no-op, and every navigation out of a long
+  // view lands halfway down the next one.
+  $('main').scrollTo({top:0, behavior:'smooth'});
 }
 // Fetched once per visit rather than on every navigation: the certificate is a
 // real build on the backend, not a cached read.
