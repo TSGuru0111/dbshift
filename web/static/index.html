@@ -10,42 +10,51 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
 :root{
-  --ground:#F4F6F8; --chrome:#101820; --surface:#FFFFFF; --surface-2:#EDF1F4;
-  /* ink-3 was #7A8B97 -- 3.5:1 on white, under WCAG AA. #5F6E78 is ~5.2:1. */
-  --ink:#111A22; --ink-2:#4F626F; --ink-3:#5F6E78;
-  --rule:#DAE1E7; --rule-strong:#BFCAD3;
-  --accent:#0C6E75; --accent-soft:#DCEDEE; --accent-ink:#0A5A60; --on-accent:#FFFFFF;
-  --ok:#1F7A4C; --ok-soft:#E0F0E7;
-  --warn:#8A6A0D; --warn-soft:#F6EEDA;
+  /* Ganit's own three, read off the logo: .cls-3 blue, .cls-2 orange,
+     .cls-1 grey. The navies are mixed down from the blue so the chrome reads
+     as the same family rather than as a neutral slate. */
+  --g-blue:#1A00D9; --g-orange:#FE6E06; --g-grey:#565656;
+  --g-navy:#141A3D; --g-navy-2:#1C2350; --g-navy-3:#2A3268;
+
+  --ground:#F5F6FA; --chrome:var(--g-navy); --surface:#FFFFFF; --surface-2:#EFF0F7;
+  /* ink-2 is the brand grey itself -- 7.0:1 on white, and the single most-used
+     token here, so it brands the body copy wholesale. ink-3 is ~5.2:1. */
+  --ink:#12142B; --ink-2:var(--g-grey); --ink-3:#6E6E76;
+  --rule:#E0E1EC; --rule-strong:#C3C5D6;
+  /* The brand blue is 11.9:1 on white, so it carries text and fills buttons
+     with white on it -- no softening needed. */
+  --accent:var(--g-blue); --accent-soft:#E8E5FF; --accent-ink:#1500B0; --on-accent:#FFFFFF;
+  /* The brand orange is 2.6:1 on white: it may fill, never carry text. Hence
+     two tokens -- attn fills (the active rail bar, the busy pulse), and warn
+     is the same hue darkened to 4.9:1 for the places that set it as a colour. */
+  --attn:var(--g-orange); --attn-soft:#FFEDE0;
+  --ok:#1F7A4C; --ok-soft:#E1F0E8;
+  --warn:#9A4406; --warn-soft:#FFEDE0;
   --bad:#A31D2C; --bad-soft:#F7E3E5; --on-bad:#FFFFFF;
-  --crit:#A31D2C; --high:#BE5A12; --med:#8A6A0D; --low:#3D6B8E; --info:#6D7883;
+  --crit:#A31D2C; --high:#9A4406; --med:#8A6A0D; --low:#3D4FA0; --info:#565656;
+  /* Text and hairlines on the navy chrome, where the page tokens do not apply. */
+  --on-chrome:#EEEFF8; --on-chrome-2:#9A9CC4; --on-chrome-3:#7B7DA8;
   --ease:cubic-bezier(.2,0,0,1);
   /* Panels are bordered; the shadow is a hairline lift, not an ambient glow. */
-  --shadow:0 1px 2px rgba(17,26,34,.06);
+  --shadow:0 1px 2px rgba(18,20,43,.07);
   /* One shell width for brand, rail and main, so they stay aligned. 1180px
      left a desktop monitor's right third empty while the action-item table
      truncated object names; the breakpoints below spend that width on the
      table's own columns rather than on a second column of groups, which was
      tried and reverted -- see the note on .sctrow. */
   --shell:1180px;
+  --sidebar:248px; --topbar:56px;
 }
 @media(min-width:1400px){ :root{ --shell:1340px } }
 @media(min-width:1700px){ :root{ --shell:1560px } }
-@media (prefers-color-scheme:dark){
-  :root{
-    --ground:#0C1116; --chrome:#080C11; --surface:#131C24; --surface-2:#1A242D;
-    /* ink-3 was #6E7D89 -- 4.1:1 on the dark surface. White on the dark accent was
-       2.6:1, so dark mode puts near-black text on buttons instead (~7:1). */
-    --ink:#E4EBF0; --ink-2:#93A2AE; --ink-3:#7F8E9A;
-    --rule:#232F39; --rule-strong:#33424D;
-    --accent:#46AEB4; --accent-soft:#10312F; --accent-ink:#7FD0D4; --on-accent:#0B1419;
-    --ok:#5BBE87; --ok-soft:#12271C;
-    --warn:#C9A63E; --warn-soft:#2A2313;
-    --bad:#E4707F; --bad-soft:#2B1418; --on-bad:#0B1419;
-    --crit:#E4707F; --high:#E39A55; --med:#C9A63E; --low:#7BA9C9; --info:#93A0AB;
-    --shadow:0 1px 2px rgba(0,0,0,.45);
-  }
-}
+/* There was a prefers-color-scheme:dark block here. It is gone rather than
+   rebranded: no driver ever set colorScheme and every screenshot is light, so
+   it was a second palette maintained blind -- and it had drifted to a teal
+   accent that is not a Ganit colour. The shell is navy-on-white by design now.
+   If dark mode comes back it wants a [data-theme] toggle and a driver of its
+   own, not a media query nobody exercises. color-scheme is pinned so the
+   browser does not half-darken form controls underneath us. */
+:root{ color-scheme:light }
 *{box-sizing:border-box}
 body{margin:0;background:var(--ground);color:var(--ink);
   font-family:"IBM Plex Sans",system-ui,sans-serif;font-size:14px;line-height:1.55;
@@ -71,32 +80,32 @@ button{font:inherit}
    Nothing functional below 12px; monospace is for data, not for labels. */
 
 /* ---------- chrome + stage rail ---------- */
-header{background:var(--chrome);color:#E8EEF2;padding:14px 24px 0}
+header{background:var(--chrome);color:var(--on-chrome);padding:14px 24px 0}
 .brand{display:flex;align-items:baseline;gap:12px;max-width:var(--shell);margin:0 auto;flex-wrap:wrap}
 .brand h1{font-size:16px;font-weight:600;letter-spacing:-.01em}
-.brand .tag{font-size:13px;color:#8FA5B3}
+.brand .tag{font-size:13px;color:var(--on-chrome-2)}
 .brand .right{margin-left:auto;display:flex;align-items:center;gap:14px}
-.linkbtn{background:none;border:none;color:#8FA5B3;font-size:13px;cursor:pointer;padding:4px 2px;
+.linkbtn{background:none;border:none;color:var(--on-chrome-2);font-size:13px;cursor:pointer;padding:4px 2px;
   border-bottom:1px solid transparent;transition:color .15s var(--ease);text-decoration:none}
-.linkbtn:hover{color:#E8EEF2}
+.linkbtn:hover{color:var(--on-chrome)}
 .linkbtn[aria-pressed="true"]{color:var(--accent-ink);border-bottom-color:var(--accent-ink)}
 
 .rail{max-width:var(--shell);margin:0 auto;display:flex;gap:0;padding:18px 0 0}
 .stage{flex:1;position:relative;padding:0 12px 16px 0;cursor:default;text-align:left;
   background:none;border:none;color:inherit;min-width:0}
 .stage:not(:last-child)::after{content:"";position:absolute;top:12px;left:calc(50% + 12px);
-  right:calc(-50% + 24px);height:1px;background:#26333D}
+  right:calc(-50% + 24px);height:1px;background:var(--g-navy-3)}
 .stage.done:not(:last-child)::after{background:var(--accent)}
-.stage .dot{width:24px;height:24px;border-radius:50%;border:1.5px solid #33434F;
+.stage .dot{width:24px;height:24px;border-radius:50%;border:1.5px solid var(--g-navy-3);
   background:var(--chrome);display:grid;place-items:center;position:relative;z-index:1;
-  font-family:"IBM Plex Mono",monospace;font-size:12.5px;font-weight:500;color:#7A8D9B;
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;font-weight:500;color:var(--on-chrome-2);
   transition:border-color .3s var(--ease),background .3s var(--ease),color .3s var(--ease)}
-.stage.active .dot{border-color:var(--accent);color:#fff;background:var(--accent)}
-.stage.done .dot{border-color:var(--accent);background:var(--accent);color:#fff}
-.stage .label{font-size:13px;font-weight:500;color:#7A8D9B;margin-top:8px;line-height:1.3;
+.stage.active .dot{border-color:var(--accent);color:var(--on-accent);background:var(--accent)}
+.stage.done .dot{border-color:var(--accent);background:var(--accent);color:var(--on-accent)}
+.stage .label{font-size:13px;font-weight:500;color:var(--on-chrome-2);margin-top:8px;line-height:1.3;
   transition:color .3s var(--ease)}
-.stage.active .label,.stage.done .label{color:#E8EEF2}
-.stage .sub{font-family:"IBM Plex Mono",monospace;font-size:12px;color:#5E7080;
+.stage.active .label,.stage.done .label{color:var(--on-chrome)}
+.stage .sub{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--on-chrome-3);
   margin-top:3px;min-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stage.active .sub{color:var(--accent-ink)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
@@ -196,7 +205,7 @@ main{max-width:var(--shell);margin:0 auto;padding:32px 24px 96px}
 .check{background:var(--surface);padding:12px 16px;display:grid;grid-template-columns:auto 1fr;
   gap:12px;align-items:start}
 .check .mark{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;
-  font-size:11px;font-weight:700;color:#fff;margin-top:2px;flex:none}
+  font-size:11px;font-weight:700;color:var(--on-accent);margin-top:2px;flex:none}
 .check.pass .mark{background:var(--ok)}
 .check.warn .mark{background:var(--warn)}
 .check.fail .mark{background:var(--bad)}
