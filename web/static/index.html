@@ -143,6 +143,26 @@ main:focus{outline:none}
 .linkbtn:focus-visible{outline:2px solid #fff;outline-offset:3px;border-radius:2px;color:var(--on-chrome)}
 .linkbtn[aria-pressed="true"]{color:#fff;border-bottom-color:var(--attn)}
 
+/* The AWS access chip. Its job is to make "the token died" a thing you see
+   coming rather than a thing a deploy discovers. */
+.awschip{display:flex;align-items:center;gap:7px;background:transparent;
+  border:1px solid var(--g-navy-3);border-radius:999px;padding:4px 11px 4px 8px;
+  color:var(--on-chrome-2);font-size:12.5px;cursor:pointer;white-space:nowrap;
+  transition:border-color .15s var(--ease),color .15s var(--ease)}
+.awschip:hover{border-color:var(--on-chrome-3);color:var(--on-chrome)}
+.awschip:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.awschip .ico{width:19px;height:12px}
+.awschip .led{width:7px;height:7px;border-radius:50%;background:var(--on-chrome-3);flex:none}
+.awschip .txt{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+.awschip.ok .led{background:var(--ok)}
+.awschip.warn .led{background:var(--attn)}
+.awschip.warn{border-color:var(--attn);color:#F6C9A4}
+.awschip.bad .led{background:var(--bad)}
+.awschip.bad{border-color:var(--bad);color:#F3B6BD}
+/* Only the expiring and expired states pulse -- a healthy session that
+   blinked all afternoon would teach everyone to ignore it. */
+.awschip.warn .led,.awschip.bad .led{animation:pulse 1.6s var(--ease) infinite}
+
 /* ---------- stage rail, now a vertical sidebar list ---------- */
 .rail{display:flex;flex-direction:column;gap:2px;padding:6px 8px;
   overflow-y:auto;min-height:0;scrollbar-width:thin;
@@ -596,6 +616,12 @@ tr:last-child td{border-bottom:none}
   </div>
   <div class="right">
     <div class="pagenav" id="pagenav"></div>
+    <!-- SSO credentials last about four hours, so the time left is worth
+         carrying on every screen, not just the one that sets them. -->
+    <button class="awschip" id="awsChip" title="AWS access">
+      <svg class="ico" aria-hidden="true"><use href="#lg-aws"></use></svg>
+      <span class="led"></span><span class="txt" id="awsChipText">AWS</span>
+    </button>
     <a class="linkbtn" href="/api/report" target="_blank" rel="noopener" id="navReport"
        title="Phase 10 · Migration assessment report: SCT-style conversion assessment and DMS pre-migration assessment, built from this run's records">Report ↗</a>
     <button class="linkbtn" id="navCatalogue" aria-pressed="false">Rules &amp; probes</button>
@@ -1441,6 +1467,50 @@ tr:last-child td{border-bottom:none}
       built from its findings, and grows as each later phase leaves a record.</div></div>
   </section>
 
+  <!-- ============ CONFIG — AWS ACCESS ============ -->
+  <!-- The paste goes to a named profile in ~/.aws/credentials, never into
+       this repo and never back out to the browser. See web/awscreds.py. -->
+  <section class="view" id="view-config">
+    <div class="head">
+      <h2>AWS access</h2>
+      <p>Paste the block from the AWS access portal. It lasts about four hours.</p>
+    </div>
+
+    <div class="split">
+      <div class="panel pad">
+        <div class="spread" style="margin-bottom:10px">
+          <div class="eyebrow" style="margin:0">Paste the credentials<span class="info"
+            tabindex="0" role="note" title="From the AWS access portal, click the account, then 'Access keys', then copy the block under 'Set AWS environment variables'. Bash, PowerShell and Windows CMD formats are all accepted.">i</span></div>
+          <span class="mono" id="awsPasteHint" style="font-size:12px;color:var(--ink-3)"></span>
+        </div>
+        <div class="field">
+          <label for="awsBlock">Credential block</label>
+          <textarea id="awsBlock" spellcheck="false" autocomplete="off" rows="7"
+            placeholder="export AWS_ACCESS_KEY_ID=&quot;ASIA...&quot;&#10;export AWS_SECRET_ACCESS_KEY=&quot;...&quot;&#10;export AWS_SESSION_TOKEN=&quot;...&quot;"></textarea>
+        </div>
+        <div class="row2">
+          <div class="field"><label for="awsRegion">Region</label>
+            <input id="awsRegion" spellcheck="false" placeholder="ap-south-1"></div>
+          <div class="field"><label for="awsHours">Good for (hours)</label>
+            <input id="awsHours" type="number" min="0.5" max="36" step="0.5" value="4"></div>
+        </div>
+        <div class="spread mt-s">
+          <button class="btn" id="btnAwsSave">Save and check</button>
+          <button class="btn ghost sm" id="btnAwsClear">Remove</button>
+        </div>
+        <div id="awsMsg" class="mt-s"></div>
+      </div>
+
+      <div class="panel pad">
+        <div class="eyebrow">Current access</div>
+        <div id="awsState"><div class="empty">No credentials on this machine yet.</div></div>
+        <div class="eyebrow mt">Where this is stored<span class="info" tabindex="0" role="note"
+          title="A named profile in the shared AWS credentials file, which is the same place the CLI reads. Nothing is written into the project folder, so nothing can be committed. The secret is never sent back to the browser.">i</span></div>
+        <div class="facts" id="awsWhere"></div>
+      </div>
+    </div>
+  </section>
+
   <!-- ============ CATALOGUE ============ -->
   <section class="view" id="view-catalogue">
     <div class="head">
@@ -1624,7 +1694,7 @@ document.addEventListener('click', e => {
 
 function renderPageNav(){
   const nav = $('#pagenav');
-  if (current === 'catalogue') { nav.innerHTML = ''; return; }
+  if (current === 'catalogue' || current === 'config') { nav.innerHTML = ''; return; }
   const i = STAGES.findIndex(s => s.id === current);
   const prev = STAGES[i - 1], next = STAGES[i + 1];
   const nextLocked = next && stageState[next.id] === 'idle';
@@ -1643,7 +1713,9 @@ function show(id){
   document.querySelectorAll('.view').forEach(v => v.classList.remove('on'));
   $('#view-' + id).classList.add('on');
   $('#navCatalogue').setAttribute('aria-pressed', id === 'catalogue');
-  if (id !== 'catalogue') {
+  // Catalogue and Config sit outside the pipeline: opening either must not
+  // mark the stage you came from as finished.
+  if (id !== 'catalogue' && id !== 'config') {
     // Only the stage being left is marked done, never every active one -- that
     // marked phases complete that had not run, purely because you navigated past.
     if (previous && previous !== id && stageState[previous] === 'active') {
@@ -1666,7 +1738,8 @@ function show(id){
   // The view's own <h2> is hidden; the topbar carries the title now, so it has
   // to be set here or the crumb goes stale one navigation behind.
   const st = STAGES.find(s => s.id === id);
-  $('#crumbTitle').textContent = st ? st.label : 'Rules & probes';
+  $('#crumbTitle').textContent = st ? st.label
+                                    : (id === 'config' ? 'AWS access' : 'Rules & probes');
   $('#crumbPhase').textContent = st && st.n !== null ? 'Phase ' + st.n : '';
   // The window does not scroll any more -- the content pane does. Left as
   // window.scrollTo this is a silent no-op, and every navigation out of a long
@@ -5067,6 +5140,157 @@ $('#navReport').onclick = ev => {
 /* ---------------- catalogue ---------------- */
 $('#navCatalogue').onclick = async () => { await renderCatalogue(); show('catalogue'); };
 
+/* ------------------------------------------------------------------ AWS access
+   SSO credentials last about four hours, so the console tracks how much of
+   that is left and says so on every screen. The secret itself never comes
+   back from the server -- only the account, the role, the region, the last
+   four characters of the key id and the expiry. */
+
+let AWS_CFG = null;          // the last status the server gave us
+let awsTick = null;          // the local 1s countdown
+
+const hhmm = secs => {
+  if (secs == null) return '';
+  if (secs <= 0) return 'expired';
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+  return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m ${String(secs % 60).padStart(2, '0')}s`;
+};
+
+function paintAwsChip(){
+  const chip = $('#awsChip'), txt = $('#awsChipText');
+  if (!chip) return;
+  const c = AWS_CFG;
+  chip.classList.remove('ok', 'warn', 'bad');
+  if (!c || !c.configured) {
+    txt.textContent = 'AWS';
+    chip.title = 'No AWS credentials. Click to paste a set.';
+    return;
+  }
+  if (c.expired || (c.seconds_left != null && c.seconds_left <= 0)) {
+    chip.classList.add('bad'); txt.textContent = 'expired';
+    chip.title = 'The AWS credentials have expired. Click to paste a fresh block.';
+    return;
+  }
+  if (!c.valid) {
+    chip.classList.add('bad'); txt.textContent = 'invalid';
+    chip.title = c.error || 'AWS rejected these credentials.';
+    return;
+  }
+  const left = c.seconds_left;
+  // Amber inside half an hour: enough warning to paste a new block before a
+  // deploy would be refused for being too close to the edge.
+  chip.classList.add(left != null && left < 1800 ? 'warn' : 'ok');
+  txt.textContent = left != null ? hhmm(left) : (c.account || 'ready');
+  chip.title = `AWS ${c.account || ''}${c.identity ? ' · ' + c.identity : ''}`
+             + `${c.region ? ' · ' + c.region : ''}`
+             + `${left != null ? ' · ' + hhmm(left) + ' left' : ''}`;
+}
+
+function renderAwsState(){
+  const c = AWS_CFG, box = $('#awsState'), where = $('#awsWhere');
+  if (where) {
+    where.innerHTML = c
+      ? `<div class="k">Profile</div><div class="v mono">${esc(c.profile)}</div>
+         <div class="k">File</div><div class="v mono" style="word-break:break-all">${esc(c.credentials_file)}</div>`
+      : '';
+  }
+  if (!box) return;
+  if (!c || !c.configured) {
+    box.innerHTML = '<div class="empty">No credentials on this machine yet.</div>';
+    return;
+  }
+  const bad = c.expired || !c.valid;
+  const rows = [
+    ['Account', c.account || '—'],
+    ['Role', c.identity || '—'],
+    ['Region', c.region || '—'],
+    ['Key', c.key_hint || '—'],
+    ['Expires', c.expires_at
+      ? `${new Date(c.expires_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}`
+        + `${c.seconds_left > 0 ? ' · ' + hhmm(c.seconds_left) + ' left' : ''}`
+      : 'not recorded'],
+  ];
+  box.innerHTML =
+    `<div class="status ${bad ? 'bad' : 'ok'}"><span class="led"></span>
+       <span>${bad ? esc(c.error || 'Not usable') : 'Working'}</span></div>
+     <div class="facts mt-s">${rows.map(([k, v]) =>
+       `<div class="k">${esc(k)}</div><div class="v mono">${esc(v)}</div>`).join('')}</div>`;
+}
+
+function paintAws(){ paintAwsChip(); renderAwsState(); }
+
+async function loadAwsConfig(){
+  try {
+    const r = await fetch('/api/aws/config');
+    AWS_CFG = await r.json();
+  } catch { AWS_CFG = null; }
+  paintAws();
+  startAwsTick();
+}
+
+function startAwsTick(){
+  if (awsTick) clearInterval(awsTick);
+  if (!AWS_CFG || AWS_CFG.seconds_left == null) return;
+  // Counted down locally so the number moves, then re-checked against the
+  // server every five minutes -- a key can be revoked long before its clock
+  // runs out, and only STS knows that.
+  let sinceCheck = 0;
+  awsTick = setInterval(() => {
+    if (AWS_CFG.seconds_left > 0) AWS_CFG.seconds_left -= 1;
+    if (AWS_CFG.seconds_left <= 0) { AWS_CFG.expired = true; AWS_CFG.valid = false; }
+    paintAws();
+    if ((sinceCheck += 1) >= 300) { sinceCheck = 0; loadAwsConfig(); }
+  }, 1000);
+}
+
+$('#awsChip').onclick = async () => { await loadAwsConfig(); show('config'); };
+
+$('#btnAwsSave').onclick = async () => {
+  const btn = $('#btnAwsSave'), msg = $('#awsMsg');
+  const block = $('#awsBlock').value;
+  if (!block.trim()) { msg.innerHTML = '<div class="note bad">Nothing pasted.</div>'; return; }
+  btn.disabled = true; msg.innerHTML = '<div class="note info">Checking with AWS…</div>';
+  try {
+    const r = await fetch('/api/aws/config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({block,
+                            region: $('#awsRegion').value.trim() || null,
+                            hours: parseFloat($('#awsHours').value) || 4}),
+    });
+    const d = await r.json();
+    if (!r.ok) { msg.innerHTML = `<div class="note bad">${esc(d.detail || 'Rejected.')}</div>`; return; }
+    AWS_CFG = d;
+    // Clear the box the moment it is accepted: a live secret should not sit
+    // in the DOM once it has been handed over.
+    $('#awsBlock').value = '';
+    msg.innerHTML = d.valid
+      ? `<div class="note ok">Working as ${esc(d.identity || 'this role')} in account ${esc(d.account)}.</div>`
+      : `<div class="note bad">${esc(d.error || 'AWS rejected these credentials.')}</div>`;
+    paintAws(); startAwsTick();
+  } catch (e) {
+    msg.innerHTML = `<div class="note bad">${esc(String(e))}</div>`;
+  } finally { btn.disabled = false; }
+};
+
+$('#btnAwsClear').onclick = async () => {
+  await fetch('/api/aws/config', {method: 'DELETE'});
+  $('#awsBlock').value = '';
+  $('#awsMsg').innerHTML = '<div class="note info">Removed from this machine.</div>';
+  await loadAwsConfig();
+};
+
+// A paste is the common case, so read the account out of it immediately --
+// before saving -- as a cheap "yes, that is the right block" signal.
+$('#awsBlock').addEventListener('input', () => {
+  const v = $('#awsBlock').value;
+  const key = (v.match(/AWS_ACCESS_KEY_ID\s*[=:]\s*["']?([A-Z0-9]{16,})/i) || [])[1];
+  const hasSecret = /AWS_SECRET_ACCESS_KEY/i.test(v);
+  const hasToken = /AWS_SESSION_TOKEN/i.test(v);
+  $('#awsPasteHint').textContent = !v.trim() ? ''
+    : key ? `${key.slice(0, 4)}…${key.slice(-4)} · secret ${hasSecret ? '✓' : '—'} · token ${hasToken ? '✓' : '—'}`
+          : 'no access key found yet';
+});
+
 async function renderCatalogue(){
   const c = await (await fetch('/api/catalogue')).json();
 
@@ -5153,6 +5377,7 @@ renderPageNav();
 renderPaths();
 showMigrationEngine();
 loadState();
+loadAwsConfig();
 </script>
 </body>
 </html>

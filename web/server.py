@@ -13,6 +13,7 @@ written to disk, logged, or returned to the browser.
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 import json
 import os
@@ -84,7 +85,7 @@ from collector import mode as migration_mode
 from collector.db import in_binds  # noqa: F401  (kept for custom probe authors)
 from collector.probes import PROBES
 
-from . import preflight, settings
+from . import awscreds, preflight, settings
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -358,6 +359,59 @@ def disconnect():
     STATE.connected = False
     STATE.checks, STATE.facts = [], {}
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ AWS access
+# SSO credentials last about four hours, so a demo outlives two or three sets.
+# The paste goes straight into a named profile in ~/.aws/credentials -- see
+# web/awscreds.py for why there and not in this repo or in this process.
+
+
+class AwsCredsRequest(BaseModel):
+    block: str
+    region: str | None = None
+    # How long the credentials are good for. The AWS portal does not include
+    # an expiry in the block it offers, and STS will not tell us either, so
+    # the console assumes the standard four hours and lets it be corrected.
+    hours: float | None = 4.0
+
+
+@app.get("/api/aws/config")
+def aws_config():
+    """Account, role, region, key hint and expiry -- never the secret.
+
+    There is deliberately no route that returns the access key, the secret or
+    the session token. Once pasted they are only ever read by boto3 inside
+    this process; nothing hands them back to a browser.
+    """
+    return awscreds.status(_aws_session, provision_policy.REGION)
+
+
+@app.post("/api/aws/config")
+def aws_config_set(req: AwsCredsRequest):
+    try:
+        creds = awscreds.parse_block(req.block)
+    except awscreds.CredentialError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    hours = req.hours if (req.hours and req.hours > 0) else 4.0
+    expires = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=min(hours, 36))
+               if creds["is_temporary"] else None)
+    try:
+        awscreds.write_profile(creds, region=req.region, expires_at=expires)
+    except OSError as exc:
+        raise HTTPException(500, f"could not write {awscreds.CRED_FILE}: {exc}") from exc
+
+    # Prove them immediately rather than at the first deploy: a paste that was
+    # truncated by the clipboard should fail here, not twenty minutes in.
+    out = awscreds.status(_aws_session, req.region or provision_policy.REGION)
+    out["ok"] = out["valid"]
+    return out
+
+
+@app.delete("/api/aws/config")
+def aws_config_clear():
+    return {"ok": True, "removed": awscreds.clear_profile()}
 
 
 @app.get("/api/catalogue")
@@ -1806,7 +1860,16 @@ def gate():
 
 
 def _aws_session():
+    """The session every AWS call on this server goes through.
+
+    Credentials pasted on the Config screen win when they are present: they
+    are the ones someone chose deliberately for this run, and at a client site
+    they may be the only ones that exist. Falling back to the configured
+    profile keeps every existing setup working untouched.
+    """
     import boto3
+    if awscreds.key_hint():
+        return boto3.Session(profile_name=awscreds.PROFILE)
     return boto3.Session(profile_name=provision_run.DEFAULT_PROFILE)
 
 
@@ -1929,6 +1992,13 @@ def provision_deploy_route(req: DeployRequest):
     running = _DEPLOY["thread"]
     if running is not None and running.is_alive():
         raise HTTPException(409, "a deploy started from this console is already running")
+    # A CloudFormation stack half-built by a token that expired mid-run is
+    # worse than one never started: it bills, and it has to be cleaned up by
+    # hand. Refuse before anything is created.
+    try:
+        awscreds.guard_long_run("a deploy")
+    except awscreds.CredentialError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
     passed = threading.Event()
     outcome: dict = {}
@@ -2133,6 +2203,11 @@ def dms_execute(req: DmsExecute):
     """
     if req.migration_type not in dms_policy.MIGRATION_TYPES:
         raise HTTPException(400, f"unknown migration type {req.migration_type!r}")
+    # A replication instance left behind by an expired token keeps billing.
+    try:
+        awscreds.guard_long_run("a DMS run")
+    except awscreds.CredentialError as exc:
+        raise HTTPException(409, str(exc)) from exc
     plan = dms_run.plan(None, migration_type=req.migration_type)
     estate = plan["estate"]
 
