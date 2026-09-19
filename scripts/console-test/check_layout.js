@@ -38,12 +38,16 @@ const HTML = 'file:///' + path.resolve(process.argv[2]).replace(/\\/g, '/');
         cols,
         titleLines: Math.round(titleH / lineH),
         hOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+        // The content pane is overflow-x:hidden now, so anything too wide is
+        // clipped rather than pushing the document out -- the check above
+        // would stay green while a row was cut off. Ask the pane directly.
+        paneOverflow: main.scrollWidth > main.clientWidth + 1,
       };
     });
 
     console.log(
       `${String(w).padStart(5)}px  shell=${r.shell.padEnd(8)} main=${String(r.mainW).padEnd(5)}` +
-      ` titleLines=${r.titleLines}  h-overflow=${r.hOverflow}`);
+      ` titleLines=${r.titleLines}  h-overflow=${r.hOverflow}  pane-overflow=${r.paneOverflow}`);
     console.log(`         columns: ${r.cols}`);
     await pg.close();
   }

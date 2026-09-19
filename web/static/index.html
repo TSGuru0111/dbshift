@@ -189,7 +189,7 @@ button{font:inherit}
 
 /* ---------- layout ---------- */
 /* The one scroll container on the page. */
-main{min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;padding:18px 22px 24px}
+main{min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;padding:16px 22px 16px}
 main>.view.on{max-width:var(--shell);margin:0 auto}
 .view{display:none}
 .view.on{display:block;animation:rise .28s var(--ease) both}
@@ -208,6 +208,63 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
 .duo{display:grid;grid-template-columns:1fr 1fr;gap:16px;min-height:0}
 .duo>*{min-height:0;display:flex;flex-direction:column}
 @media(max-width:1100px){.duo{grid-template-columns:1fr}}
+/* Provision's three regions, one at a time. [hidden] needs the !important
+   because .provpane would otherwise win on specificity and show them all. */
+.provpane[hidden]{display:none!important}
+.provpane>.panel:first-child,.provpane>.tiles:first-child{margin-top:0}
+/* The report view hands its leftover height to the frame. The rule lives here
+   rather than inline because the JS reveals the panel with display:'' , which
+   reverts to the stylesheet -- an inline display:flex would be wiped. */
+#view-report.on{display:flex;flex-direction:column;min-height:0;height:100%}
+#reportResult{flex-direction:column;min-height:0;flex:1}
+/* The lists that grow with the estate. Empty they cost nothing; populated, a
+   90-object conversion list or a 50-rule catalogue is several screens on its
+   own, and without a cap it is the page that scrolls rather than the list.
+
+   The cap is measured rather than guessed: every ancestor from the view down
+   to the list is a flex column that may shrink, so the list receives exactly
+   the height its view has left and nothing needs to know what is stacked
+   above it. A fixed max-height was tried first and is wrong -- these lists
+   sit at different depths in different views, so one number over-runs some
+   and starves others.
+
+   Two links in that chain break by default and both need !important: the view
+   itself, because .view.on sets display:block, and the result wrappers, which
+   the JS reveals with an inline display:block that a stylesheet cannot
+   otherwise outrank. */
+.view.on:has(.scrollcap){display:flex!important;flex-direction:column;
+  height:100%;min-height:0}
+.view.on:has(.scrollcap) *:has(.scrollcap){
+  display:flex!important;flex-direction:column;flex:1 1 auto;min-height:0}
+/* flex-basis:0 is the point: 1 1 auto lets the list keep its content height
+   and push the rest of the view off the screen instead of scrolling itself.
+   The floor matters on a 768px laptop, where the blocks above a list can eat
+   the whole pane and leave it rendered at zero -- a list you cannot see is
+   as broken as a page that overflows. Below the floor the pane scrolls, which
+   is the right trade at that height. */
+.scrollcap{overflow-y:auto;min-height:150px;flex:1 1 0;display:block!important;
+  overscroll-behavior:contain;scrollbar-width:thin}
+/* Charts and summary panels give way to the list they introduce. */
+#sctResult>.split,#sctSegregation{flex:0 1 auto;min-height:0}
+/* Assess is the densest view: two chart panels, a routing breakdown and a
+   40-row table. Under 900px tall the charts and the routing sit side by side
+   rather than stacked, which is the ~200px that keeps the table on screen at
+   1366x768 -- the common laptop this is demoed on. */
+@media(max-height:900px){
+  #view-assess .split{grid-template-columns:1fr 1fr 1fr;gap:12px}
+  #view-assess .split .panel{padding:14px}
+  #view-assess .bars{max-height:120px;overflow-y:auto}
+  #view-assess #sctSegregation{max-height:130px;overflow-y:auto}
+  /* A short viewport cannot afford the full floor; six rows still reads as a
+     list, and the pane scrolls for the rest. */
+  .scrollcap{min-height:110px}
+  .head{margin-bottom:10px}
+  .mt{margin-top:14px}
+}
+/* The table scrolls sideways already; give it a vertical cap too, and keep
+   the header visible while the body moves under it. */
+#sctTable table thead th,.tblwrap table thead th{position:sticky;top:0;z-index:1;
+  background:var(--surface-2)}
 /* An explainer that became a tooltip. Focusable so the text is reachable
    from the keyboard, which a bare title= on a span is not. */
 .info{display:inline-grid;place-items:center;width:15px;height:15px;border-radius:50%;
@@ -559,7 +616,7 @@ tr:last-child td{border-bottom:none}
       <div class="tiles" id="discTiles"></div>
       <div class="spread mt"><div class="eyebrow" style="margin:0">Everything collected</div>
         <span class="mono" style="font-size:12.5px;color:var(--ink-3)">click any dataset to open it</span></div>
-      <div class="acc mt-s" id="discAcc"></div>
+      <div class="acc mt-s scrollcap" id="discAcc"></div>
       <div class="spread mt" id="toAssess" style="display:none">
         <span style="font-size:13.5px;color:var(--ink-2)">Discovery complete. The assessment
           runs its rules against exactly this data.</span>
@@ -697,7 +754,7 @@ tr:last-child td{border-bottom:none}
           <p class="why mt-s" style="font-size:12px;color:var(--ink-3)">
             <b>AWS SCT's own files</b>, byte for byte — not re-rendered.</p>
           <div id="sctUnmapped" class="mt-s" style="display:none"></div>
-          <div id="sctTable" class="tblwrap"></div>
+          <div id="sctTable" class="tblwrap scrollcap"></div>
           <div class="mono mt-s" id="sctCount"
                style="font-size:12.5px;color:var(--ink-3)"></div>
         </div>
@@ -793,7 +850,7 @@ tr:last-child td{border-bottom:none}
       <div id="sctRemLive" style="display:none"><div class="ticker" id="sctRemTicker"></div></div>
       <div id="sctRemResult" style="display:none">
         <div class="tiles mt" id="sctRemTiles"></div>
-        <div id="sctRemGroups" class="mt"></div>
+        <div id="sctRemGroups" class="mt scrollcap"></div>
       </div>
       <div id="sctRemEmpty" class="panel"><div class="empty">Run the AWS SCT assessment first,
         then draft fixes for its action items.</div></div>
@@ -897,7 +954,7 @@ tr:last-child td{border-bottom:none}
       <div class="tiles mt" id="convTiles"></div>
       <div id="convNotes" class="mt-s"></div>
       <div class="mt"><div class="eyebrow">Every object, in the order PostgreSQL needs them</div>
-        <div class="acc" id="convList"></div></div>
+        <div class="acc scrollcap" id="convList"></div></div>
     </div>
     <div id="convEmpty" class="panel"><div class="empty">Run discovery first, then convert the stored code.</div></div>
   </section>
@@ -934,7 +991,7 @@ tr:last-child td{border-bottom:none}
       <div class="tiles mt" id="ddlTiles"></div>
       <div id="ddlNotesBox" class="mt-s"></div>
       <div class="mt"><div class="eyebrow">Every statement, in the order PostgreSQL needs them</div>
-        <div id="ddlGroups"></div></div>
+        <div id="ddlGroups" class="scrollcap"></div></div>
       <div class="mt"><div class="eyebrow">What a reviewer must know</div>
         <div id="ddlNoteList"></div></div>
     </div>
@@ -979,7 +1036,7 @@ tr:last-child td{border-bottom:none}
       <div class="tiles mt" id="appsqlTiles"></div>
       <div id="appsqlNotes" class="mt-s"></div>
       <div class="mt"><div class="eyebrow">Every statement, grouped by what happens to it</div>
-        <div id="appsqlGroups"></div></div>
+        <div id="appsqlGroups" class="scrollcap"></div></div>
     </div>
     <div id="appsqlEmpty" class="panel"><div class="empty">Point this at the application's mapper
       files and run it. Nothing else in the pipeline reads them.</div></div>
@@ -1002,7 +1059,7 @@ tr:last-child td{border-bottom:none}
 
       <div class="mt">
         <div class="eyebrow">Where the work belongs</div>
-        <div id="sctGateGroups"></div>
+        <div id="sctGateGroups" class="scrollcap"></div>
       </div>
 
       <div class="mt"><div class="eyebrow">Change data capture readiness</div>
@@ -1085,7 +1142,19 @@ tr:last-child td{border-bottom:none}
     </div>
     <div class="ticker" id="provLive"></div>
 
+    <!-- Three stacked regions ran to ~1800px, so they are three panes behind a
+         switcher instead. Nothing is removed from the DOM -- the panes are
+         hidden with display:none and every id stays addressable, because the
+         drivers click straight through to #btnStatus, #btnVerify, #btnDeploy
+         and #btnKillScan without opening anything first. -->
     <div id="provResult" style="display:none">
+      <div class="chips" id="provTabs" role="tablist">
+        <button class="chip" data-prov="plan" aria-pressed="true">Plan</button>
+        <button class="chip" data-prov="live" aria-pressed="false">Live</button>
+        <button class="chip" data-prov="deploy" aria-pressed="false">Deploy</button>
+      </div>
+
+      <div class="provpane" data-prov="plan">
       <div class="tiles mt" id="provTiles"></div>
 
       <div class="mt"><div class="eyebrow">Preflight — read-only</div>
@@ -1096,7 +1165,9 @@ tr:last-child td{border-bottom:none}
           <thead><tr><th>Property</th><th>Value</th><th>Source</th><th>Why</th></tr></thead>
           <tbody id="provTable"></tbody></table></div>
         <p class="mono mt-s" id="provHandoffs" style="font-size:12.5px;color:var(--ink-3)"></p></div>
+      </div><!-- /plan -->
 
+      <div class="provpane" data-prov="live" hidden>
       <div class="panel pad mt" id="statusPanel">
         <div class="spread"><div class="eyebrow" style="margin:0">Target — live from CloudFormation</div>
           <button class="btn ghost sm" id="btnStatus">Refresh</button></div>
@@ -1108,7 +1179,9 @@ tr:last-child td{border-bottom:none}
         <div class="spread mt"><button class="btn ghost sm" id="btnVerify" disabled>Verify the database</button><span></span></div>
         <div class="checks mt-s" id="verifyChecks"></div>
       </div>
+      </div><!-- /live -->
 
+      <div class="provpane" data-prov="deploy" hidden>
       <div class="panel pad mt" id="deployForm">
         <div class="eyebrow">Deploy — this starts billing</div>
         <div class="note warn" id="deployCost"></div>
@@ -1124,9 +1197,6 @@ tr:last-child td{border-bottom:none}
         <div class="spread"><button class="btn danger" id="btnDeploy">Deploy</button><span></span></div>
         <div id="deployErr"></div>
       </div>
-    </div>
-
-    <div id="provEmpty" class="panel"><div class="empty">Evaluate the gate first, then render the target.</div></div>
 
     <div class="panel pad mt" id="killPanel">
       <div class="spread"><div class="eyebrow" style="margin:0">Kill switch<span class="info" tabindex="0" role="note" title="Acts only on resources named dbshift or tagged project=dbshift; anything else is listed and never touched. Destroy ends billing: it empties the exchange bucket, then deletes the stack. No final snapshot.">i</span></div>
@@ -1139,6 +1209,10 @@ tr:last-child td{border-bottom:none}
       <div class="spread"><button class="btn danger" id="btnDestroy">Destroy everything dbshift owns</button><span></span></div>
       <div id="killMsg"></div>
     </div>
+      </div><!-- /deploy -->
+    </div><!-- /#provResult -->
+
+    <div id="provEmpty" class="panel"><div class="empty">Evaluate the gate first, then render the target.</div></div>
   </section>
 
   <!-- ============ 8. MIGRATE ============ -->
@@ -1244,7 +1318,7 @@ tr:last-child td{border-bottom:none}
         <span class="mono" id="valMeta" style="font-size:12.5px;color:var(--ink-3)"></span></div>
     </div>
 
-    <div id="valLevels" class="mt"></div>
+    <div id="valLevels" class="mt scrollcap"></div>
     <div id="valEmpty" class="panel mt"><div class="empty">Migrate first. Validation compares the target
       against the estate it was built from.</div></div>
   </section>
@@ -1298,16 +1372,19 @@ tr:last-child td{border-bottom:none}
       <span class="mono" id="reportMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
     </div>
 
+    <!-- The frame took 78vh, which on its own overran the pane once the tiles
+         sat above it. It takes the remainder instead: the panel is the flex
+         child that grows, and the frame fills it. -->
     <div id="reportResult" style="display:none">
       <div class="tiles" id="reportTiles"></div>
       <div id="reportNotes" class="mt-s"></div>
-      <div class="panel mt" style="overflow:hidden">
-        <div class="spread pad" style="border-bottom:1px solid var(--rule)">
+      <div class="panel mt" style="overflow:hidden;display:flex;flex-direction:column;min-height:0;flex:1">
+        <div class="spread pad" style="border-bottom:1px solid var(--rule);flex:none">
           <div class="eyebrow" style="margin:0">The report, as a client receives it</div>
           <a class="btn ghost sm" id="reportOpen" href="/api/report" target="_blank" rel="noopener">Open in a new tab ↗</a>
         </div>
         <iframe id="reportFrame" title="Migration assessment report"
-                style="display:block;width:100%;height:78vh;border:0;background:#fff"></iframe>
+                style="display:block;width:100%;flex:1;min-height:0;border:0;background:#fff"></iframe>
       </div>
     </div>
     <div id="reportEmpty" class="panel"><div class="empty">Run the assessment first. The report is
@@ -1323,7 +1400,7 @@ tr:last-child td{border-bottom:none}
     <div class="panel pad">
       <div class="spread"><div class="eyebrow" style="margin:0">Discovery probes</div>
         <button class="btn ghost sm" id="btnAddProbe">Add a probe</button></div>
-      <div class="acc mt-s" id="probeList"></div>
+      <div class="acc mt-s scrollcap" id="probeList"></div>
       <form id="probeForm" style="display:none" class="mt">
         <div class="note info">A custom probe is a <b>SELECT against the data dictionary</b>.
           Its result becomes a dataset like any other. Read-only is enforced here as well as
@@ -1346,7 +1423,7 @@ tr:last-child td{border-bottom:none}
       <div class="spread"><div class="eyebrow" style="margin:0">Assessment rules</div>
         <button class="btn ghost sm" id="btnAddRule">Add a rule</button></div>
       <div class="chips mt-s" id="ruleCatChips"></div>
-      <div class="acc" id="ruleList"></div>
+      <div class="acc scrollcap" id="ruleList"></div>
       <form id="ruleForm" style="display:none" class="mt">
         <div class="note info">The predicate runs against the loaded discovery data in SQLite.
           Return <b class="mono">owner, object_name, object_type, detail</b> — each row becomes
@@ -1479,6 +1556,22 @@ function renderRail(){
   document.querySelector(`.stage[data-stage="${current}"]`)?.scrollIntoView({block:'nearest'});
 }
 
+// Provision's plan, live status and deploy controls are three panes of one
+// screen. Panes are hidden, never detached: the drivers reach #btnStatus,
+// #btnVerify, #btnDeploy and #btnKillScan directly, so every id has to stay
+// in the DOM and reachable. Anything that reveals a pane's contents also
+// selects that pane, so a driver's click never lands on a hidden control.
+function provTab(which){
+  document.querySelectorAll('#provTabs .chip').forEach(c =>
+    c.setAttribute('aria-pressed', c.dataset.prov === which));
+  document.querySelectorAll('.provpane').forEach(pane =>
+    pane.hidden = pane.dataset.prov !== which);
+}
+document.addEventListener('click', e => {
+  const chip = e.target.closest('#provTabs .chip');
+  if (chip) provTab(chip.dataset.prov);
+});
+
 function renderPageNav(){
   const nav = $('#pagenav');
   if (current === 'catalogue') { nav.innerHTML = ''; return; }
@@ -1519,7 +1612,7 @@ function show(id){
   // than hardcoding either in the page: the classes on offer, the defaults and
   // the locked properties are all decided in provision/overrides.py, so the
   // console cannot drift from what the render will actually accept.
-  if (id === 'provision') loadProvOptions();
+  if (id === 'provision') { loadProvOptions(); provTab('plan'); }
   // The view's own <h2> is hidden; the topbar carries the title now, so it has
   // to be set here or the crumb goes stale one navigation behind.
   const st = STAGES.find(s => s.id === id);
@@ -4129,6 +4222,10 @@ async function refreshStatus(){
   $('#cfnTemplate').style.display = s.exists ? '' : 'none';
   $('#btnVerify').disabled = s.status !== 'CREATE_COMPLETE';
   $('#deployForm').style.display = s.exists ? 'none' : '';
+  // Bring the pane that just gained something to say to the front. Without
+  // this the status arrives behind a tab nobody opened -- and the deploy form
+  // is on a third one, so "render, then deploy" would cross two hidden panes.
+  provTab(s.exists ? 'live' : 'deploy');
   if (s.status === 'CREATE_COMPLETE') {
     setStage('provision', 'done', 'running · billing');
     // Migration opens once there is a target to migrate into.
