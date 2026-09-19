@@ -3,8 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DBShift Console</title>
-<link rel="icon" href="data:,">
+<title>Ganit DBShift — Oracle to AWS migration console</title>
+<meta name="description" content="Ganit DBShift: assess an Oracle estate, convert its stored code, and migrate it to Amazon RDS for Oracle or PostgreSQL — with the evidence for every decision.">
+<meta name="color-scheme" content="light">
+<meta name="robots" content="noindex">
+<!-- The Ganit mark, as a favicon. It was an empty data: URI, which suppressed
+     the 404 but left a blank tab; this is the same orange accent the sidebar
+     uses, on the brand blue. Inline so it stays offline-capable. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231A00D9'/%3E%3Cpath d='M22 12.2a7.4 7.4 0 1 0 1.2 6.4h-6.3' fill='none' stroke='%23fff' stroke-width='3.1' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='24.6' cy='8.4' r='3' fill='%23FE6E06'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -83,6 +89,14 @@ button{font:inherit}
 /* Type scale, fixed. 12.5 meta · 13.5 support · 14 body/controls · 15 intro · 22 title.
    Nothing functional below 12px; monospace is for data, not for labels. */
 
+/* Off-screen until tabbed to. */
+.skip{position:fixed;top:-100px;left:12px;z-index:60;background:var(--accent);
+  color:var(--on-accent);padding:10px 16px;border-radius:0 0 4px 4px;
+  font-size:13px;font-weight:500;text-decoration:none;
+  transition:top .15s var(--ease)}
+.skip:focus{top:0}
+main:focus{outline:none}
+
 /* ---------- the shell ---------- */
 /* One screen, and only one thing on it scrolls. The app is a fixed grid the
    height of the viewport; the content pane is the single scroll container.
@@ -125,6 +139,8 @@ button{font:inherit}
   border-bottom:1px solid transparent;transition:color .15s var(--ease);text-decoration:none;
   white-space:nowrap}
 .linkbtn:hover{color:var(--on-chrome)}
+/* On the navy chrome the blue focus ring disappears; these use white. */
+.linkbtn:focus-visible{outline:2px solid #fff;outline-offset:3px;border-radius:2px;color:var(--on-chrome)}
 .linkbtn[aria-pressed="true"]{color:#fff;border-bottom-color:var(--attn)}
 
 /* ---------- stage rail, now a vertical sidebar list ---------- */
@@ -139,6 +155,8 @@ button{font:inherit}
   min-width:0;transition:background .14s var(--ease)}
 .stage:not(.idle){cursor:pointer}
 .stage:hover:not(.idle){background:var(--g-navy-2)}
+.stage:focus-visible{outline:2px solid #fff;outline-offset:-2px}
+.stage:active:not(.idle){background:var(--g-navy-3)}
 .stage.active{background:var(--g-navy-2)}
 /* The brand orange marks where you are -- the one place it fills anything. */
 .stage.active::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:3px;
@@ -202,7 +220,11 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
    h2 stays as the section's accessible name, just not painted twice. */
 .head{margin-bottom:14px}
 .head h2{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
-.head p{color:var(--ink-2);margin:0;font-size:13px;line-height:1.45;max-width:96ch}
+/* pretty keeps a single word off the last line. The measure is wide for a
+   caption but these are one or two lines, not paragraphs -- the prose that
+   needed a 65ch measure is in tooltips now. */
+.head p{color:var(--ink-2);margin:0;font-size:13px;line-height:1.45;max-width:90ch;
+  text-wrap:pretty}
 
 /* ---------- density helpers ---------- */
 /* A view that fills the pane exactly and scrolls nothing itself... */
@@ -283,6 +305,8 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
 .pathopt{text-align:left;background:var(--surface);border:1px solid var(--rule);border-radius:3px;
   padding:13px 15px;cursor:pointer;font:inherit;color:inherit;transition:border-color .12s,box-shadow .12s}
 .pathopt:hover:not(:disabled){border-color:var(--accent)}
+.pathopt:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.pathopt:active:not(:disabled){transform:translateY(1px)}
 .pathopt[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .pathopt:disabled{cursor:not-allowed;opacity:.62}
 .pathopt .n{font-family:Archivo,sans-serif;font-size:15px;font-weight:700;letter-spacing:-.01em;
@@ -322,8 +346,11 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
 @media(max-width:600px){.row2,.split2{grid-template-columns:1fr}}
 
 .btn{background:var(--accent);color:var(--on-accent);border:none;padding:10px 20px;border-radius:3px;
-  font-size:14px;font-weight:500;cursor:pointer;transition:opacity .15s var(--ease)}
+  font-size:14px;font-weight:500;cursor:pointer;
+  transition:opacity .15s var(--ease),transform .1s var(--ease)}
 .btn:hover:not(:disabled){opacity:.88}
+/* Pressing something should feel like pressing something. */
+.btn:active:not(:disabled){transform:translateY(1px);opacity:.82}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 .btn.ghost{background:none;border:1px solid var(--rule-strong);color:var(--ink-2)}
 .btn.ghost:hover:not(:disabled){border-color:var(--ink-3);color:var(--ink)}
@@ -368,7 +395,7 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
 .check.over .mark{background:var(--accent)}
 .check.over .remedy{border-left-color:var(--accent);background:var(--accent-soft)}
 .check .name{font-size:14px;font-weight:600}
-.check .detail{font-size:13px;color:var(--ink-2);margin-top:3px}
+.check .detail{font-size:13px;color:var(--ink-2);margin-top:3px;max-width:84ch;text-wrap:pretty}
 .check .remedy{font-size:13px;color:var(--ink-2);margin-top:8px;padding:10px 12px;
   background:var(--surface-2);border:1px solid var(--rule);border-radius:3px}
 .check.fail .remedy{background:var(--bad-soft);border-color:transparent;color:var(--bad)}
@@ -456,17 +483,25 @@ tr:last-child td{border-bottom:none}
 .bars{display:flex;flex-direction:column;gap:12px}
 .bar{display:grid;grid-template-columns:140px 1fr 44px;gap:14px;align-items:center;font-size:13.5px}
 .bar .track{height:16px;background:var(--surface-2);border-radius:2px;overflow:hidden}
+/* width is set inline by the renderer, so the bar keeps it; only the reveal
+   is a transform, which the compositor can do without re-laying-out the row. */
 .bar .fill{height:100%;background:var(--accent);border-radius:0 2px 2px 0;
-  transition:width .7s var(--ease)}
+  transform-origin:left center;animation:barin .55s var(--ease) both}
+@keyframes barin{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 .bar .val{font-family:"IBM Plex Mono",monospace;font-weight:500;font-variant-numeric:tabular-nums;
   text-align:right}
 
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;align-items:center}
 .chip{font-family:"IBM Plex Mono",monospace;font-size:12.5px;padding:6px 12px;
   border:1px solid var(--rule-strong);background:var(--surface);color:var(--ink-2);
-  border-radius:2px;cursor:pointer;transition:.13s var(--ease)}
+  border-radius:2px;cursor:pointer;
+  /* Named rather than "all": a bare shorthand also transitions layout
+     properties, which is both janky and a repaint nobody asked for. */
+  transition:border-color .13s var(--ease),color .13s var(--ease),
+             background .13s var(--ease),transform .1s var(--ease)}
 .chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .chip:hover{border-color:var(--ink-3);color:var(--ink)}
+.chip:active{transform:translateY(1px)}
 .chip[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
 
 .toggle{position:relative;width:34px;height:19px;flex:none}
@@ -479,8 +514,10 @@ tr:last-child td{border-bottom:none}
 .toggle input:checked + .slide::before{transform:translateX(15px)}
 .toggle input:focus-visible + .slide{outline:2px solid var(--accent);outline-offset:2px}
 
+/* Notes carry the running prose that is left on screen, so they get a real
+   measure -- a claim stretched across 1400px is read twice or not at all. */
 .note{padding:12px 16px;border-radius:3px;font-size:13.5px;line-height:1.5;margin-bottom:14px;
-  border:1px solid transparent}
+  border:1px solid transparent;max-width:78ch;text-wrap:pretty}
 .note.info{background:var(--accent-soft);color:var(--accent-ink)}
 .note.bad{background:var(--bad-soft);color:var(--bad)}
 .note.warn{background:var(--warn-soft);color:var(--warn)}
@@ -530,6 +567,10 @@ tr:last-child td{border-bottom:none}
 </head>
 <body>
 
+<!-- Fifteen stage buttons stand between the top of the document and the
+     content, so a keyboard user needs a way past them. -->
+<a class="skip" href="#main">Skip to content</a>
+
 <div class="app">
 
 <aside class="sidebar">
@@ -561,7 +602,7 @@ tr:last-child td{border-bottom:none}
   </div>
 </header>
 
-<main>
+<main id="main" tabindex="-1">
   <!-- ============ 1. CONNECT ============ -->
   <section class="view on" id="view-connect">
     <div class="head">
