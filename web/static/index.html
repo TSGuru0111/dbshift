@@ -500,8 +500,7 @@ tr:last-child td{border-bottom:none}
   <section class="view on" id="view-connect">
     <div class="head">
       <h2>Connect to the source database</h2>
-      <p>Read-only. The collector issues no DDL and no DML. Your password stays in this
-         process's memory and is never written to disk or sent to the browser.</p>
+      <p>Read-only. The password never leaves this process.</p>
     </div>
     <div class="split">
       <div class="panel pad">
@@ -530,10 +529,7 @@ tr:last-child td{border-bottom:none}
       </div>
     </div>
     <div class="panel pad mt">
-      <div class="eyebrow">What a client environment needs</div>
-      <p style="color:var(--ink-2);font-size:12.5px;margin-bottom:14px;max-width:78ch">
-        On this laptop the database is local, so nothing is in the way. At a client site these
-        are what to request up front — the first one blocks everything else.</p>
+      <div class="eyebrow">What a client environment needs<span class="info" tabindex="0" role="note" title="On this laptop the database is local, so nothing is in the way. At a client site these are what to request up front — the first one blocks everything else.">i</span></div>
       <div class="netreq" id="netreq"></div>
     </div>
   </section>
@@ -542,19 +538,14 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-discover">
     <div class="head">
       <h2>Discovery</h2>
-      <p>Each probe reads one area of the data dictionary. They run in order, and every
-         statement is logged with its row count and duration.</p>
+      <p>Each probe reads one area of the data dictionary, in order.</p>
     </div>
     <!-- The migration mode. Asked here, before the run, because it decides
          whether OPS-001, OPS-002 and DQ-001 are blockers or irrelevancies. It
          used to be a Phase 7 flag, which meant the assessment reported all
          three as CRITICAL on every run and the gate halted on them. -->
     <div class="panel pad" style="margin-bottom:16px">
-      <div class="eyebrow">Migration mode — how is this estate moving?</div>
-      <p style="color:var(--ink-2);font-size:12.5px;margin:6px 0 14px;max-width:78ch">
-        Answer this before discovery runs. It decides what counts as a blocker:
-        ARCHIVELOG, supplemental logging and missing primary keys stop change data
-        capture, and none of them affect a full load into an outage window.</p>
+      <div class="eyebrow">Migration mode — how is this estate moving?<span class="info" tabindex="0" role="note" title="Answer this before discovery runs. It decides what counts as a blocker: ARCHIVELOG, supplemental logging and missing primary keys stop change data capture, and none of them affect a full load into an outage window.">i</span></div>
       <div class="paths" id="modeOpts"></div>
       <div id="modeNote" style="margin-top:12px"></div>
     </div>
@@ -582,8 +573,7 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-assess">
     <div class="head">
       <h2>Assessment</h2>
-      <p><b>AWS Schema Conversion Tool</b> — AWS's own verdict, with the PDF and CSV it
-         writes itself. Each action item is routed by where the fix belongs.</p>
+      <p><b>AWS Schema Conversion Tool</b> — AWS's own verdict, with the PDF and CSV it writes itself. Each action item is routed by where the fix belongs.</p>
     </div>
 
     <!-- The 50-rule engine still runs, headlessly: Phases 3, 7, 9 and 10 read
@@ -719,22 +709,13 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-target">
     <div class="head">
       <h2>Target decision</h2>
-      <p>Two paths are possible and <b>the client chooses</b>. Keep Oracle on Amazon RDS, or
-         leave Oracle for PostgreSQL and end the licence. The rules assess both from the
-         estate's own evidence: what would <b>block</b> each path outright, and what would
-         <b>cost effort</b>. Then a proposer suggests an instance class and storage, and a
-         deterministic rules engine <b>overrules it where they disagree</b>.</p>
+      <p>Two paths. The client chooses; the evidence is below.</p>
     </div>
 
     <div class="panel pad" style="margin-bottom:16px">
       <div class="spread">
         <div>
-          <div class="eyebrow" style="margin:0">Measured utilization — optional</div>
-          <p style="font-size:13.5px;color:var(--ink-2);margin-top:6px;max-width:74ch">
-            A catalogue scan cannot produce utilization percentiles — there is no history to take
-            a percentile of. Without a feed this sizing is a <b>capacity floor</b>, not a
-            load-derived recommendation. An AWS OLA / DB OLA, Migration Evaluator or monitoring
-            export supplies it.</p>
+          <div class="eyebrow" style="margin:0">Measured utilization — optional<span class="info" tabindex="0" role="note" title="A catalogue scan cannot produce utilization percentiles — there is no history to take a percentile of. Without a feed this sizing is a capacity floor, not a load-derived recommendation. An AWS OLA / DB OLA, Migration Evaluator or monitoring export supplies it.">i</span></div>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
           <button class="btn ghost sm" id="btnUtilSample">Show format</button>
@@ -747,12 +728,7 @@ tr:last-child td{border-bottom:none}
     </div>
 
     <div class="panel pad" style="margin-bottom:16px">
-      <div class="eyebrow">Migration path</div>
-      <p style="font-size:13.5px;color:var(--ink-2);margin:6px 0 12px;max-width:80ch">
-        A <b>blocker</b> is a feature the target engine cannot express at all, so the path is
-        refused rather than warned about. <b>Effort</b> is work with a known shape. The
-        stored-code figure is the one that decides this in practice, and it is measured by
-        Phase 4b compiling the code for real — not estimated.</p>
+      <div class="eyebrow">Migration path<span class="info" tabindex="0" role="note" title="A blocker is a feature the target engine cannot express at all, so the path is refused rather than warned about. Effort is work with a known shape. The stored-code figure is the one that decides this in practice, and it is measured by Phase 4b compiling the code for real — not estimated.">i</span></div>
       <div class="pathpick" id="pathPick"></div>
       <div id="pathEvidence" class="mt-s"></div>
       <div id="pathRec" class="mt-s"></div>
@@ -780,9 +756,7 @@ tr:last-child td{border-bottom:none}
           <div class="acc" id="forcedList"></div>
         </div>
         <div class="panel pad">
-          <div class="eyebrow">Detected, but not forcing</div>
-          <p style="font-size:13.5px;color:var(--ink-2);margin-bottom:12px">A feature showing as
-            used is not a feature you owe a licence for.</p>
+          <div class="eyebrow">Detected, but not forcing<span class="info" tabindex="0" role="note" title="A feature showing as used is not a feature you owe a licence for.">i</span></div>
           <div class="acc" id="dismissedList"></div>
         </div>
       </div>
@@ -796,9 +770,7 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-remediate">
     <div class="head">
       <h2>Remediation plan</h2>
-      <p>AI drafts each fix and proposes how to solve it. <b>A person reviews and
-         approves before anything reaches the target</b> — this phase applies
-         nothing.</p>
+      <p>AI drafts, a person approves. Nothing is applied here.</p>
     </div>
 
     <!-- ---- AWS SCT action items: what Phase 4 now acts on ---- -->
@@ -837,17 +809,12 @@ tr:last-child td{border-bottom:none}
 
     <div class="split" style="margin-bottom:16px;margin-top:12px">
       <div class="panel pad">
-        <div class="eyebrow">Fix generation</div>
+        <div class="eyebrow">Fix generation<span class="info" tabindex="0" role="note" title="Findings with exactly one correct remedy are templated, where a model would add cost and risk but no information. Anything needing judgement goes to the model tier, and every answer is labelled with what produced it. Whatever wrote the statement, the same gates decide whether it may run — a model proposes, it never approves.">i</span></div>
         <div class="status" id="genStatus"><span class="led"></span>
           <span id="genStatusText">Templates first — a model only where judgement is needed</span></div>
-        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
-          Findings with exactly one correct remedy are templated, where a model would add cost and
-          risk but no information. Anything needing judgement goes to the model tier, and every
-          answer is labelled with what produced it. Whatever wrote the statement, <b>the same gates
-          decide whether it may run</b> — a model proposes, it never approves.</p>
       </div>
       <div class="panel pad">
-        <div class="eyebrow">Rehearsal database</div>
+        <div class="eyebrow">Rehearsal database<span class="info" tabindex="0" role="note" title="Every fix is applied and rolled back here before production. Without it no fix can be proven safe, so none may be applied. Build it with scripts/oracle-source/06_create_rehearsal.sql. The password is held in server memory only, never written to disk.">i</span></div>
         <div class="field" style="margin-bottom:6px">
           <input id="rehearsalDsn" placeholder="host:1521/SERVICE — a restored copy of the estate"
                  spellcheck="false"></div>
@@ -864,11 +831,6 @@ tr:last-child td{border-bottom:none}
           <button class="btn ghost sm" id="btnRehearsal">Register</button>
           <span class="mono" id="rehearsalState" style="font-size:12.5px;color:var(--ink-3)">not configured</span>
         </div>
-        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
-          Every fix is applied <b>and rolled back</b> here before production. Without it no fix can be
-          proven safe, so none may be applied. Build it with
-          <span class="mono">scripts/oracle-source/06_create_rehearsal.sql</span>. The password is held
-          in server memory only, never written to disk.</p>
       </div>
     </div>
 
@@ -895,30 +857,21 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-convert">
     <div class="head">
       <h2>Convert stored code to PostgreSQL</h2>
-      <p>Every procedure, function, package, trigger and type rewritten as PL/pgSQL — rules
-         first, the model where judgement is needed. Each conversion is <b>compiled on a real
-         PostgreSQL and rolled back</b>, then <b>reviewed and approved by a person before
-         anything reaches the target</b>. This phase applies nothing.</p>
+      <p>Rewritten as PL/pgSQL, compiled for real, then rolled back.</p>
     </div>
 
     <div class="split" style="margin-bottom:16px">
       <div class="panel pad">
-        <div class="eyebrow">Where a conversion comes from</div>
+        <div class="eyebrow">Where a conversion comes from<span class="info" tabindex="0" role="note" title="A construct with exactly one correct translation is rewritten by a rule and the reason is recorded. Anything needing judgement goes to the model tier, and what it writes is labelled with the model that wrote it. Anything PostgreSQL cannot express goes to a person. Whatever produced the text, the same five gates decide whether it is ready — a model proposes, it never approves.">i</span></div>
         <!-- Deliberately says nothing until the server answers. Hardcoding a
              mode here is how a false claim survives: this card read "static
              stand-ins -- not model output" on a console whose model tier was
              live, because the wording was baked into the markup. -->
         <div class="status" id="convGenStatus"><span class="led"></span>
           <span>Checking the model tier…</span></div>
-        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
-          A construct with exactly one correct translation is rewritten by a rule and the reason is
-          recorded. Anything needing judgement goes to the <b>model tier</b>, and what it writes is
-          labelled with the model that wrote it. Anything PostgreSQL cannot express goes to a person.
-          Whatever produced the text, the same five gates decide whether it is ready — a model
-          proposes, it never approves.</p>
       </div>
       <div class="panel pad">
-        <div class="eyebrow">PostgreSQL compile target</div>
+        <div class="eyebrow">PostgreSQL compile target<span class="info" tabindex="0" role="note" title="Every converted object is created here and rolled back, so this database stays empty. Without it nothing is proven to compile, so nothing is ready. Start one with scripts\postgres-target\run_pg.ps1. The password is held in server memory only.">i</span></div>
         <div class="field" style="margin-bottom:6px">
           <input id="pgDsn" placeholder="host:5432/dbname" value="localhost:5432/dbshift"
                  spellcheck="false"></div>
@@ -932,11 +885,6 @@ tr:last-child td{border-bottom:none}
           <button class="btn ghost sm" id="btnPgTarget">Register</button>
           <span class="mono" id="pgState" style="font-size:12.5px;color:var(--ink-3)">not configured</span>
         </div>
-        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
-          Every converted object is created here and <b>rolled back</b>, so this database stays
-          empty. Without it nothing is proven to compile, so nothing is ready. Start one with
-          <span class="mono">scripts\postgres-target\run_pg.ps1</span>. The password is held in
-          server memory only.</p>
       </div>
     </div>
 
@@ -962,33 +910,18 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-schemaddl">
     <div class="head">
       <h2>Build the target's schema</h2>
-      <p>Tables, keys, checks and indexes for PostgreSQL, generated from what discovery
-         recorded. <b>DMS would improvise this</b> — it creates missing tables with a fixed
-         mapping that turns every <span class="mono">NUMBER</span> into
-         <span class="mono">numeric</span>, and creates <b>no constraints and no indexes at
-         all</b>. Every statement here is executed on a real PostgreSQL and
-         <b>rolled back</b>. This phase applies nothing.</p>
+      <p>The tables, keys and indexes DMS will not create.</p>
     </div>
 
     <div class="split" style="margin-bottom:16px">
       <div class="panel pad">
-        <div class="eyebrow">The order, and why it is not alphabetical</div>
+        <div class="eyebrow">The order, and why it is not alphabetical<span class="info" tabindex="0" role="note" title="Constraints and indexes come after the load. Validating a foreign key row by row during a bulk insert is the slowest possible way to do it, and an index maintained during a load is rebuilt far faster afterwards. This is the same order Phase 7's Data Pump path uses for the homogeneous case.">i</span></div>
         <div id="ddlOrder" class="mt-s"></div>
-        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
-          Constraints and indexes come <b>after</b> the load. Validating a foreign key row by
-          row during a bulk insert is the slowest possible way to do it, and an index
-          maintained during a load is rebuilt far faster afterwards. This is the same order
-          Phase 7's Data Pump path uses for the homogeneous case.</p>
       </div>
       <div class="panel pad">
-        <div class="eyebrow">What proves this DDL</div>
+        <div class="eyebrow">What proves this DDL<span class="info" tabindex="0" role="note" title="Every statement runs on the registered PostgreSQL inside one transaction, which is then rolled back — so the database is left exactly as found and the DDL is still proven to execute. Register a target on Convert PL/SQL; without one this phase reports that the compile did not run, never that it passed.">i</span></div>
         <div class="status" id="ddlTargetStatus"><span class="led"></span>
           <span>Checking the target…</span></div>
-        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
-          Every statement runs on the registered PostgreSQL inside one transaction, which is
-          then <b>rolled back</b> — so the database is left exactly as found and the DDL is
-          still proven to execute. Register a target on <b>Convert PL/SQL</b>; without one
-          this phase reports that the compile <b>did not run</b>, never that it passed.</p>
       </div>
     </div>
 
@@ -1016,15 +949,12 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-appsql">
     <div class="head">
       <h2>Convert the application's SQL</h2>
-      <p>The Oracle SQL embedded in the application, not in the database — <b>AWS SCT never
-         reads this</b>, because it inspects a schema and these statements live in mapper
-         files in a source repository. Extracted, routed by construct, rewritten rules-first,
-         and gated the same way stored code is. This phase applies nothing.</p>
+      <p>The SQL in mapper files — <b>AWS SCT never reads this</b>.</p>
     </div>
 
     <div class="split" style="margin-bottom:16px">
       <div class="panel pad">
-        <div class="eyebrow">What is scanned</div>
+        <div class="eyebrow">What is scanned<span class="info" tabindex="0" role="note" title="MyBatis <if>, <where> and <foreach> tags are kept: stripping them yields SQL that parses and is not the SQL the application sends. ${…} stays interpolated — rewriting it to #{…} turns a column name into a bound literal and the query fails at runtime, not at conversion.">i</span></div>
         <div class="field" style="margin-bottom:8px">
           <input id="appsqlRoot" placeholder="path to the mapper files"
                  value="scripts/demo-app/mappers" spellcheck="false"></div>
@@ -1032,24 +962,11 @@ tr:last-child td{border-bottom:none}
           <label class="chk" style="margin-bottom:0"><input type="checkbox" id="appsqlModel">
             <span>Draft the judgement cases with the model tier</span></label>
         </div>
-        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
-          MyBatis <span class="mono">&lt;if&gt;</span>, <span class="mono">&lt;where&gt;</span> and
-          <span class="mono">&lt;foreach&gt;</span> tags are <b>kept</b>: stripping them yields SQL
-          that parses and is not the SQL the application sends. <span class="mono">${…}</span> stays
-          interpolated — rewriting it to <span class="mono">#{…}</span> turns a column name into a
-          bound literal and the query fails at runtime, not at conversion.</p>
       </div>
       <div class="panel pad">
-        <div class="eyebrow">What proves a rewrite</div>
+        <div class="eyebrow">What proves a rewrite<span class="info" tabindex="0" role="note" title="Two separate questions, and merging them is how a converter passes while being wrong. Parse asks whether the target accepts the statement — cheap, one connection. Result asks whether it returns the same rows as the Oracle original over the same data — and it is the only check that catches a ROWNUM pagination rewrite that parses perfectly and returns a different page. Without a target both report blocked, never a silent pass.">i</span></div>
         <div class="status" id="appsqlTargetStatus"><span class="led"></span>
           <span>Checking the target…</span></div>
-        <p style="font-size:13.5px;color:var(--ink-2);margin-top:10px">
-          Two separate questions, and merging them is how a converter passes while being wrong.
-          <b>Parse</b> asks whether the target accepts the statement — cheap, one connection.
-          <b>Result</b> asks whether it returns the same rows as the Oracle original over the same
-          data — and it is the only check that catches a <span class="mono">ROWNUM</span> pagination
-          rewrite that parses perfectly and returns a different page. Without a target both report
-          <b>blocked</b>, never a silent pass.</p>
       </div>
     </div>
 
@@ -1072,8 +989,7 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-gate">
     <div class="head">
       <h2>Blocker gate</h2>
-      <p>Nothing downstream runs while a blocker is open. Each one says
-         <b>where it must be fixed</b>.</p>
+      <p>Nothing downstream runs while a blocker is open.</p>
     </div>
 
     <div class="spread" style="margin-bottom:12px">
@@ -1131,19 +1047,12 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-provision">
     <div class="head">
       <h2>Provision the target</h2>
-      <p>The RDS instance is rendered from the records above, and every value says where it came
-         from. Rendering and checking are free and read-only. <b>Deploying bills</b> — it asks for
-         the account id, the hourly rate typed back, and, while the gate says halt, a
-         provision-only acknowledgement recorded against your AWS login.</p>
+      <p>Rendering and checking are free. <b>Deploying bills.</b></p>
     </div>
 
     <details class="panel pad" id="provOptions" style="margin-bottom:16px">
       <summary style="cursor:pointer;font-weight:600">Instance and database configuration
-        <span class="sub" id="provOptSummary" style="color:var(--ink-3);font-weight:400"></span></summary>
-      <p style="font-size:13.5px;color:var(--ink-2);max-width:78ch;margin-top:10px">
-        Every value below is derived from the evidence in Phases 1–3. You can change them, and the
-        rendered plan will record <b>what was derived, what you chose, and why</b> — so the
-        provenance table stays true. A change needs a reason.</p>
+        <span class="sub" id="provOptSummary" style="color:var(--ink-3);font-weight:400"></span><span class="info" tabindex="0" role="note" title="Every value below is derived from the evidence in Phases 1–3. You can change them, and the rendered plan will record what was derived, what you chose, and why — so the provenance table stays true. A change needs a reason.">i</span></summary>
 
       <div class="mt"><div class="eyebrow">Instance class</div>
         <div class="row2">
@@ -1220,12 +1129,8 @@ tr:last-child td{border-bottom:none}
     <div id="provEmpty" class="panel"><div class="empty">Evaluate the gate first, then render the target.</div></div>
 
     <div class="panel pad mt" id="killPanel">
-      <div class="spread"><div class="eyebrow" style="margin:0">Kill switch</div>
+      <div class="spread"><div class="eyebrow" style="margin:0">Kill switch<span class="info" tabindex="0" role="note" title="Acts only on resources named dbshift or tagged project=dbshift; anything else is listed and never touched. Destroy ends billing: it empties the exchange bucket, then deletes the stack. No final snapshot.">i</span></div>
         <button class="btn ghost sm" id="btnKillScan">Check what is billing</button></div>
-      <p style="font-size:13.5px;color:var(--ink-2);margin-top:8px;max-width:78ch">Acts only on
-        resources named <span class="mono">dbshift</span> or tagged
-        <span class="mono">project=dbshift</span>; anything else is listed and never touched. Destroy
-        ends billing: it empties the exchange bucket, then deletes the stack. No final snapshot.</p>
       <div class="checks mt-s" id="killList"></div>
       <div class="row2 mt">
         <div class="field"><label for="kAcct">Account id, typed to confirm</label>
@@ -1240,10 +1145,7 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-migrate">
     <div class="head">
       <h2>Migrate</h2>
-      <p>How the data moves depends on the target Phase 3 chose. <b>Oracle to Oracle</b> uses Data
-         Pump over S3: one dump, loaded directly. <b>Oracle to PostgreSQL</b> uses <b>AWS DMS</b>,
-         because Data Pump writes an Oracle-only format that PostgreSQL cannot read — and DMS is
-         also what makes change data capture, and so a short cutover, possible at all.</p>
+      <p>Data Pump for Oracle→Oracle. AWS DMS for Oracle→PostgreSQL.</p>
     </div>
 
     <!-- DMS: shown when Phase 3 chose PostgreSQL -->
@@ -1251,11 +1153,7 @@ tr:last-child td{border-bottom:none}
       <div class="panel pad" style="margin-bottom:16px">
         <div class="spread">
           <div>
-            <div class="eyebrow" style="margin:0">AWS Database Migration Service</div>
-            <p style="font-size:13.5px;color:var(--ink-2);margin:6px 0 0;max-width:80ch">
-              A replication instance reads the source and writes the target. <b>It bills by the
-              hour for as long as it exists</b>, whether or not a task is running — unlike Data
-              Pump, which finishes and stops. Planning below is free and creates nothing.</p>
+            <div class="eyebrow" style="margin:0">AWS Database Migration Service<span class="info" tabindex="0" role="note" title="A replication instance reads the source and writes the target. It bills by the hour for as long as it exists, whether or not a task is running — unlike Data Pump, which finishes and stops. Planning below is free and creates nothing.">i</span></div>
           </div>
           <button class="btn ghost sm" id="btnDmsPlan">Plan</button>
         </div>
@@ -1267,28 +1165,18 @@ tr:last-child td{border-bottom:none}
 
       <div class="split" style="margin-bottom:16px">
         <div class="panel pad">
-          <div class="eyebrow">What DMS moves</div>
-          <p style="font-size:13.5px;color:var(--ink-2);margin:6px 0 10px">Tables and their rows,
-            and nothing else. Held-back tables are named, because a table missing from a migration
-            looks the same as a bug.</p>
+          <div class="eyebrow">What DMS moves<span class="info" tabindex="0" role="note" title="Tables and their rows, and nothing else. Held-back tables are named, because a table missing from a migration looks the same as a bug.">i</span></div>
           <div class="acc" id="dmsTables"></div>
         </div>
         <div class="panel pad">
-          <div class="eyebrow">What it leaves behind</div>
-          <p style="font-size:13.5px;color:var(--ink-2);margin:6px 0 10px">Sequences, views and
-            anything whose data lives outside the database. Each is routed to a <b>rule</b>, the
-            <b>model</b>, or a <b>person</b> — and nothing here is applied.</p>
+          <div class="eyebrow">What it leaves behind<span class="info" tabindex="0" role="note" title="Sequences, views and anything whose data lives outside the database. Each is routed to a rule, the model, or a person — and nothing here is applied.">i</span></div>
           <div id="dmsResidueNote"></div>
           <div class="acc" id="dmsResidue"></div>
         </div>
       </div>
 
       <div class="panel pad" id="dmsRunPanel" style="display:none">
-        <div class="eyebrow">Run it — this starts billing</div>
-        <p style="font-size:13.5px;color:var(--ink-2);margin:6px 0 12px">
-          Creates the replication instance, both endpoints and the task, then starts it. Stop the
-          task when it is done, and <b>delete the instance</b> with the kill switch — a stopped
-          task does not stop the bill.</p>
+        <div class="eyebrow">Run it — this starts billing<span class="info" tabindex="0" role="note" title="Creates the replication instance, both endpoints and the task, then starts it. Stop the task when it is done, and delete the instance with the kill switch — a stopped task does not stop the bill.">i</span></div>
         <div class="row2">
           <div class="field"><label for="dmsSourcePw">Source schema owner password</label>
             <input id="dmsSourcePw" type="password" autocomplete="off" placeholder="held in memory only"></div>
@@ -1331,11 +1219,7 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-validate">
     <div class="head">
       <h2>Validate</h2>
-      <p>Five levels, from <i>it exists</i> to <i>it behaves</i>. Every finding is marked
-         <b>match</b>, <b>expected difference</b> with the reason it is correct, <b>mismatch</b>, or
-         <b>not comparable</b> when one side cannot be read — which is never counted as a match.
-         Only mismatches fail the phase. Nothing is written to either database: every statement is
-         a SELECT.</p>
+      <p>Five levels, from <i>it exists</i> to <i>it behaves</i>.</p>
     </div>
 
     <div id="valCrossEngine" style="display:none">
@@ -1369,10 +1253,7 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-cutover">
     <div class="head">
       <h2>Cutover</h2>
-      <p>A readiness certificate, then a named approval, then the few target-side steps Phase 4 set
-         aside. Every requirement is <b>met</b>, <b>waived</b> by a named person, <b>not applicable</b>
-         with the reason it does not apply, or <b>unmet</b> — and an unmet requirement says what would
-         clear it. Building the certificate changes nothing.</p>
+      <p>Certificate, then a named approval, then the steps.</p>
     </div>
 
     <div class="panel pad">
@@ -1384,11 +1265,7 @@ tr:last-child td{border-bottom:none}
     <div class="checks mt" id="cutReqs"></div>
 
     <div class="panel pad mt" id="cutApprovePanel" style="display:none">
-      <div class="eyebrow">Approval</div>
-      <p style="font-size:13.5px;color:var(--ink-2);margin-bottom:10px">
-        The gate blocks cutover on this estate. A person may accept those blockers, and the reason is
-        recorded against the AWS identity making the call — <b>the approver is never typed into this
-        form</b>. An approval names one collector run; it does not carry to another.</p>
+      <div class="eyebrow">Approval<span class="info" tabindex="0" role="note" title="The gate blocks cutover on this estate. A person may accept those blockers, and the reason is recorded against the AWS identity making the call — the approver is never typed into this form. An approval names one collector run; it does not carry to another.">i</span></div>
       <div class="field"><label for="cutReason">Why this is acceptable</label>
         <textarea id="cutReason" spellcheck="false"
           placeholder="e.g. full-outage window agreed with the application owner for Saturday 02:00; no CDC required"></textarea></div>
@@ -1397,10 +1274,7 @@ tr:last-child td{border-bottom:none}
     </div>
 
     <div class="panel pad mt" id="cutExecPanel" style="display:none">
-      <div class="eyebrow">Run the cutover steps</div>
-      <p style="font-size:13.5px;color:var(--ink-2);margin-bottom:10px">
-        Runs only the target-side steps listed above. It does <b>not</b> repoint any application, and
-        the source is left untouched and authoritative.</p>
+      <div class="eyebrow">Run the cutover steps<span class="info" tabindex="0" role="note" title="Runs only the target-side steps listed above. It does not repoint any application, and the source is left untouched and authoritative.">i</span></div>
       <div class="field"><label for="cutConfirm">Type the AWS account id to confirm</label>
         <input id="cutConfirm" class="mono" placeholder="000000000000"></div>
       <div class="spread"><button class="btn" id="btnCutExecute">Run cutover steps</button>
@@ -1416,11 +1290,7 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-report">
     <div class="head">
       <h2>Migration assessment report</h2>
-      <p>The deliverable. One document, built from this run's records and nothing else: the
-         <b>schema conversion assessment</b> AWS SCT would produce — every action item graded
-         simple, medium, complex or decision — and the <b>DMS pre-migration assessment</b> that
-         says whether full load and change data capture can run. Rebuilt on every request, so it
-         can never disagree with the screens before it.</p>
+      <p>One document, built from this run's own records.</p>
     </div>
 
     <div class="spread" style="margin-bottom:16px">
@@ -1448,8 +1318,7 @@ tr:last-child td{border-bottom:none}
   <section class="view" id="view-catalogue">
     <div class="head">
       <h2>Rules &amp; probes</h2>
-      <p>Switch any check off and it will not run. Built-in checks are never edited — disabling
-         one records the choice separately, so it can always be switched back on.</p>
+      <p>Switch any check off and it will not run.</p>
     </div>
     <div class="panel pad">
       <div class="spread"><div class="eyebrow" style="margin:0">Discovery probes</div>
@@ -1970,14 +1839,14 @@ async function renderDiscovery(){
   $('#discAcc').innerHTML = d.datasets.map(ds => `
     <details class="item"><summary>
       <span class="title">${esc(ds.name)}<span class="sub">${esc(ds.probe || '')}</span></span>
-      <span></span><span class="count">${fmt(ds.row_count)}</span></summary>
+      <span></span><span class="count">${fmt(ds.row_count)}</span><span class="info" tabindex="0" role="note" title="Showing 60 of ${fmt(ds.row_count)} rows.">i</span></summary>
       <div class="body">
         ${ds.rows.length ? `<div class="tblwrap"><table>
           <thead><tr>${ds.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
           <tbody>${ds.rows.slice(0,60).map(r => `<tr>${ds.columns.map(c =>
             `<td title="${esc(r[c])}">${esc(r[c] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody>
           </table></div>
-          ${ds.row_count > 60 ? `<p class="why">Showing 60 of ${fmt(ds.row_count)} rows.</p>` : ''}`
+          ${ds.row_count > 60 ? `` : ''}`
         : `<p class="why">No rows. Either this estate has none, or the probe was switched off.</p>`}
       </div></details>`).join('');
   $('#discResult').style.display = '';
@@ -2184,7 +2053,7 @@ function renderIssues(){
       <span class="title"><span class="sev ${i.severity}">${i.severity}</span>
         &nbsp;${esc(i.title)}<span class="sub">${esc(i.rule_id)} · ${esc(i.remediation_level)}</span></span>
       <span></span>
-      <span class="count">${i.occurrences > 1 ? '×' + i.occurrences : '1'}</span></summary>
+      <span class="count">${i.occurrences > 1 ? '×' + i.occurrences : '1'}</span><span class="info" tabindex="0" role="note" title="Proposed by the ${esc(p.source)} proposer, then validated. ${d.agreed_with_proposal ? 'The rules engine confirmed it unchanged.' : 'The rules engine overruled part of the proposal.'}">i</span></summary>
       <div class="body">
         <p class="why"><b>${esc(i.sample_detail || '')}</b></p>
         <p class="why">${esc(i.rationale)}</p>
@@ -2653,10 +2522,6 @@ async function renderSizing(){
       ${d.licence_model ? `<span class="mono" style="font-size:12.5px;font-weight:500;color:var(--accent);
         border:1px solid var(--accent);border-radius:2px;padding:2px 8px;margin-left:6px;
         vertical-align:middle">${esc(d.licence_model)}</span>` : ''}</div>
-    <p style="font-size:13.5px;color:var(--ink-2);margin-top:8px">Proposed by the
-      <b>${esc(p.source)}</b> proposer, then validated.
-      ${d.agreed_with_proposal ? 'The rules engine confirmed it unchanged.'
-        : 'The rules engine overruled part of the proposal.'}</p>
     <div class="facts" style="grid-template-columns:repeat(4,1fr);margin-top:14px">
       ${[['Instance', d.instance_class, `${d.vcpu} vCPU · ${d.memory_gib} GiB`],
          ['Storage', d.storage_gb + ' GB', d.storage_type + ' · from ' + f.segment_gb + ' GB'],
@@ -3994,9 +3859,8 @@ async function renderGate(){
       <span class="title"><span class="sev CRITICAL">CRITICAL</span>&nbsp;${esc(b.title)}
         <span class="sub">${esc(b.rule_id)}${b.known_blast_radius ? '' : ' · blast radius unknown'}</span></span>
       <span></span>
-      <span class="count">${b.occurrences > 1 ? '×' + b.occurrences : '1'}</span></summary>
+      <span class="count">${b.occurrences > 1 ? '×' + b.occurrences : '1'}</span><span class="info" tabindex="0" role="note" title="Blocks: ${esc(b.blocks.join(', ').replace(/_/g,' ')) || 'everything'}">i</span></summary>
       <div class="body">
-        <p class="why"><b>Blocks:</b> ${esc(b.blocks.join(', ').replace(/_/g,' ')) || 'everything'}</p>
         <p class="why">${esc(b.why)}</p>
         <p class="why"><b>Clears when.</b> ${esc(b.clears_when)}</p>
         ${b.fix_drafted ? '<p class="why"><b>A fix is already drafted</b> for this rule in the remediation plan.</p>' : ''}
@@ -4021,9 +3885,8 @@ async function renderGate(){
       <span class="title">${esc(w.title)}<span class="sub">${esc(w.rule_id)} · waived</span></span>
       <span></span>
       <span style="display:flex;gap:10px;align-items:center" onclick="event.preventDefault()">
-        <button class="btn ghost sm" onclick="unwaive('${esc(w.rule_id)}')">Revoke</button></span></summary>
+        <button class="btn ghost sm" onclick="unwaive('${esc(w.rule_id)}')">Revoke</button></span><span class="info" tabindex="0" role="note" title="Accepted by ${esc(w.waiver.approved_by)}">i</span></summary>
       <div class="body">
-        <p class="why"><b>Accepted by</b> ${esc(w.waiver.approved_by)}</p>
         <p class="why">${esc(w.waiver.reason)}</p>
         <p class="why" style="color:var(--ink-3)">Still blocks, on paper: ${esc(w.blocks.join(', ').replace(/_/g,' '))}</p>
       </div></details>`).join('');
