@@ -74,6 +74,10 @@ button{font:inherit}
    which is correct: they are trademarks and must not recolour. */
 .ico{width:16px;height:16px;display:block;flex:none;color:inherit}
 .ico-lg{width:22px;height:22px}
+/* An AWS service mark sitting inside a heading. The eyebrow is uppercase
+   tracked text, so the mark needs its own alignment rather than inheriting. */
+.svcmark{width:17px;height:17px;display:inline-block;vertical-align:-4px;
+  margin-right:7px}
 ::selection{background:var(--accent-soft);color:var(--ink)}
 
 /* Type scale, fixed. 12.5 meta · 13.5 support · 14 body/controls · 15 intro · 22 title.
@@ -281,7 +285,12 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
 .pathopt:hover:not(:disabled){border-color:var(--accent)}
 .pathopt[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .pathopt:disabled{cursor:not-allowed;opacity:.62}
-.pathopt .n{font-family:Archivo,sans-serif;font-size:15px;font-weight:700;letter-spacing:-.01em}
+.pathopt .n{font-family:Archivo,sans-serif;font-size:15px;font-weight:700;letter-spacing:-.01em;
+  display:flex;align-items:center;gap:8px}
+/* Oracle is a wide wordmark and the elephant is square, so a single height
+   makes the elephant look half the size. Both get the same box and sit inside
+   it, which evens their optical weight. */
+.pathopt .pathmark{width:58px;height:21px;flex:none;object-fit:contain}
 .pathopt .s{font-size:13px;color:var(--ink-2);margin-top:4px}
 .pathopt .m{font-size:12.5px;color:var(--ink-3);margin-top:7px}
 .pathopt .m b{color:var(--bad);font-weight:600}
@@ -1169,7 +1178,7 @@ tr:last-child td{border-bottom:none}
 
       <div class="provpane" data-prov="live" hidden>
       <div class="panel pad mt" id="statusPanel">
-        <div class="spread"><div class="eyebrow" style="margin:0">Target — live from CloudFormation</div>
+        <div class="spread"><div class="eyebrow" style="margin:0"><svg class="ico svcmark" aria-hidden="true"><use href="#lg-rds"></use></svg>Target — live from CloudFormation</div>
           <button class="btn ghost sm" id="btnStatus">Refresh</button></div>
         <div id="statusBody" class="mt-s"></div>
         <div class="eyebrow mt" style="margin-bottom:6px">What CloudFormation built, in order</div>
@@ -1183,7 +1192,7 @@ tr:last-child td{border-bottom:none}
 
       <div class="provpane" data-prov="deploy" hidden>
       <div class="panel pad mt" id="deployForm">
-        <div class="eyebrow">Deploy — this starts billing</div>
+        <div class="eyebrow"><svg class="ico svcmark" aria-hidden="true"><use href="#lg-cfn"></use></svg>Deploy — this starts billing</div>
         <div class="note warn" id="deployCost"></div>
         <div class="row2">
           <div class="field"><label for="dAcct">Account id</label>
@@ -1227,7 +1236,7 @@ tr:last-child td{border-bottom:none}
       <div class="panel pad" style="margin-bottom:16px">
         <div class="spread">
           <div>
-            <div class="eyebrow" style="margin:0">AWS Database Migration Service<span class="info" tabindex="0" role="note" title="A replication instance reads the source and writes the target. It bills by the hour for as long as it exists, whether or not a task is running — unlike Data Pump, which finishes and stops. Planning below is free and creates nothing.">i</span></div>
+            <div class="eyebrow" style="margin:0"><svg class="ico svcmark" aria-hidden="true"><use href="#ic-dms"></use></svg>AWS Database Migration Service<span class="info" tabindex="0" role="note" title="A replication instance reads the source and writes the target. It bills by the hour for as long as it exists, whether or not a task is running — unlike Data Pump, which finishes and stops. Planning below is free and creates nothing.">i</span></div>
           </div>
           <button class="btn ghost sm" id="btnDmsPlan">Plan</button>
         </div>
@@ -1267,7 +1276,7 @@ tr:last-child td{border-bottom:none}
 
     <div id="dataPumpPanel">
     <div class="panel pad" id="migDecide">
-      <div class="eyebrow">Data Pump — before it runs</div>
+      <div class="eyebrow"><svg class="ico svcmark" aria-hidden="true"><use href="#lg-s3"></use></svg>Data Pump — before it runs</div>
       <label class="chk"><input type="checkbox" id="mResolve">
         <span><b>Resolve RDS-004 in this phase.</b> The external table's file moves to S3 and into an RDS
         directory of the same name, so the table works on the target. Recorded against your AWS login.
@@ -4899,9 +4908,12 @@ function renderPaths(){
         : `<b>blocked</b> — ${esc(p.blockers.map(b => b.subject).join(', '))}`;
     }
     const blocked = p && !p.possible;
+    // The engine's own mark, so the two options are told apart before the
+    // label is read. .n keeps carrying the text -- drive_paths.js reads it.
     return `<button class="pathopt" data-engine="${k}" aria-pressed="${ENGINE === k}"
               ${blocked ? 'disabled title="The estate cannot run here as it stands"' : ''}>
-      <div class="n">${esc(label)}</div>
+      <div class="n"><svg class="ico pathmark" aria-hidden="true"><use href="#${
+        k === 'ORACLE' ? 'lg-oracle' : 'lg-postgres'}"></use></svg>${esc(label)}</div>
       <div class="s">${esc(PATH_SUB[k])}</div>
       <div class="m">${meta}</div></button>`;
   }).join('');
