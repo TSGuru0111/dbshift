@@ -1477,9 +1477,31 @@ def _model_mode() -> str:
     try:
         from bedrock.client import load_config
         tiers = load_config().get("tiers") or {}
-        return "live" if tiers.get("reasoning", {}).get("verified") else "static"
+        if not tiers.get("reasoning", {}).get("verified"):
+            return "static"
     except Exception:  # noqa: BLE001
         return "static"
+    # `verified` is hand-edited and records that an invocation once worked; it
+    # never self-corrects. Bedrock still needs credentials it can use *now*,
+    # and a profile with none made the console report the tier live and then
+    # fail every call with "Unable to locate credentials" -- which reads on
+    # screen as the model declining rather than never being reached.
+    #
+    # This catches *absent* credentials only. get_credentials() does not
+    # validate, so an expired token still reports present and the failure
+    # surfaces later, per item, as "no model fix". Proving liveness here would
+    # mean billing for a model call on every page load, which is worse; the
+    # per-item reason carries the real error when it happens.
+    try:
+        import boto3
+        from bedrock.client import _console_profile
+        profile = os.environ.get("DBSHIFT_BEDROCK_PROFILE") or _console_profile()
+        session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+        if session.get_credentials() is None:
+            return "unreachable"
+    except Exception:  # noqa: BLE001
+        return "unreachable"
+    return "live"
 
 
 def _rehearsal_target():

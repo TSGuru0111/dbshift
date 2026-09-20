@@ -4024,17 +4024,28 @@ async function renderSctRemediation(){
   // model tier is a setting.
   const noDraft = (SCTREM.entries || []).filter(
     e => e.status === 'HUMAN_AUTHORED_REQUIRED' && e.who !== 'person').length;
+  const wouldHave = noDraft
+    ? `${noDraft} item${noDraft === 1 ? '' : 's'} would have been offered to it; the`
+    : 'The';
+  const routedTail = `rest are routed to an engineer regardless — an architecture
+    decision or an Oracle-internal object has no statement to draft.`;
   $('#sctRemModel').innerHTML = mode === 'live'
     ? `<div class="note info" style="font-size:12.5px">The model drafted
        <b>${drafted}</b> of ${t.items ?? 0}. Each still needs a named approval before
        anything runs. The rest are routed to an engineer by
        <span class="mono">sct/route.py</span> — an architecture decision or an
        Oracle-internal object has no statement to draft.</div>`
+    // "unreachable" is a different fault from "off" and needs a different fix:
+    // the tier is configured and wanted, but AWS would not authenticate it.
+    : mode === 'unreachable'
+    ? `<div class="note bad" style="font-size:12.5px"><b>The model tier is configured
+       but AWS refused the credentials, so nothing was drafted.</b> ${wouldHave}
+       ${routedTail} Paste a fresh block on the
+       <a href="#" onclick="show('config');return false">AWS access</a> screen and
+       re-run — SSO credentials last about four hours.</div>`
     : `<div class="note warn" style="font-size:12.5px"><b>The model tier is
-       ${esc(mode)}, so nothing was drafted.</b> ${noDraft
-         ? `${noDraft} item${noDraft === 1 ? '' : 's'} would have been offered to it; the`
-         : 'The'} rest are routed to an engineer regardless — an architecture decision or
-       an Oracle-internal object has no statement to draft. Set
+       ${esc(mode)}, so nothing was drafted.</b> ${wouldHave}
+       ${routedTail} Set
        <span class="mono">DBSHIFT_MODEL_MODE=live</span> and re-run to draft them.</div>`;
 
   // The fold's own line carries the headline, so closing it loses the tiles

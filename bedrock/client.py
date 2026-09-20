@@ -52,6 +52,33 @@ def resolve(tier: str, config: dict | None = None) -> dict:
     return binding
 
 
+def _console_profile() -> str | None:
+    """The profile the console's Config screen writes, if it holds credentials.
+
+    Read straight from the shared credentials file rather than by importing
+    `web.awscreds`: this module is used by CLI entry points that have no
+    business importing the web package. The name is duplicated on purpose --
+    one string, and a mismatch would only mean falling through to the ambient
+    session, which is the behaviour without this.
+    """
+    import configparser
+    import pathlib
+
+    path = pathlib.Path(os.environ.get(
+        "AWS_SHARED_CREDENTIALS_FILE", pathlib.Path.home() / ".aws" / "credentials"))
+    if not path.exists():
+        return None
+    cfg = configparser.RawConfigParser()
+    try:
+        cfg.read(path, encoding="utf-8")
+    except configparser.Error:
+        return None
+    name = "dbshift-console"
+    if cfg.has_section(name) and cfg.get(name, "aws_access_key_id", fallback=""):
+        return name
+    return None
+
+
 class BedrockClient:
     def __init__(self, config: dict | None = None, session=None):
         self.config = config or load_config()
@@ -74,9 +101,16 @@ class BedrockClient:
             # DBSHIFT_BEDROCK_PROFILE overrides it; unset and with no explicit
             # session, the ambient credentials are used, which is correct when
             # one account does both.
+            #
+            # Failing that, credentials pasted on the console's Config screen
+            # are used. SSO credentials last about four hours, so a long demo
+            # outlives them, and a stale dbshift-bedrock profile made the model
+            # tier report itself live and then fail every call with "Unable to
+            # locate credentials" -- which reads as the model declining rather
+            # than never being reached.
             session = self._session
             if session is None:
-                profile = os.environ.get("DBSHIFT_BEDROCK_PROFILE")
+                profile = os.environ.get("DBSHIFT_BEDROCK_PROFILE") or _console_profile()
                 session = boto3.Session(profile_name=profile) if profile else boto3.Session()
             self._runtime = session.client("bedrock-runtime", region_name=self.region)
         return self._runtime
