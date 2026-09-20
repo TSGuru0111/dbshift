@@ -321,7 +321,8 @@ def get_state():
         "migration_mode_chosen_by": STATE.mode_chosen_by,
         "migration_modes": [
             {"mode": m, "label": migration_mode.LABEL[m],
-             "description": migration_mode.DESCRIPTION[m]}
+             "description": migration_mode.DESCRIPTION[m],
+             "detail": migration_mode.DETAIL[m]}
             for m in migration_mode.MODES
         ],
         "cdc_readiness": migration_mode.readiness(

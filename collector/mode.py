@@ -35,11 +35,19 @@ FULL_LOAD_AND_CDC = "full-load-and-cdc"
 MODES = (FULL_LOAD, FULL_LOAD_AND_CDC)
 
 LABEL = {
-    FULL_LOAD: "Full load (one copy, into an outage window)",
-    FULL_LOAD_AND_CDC: "Full load + CDC (ongoing replication, low-downtime cutover)",
+    FULL_LOAD: "Full load",
+    FULL_LOAD_AND_CDC: "Full load + CDC",
 }
 
+# One line each. The console shows these on the card; the longer version below
+# is a tooltip, because the difference between the two is a decision someone
+# makes once and then does not want restated on every screen.
 DESCRIPTION = {
+    FULL_LOAD: "One copy, applications stopped. Outage lasts the load.",
+    FULL_LOAD_AND_CDC: "Copy, then replicate. Outage is minutes.",
+}
+
+DETAIL = {
     FULL_LOAD: (
         "The estate is copied once while applications are stopped. Simplest path, "
         "no redo configuration on the source, and the outage lasts as long as the "

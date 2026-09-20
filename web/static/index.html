@@ -280,8 +280,19 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
    otherwise outrank. */
 .view.on:has(.scrollcap){display:flex!important;flex-direction:column;
   height:100%;min-height:0}
-.view.on:has(.scrollcap) *:has(.scrollcap){
+/* :not([style*="display:none"]) is the important part. The JS hides result
+   panels with an inline display:none, and an !important rule outranks inline
+   styles -- so this was forcing every not-yet-run panel visible, which is how
+   an empty Headline box and a blank table appeared before anything had run. */
+.view.on:has(.scrollcap) *:has(.scrollcap):not([style*="display:none"]):not([style*="display: none"]){
   display:flex!important;flex-direction:column;flex:1 1 auto;min-height:0}
+/* Everything that is NOT on the path to the list keeps its own height. Without
+   this, flex-shrink squashes a tile row or a chart panel to a fraction of its
+   content -- the box shrinks but the text does not, so it paints over the
+   heading underneath. That was the overlapping text on Discover and Assess. */
+.view.on:has(.scrollcap) > *:not(:has(.scrollcap)),
+.view.on:has(.scrollcap) *:has(.scrollcap) > *:not(:has(.scrollcap)):not(.scrollcap){
+  flex:0 0 auto;min-height:auto}
 /* flex-basis:0 is the point: 1 1 auto lets the list keep its content height
    and push the rest of the view off the screen instead of scrolling itself.
    The floor matters on a 768px laptop, where the blocks above a list can eat
@@ -291,7 +302,11 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
 .scrollcap{overflow-y:auto;min-height:150px;flex:1 1 0;display:block!important;
   overscroll-behavior:contain;scrollbar-width:thin}
 /* Charts and summary panels give way to the list they introduce. */
-#sctResult>.split,#sctSegregation{flex:0 1 auto;min-height:0}
+/* These give way to the table below them, but only down to their own content:
+   min-height:0 let the grid row shrink under the panels sitting in it, and
+   the panels then painted over the heading that follows. flex-shrink:0 keeps
+   the row honest -- the table is the thing that scrolls, not these. */
+#sctResult>.split,#sctSegregation{flex:0 0 auto;min-height:auto}
 /* Assess is the densest view: two chart panels, a routing breakdown and a
    40-row table. Under 900px tall the charts and the routing sit side by side
    rather than stacked, which is the ~200px that keeps the table on screen at
@@ -313,15 +328,24 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
   background:var(--surface-2)}
 /* An explainer that became a tooltip. Focusable so the text is reachable
    from the keyboard, which a bare title= on a span is not. */
-.info{display:inline-grid;place-items:center;width:15px;height:15px;border-radius:50%;
+.hint{display:inline-grid;place-items:center;width:15px;height:15px;border-radius:50%;
   border:1px solid var(--rule-strong);color:var(--ink-3);font-size:10px;font-weight:600;
   font-family:Archivo,system-ui,sans-serif;cursor:help;flex:none;vertical-align:middle;
   margin-left:5px;user-select:none}
-.info:hover,.info:focus-visible{border-color:var(--accent);color:var(--accent);outline:none}
+.hint:hover,.hint:focus-visible{border-color:var(--accent);color:var(--accent);outline:none}
 .panel{background:var(--surface);border:1px solid var(--rule);border-radius:4px;box-shadow:var(--shadow)}
 .pad{padding:24px}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-.pathpick{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+/* .paths is the migration-mode picker, .pathpick the engine picker. They hold
+   the same .pathopt buttons and had no shared rule, so .paths rendered its
+   buttons at zero size and their text fell out over the page behind. */
+.pathpick,.paths{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+/* A run of object names under a routed group -- also had no rule, so the
+   names ran together as one unbroken string. */
+.objs{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.objs>span{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-2);
+  background:var(--surface-2);border-radius:2px;padding:2px 7px;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pathopt{text-align:left;background:var(--surface);border:1px solid var(--rule);border-radius:3px;
   padding:13px 15px;cursor:pointer;font:inherit;color:inherit;transition:border-color .12s,box-shadow .12s}
 .pathopt:hover:not(:disabled){border-color:var(--accent)}
@@ -338,7 +362,7 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
 .pathopt .s{font-size:13px;color:var(--ink-2);margin-top:4px}
 .pathopt .m{font-size:12.5px;color:var(--ink-3);margin-top:7px}
 .pathopt .m b{color:var(--bad);font-weight:600}
-@media (max-width:720px){.pathpick{grid-template-columns:1fr}}
+@media (max-width:720px){.pathpick,.paths{grid-template-columns:1fr}}
 /* The evidence list belongs to the option above it, so it gets a surface of
    its own rather than inheriting the accordion's rule-coloured gap fill --
    on a wide block that read as a disabled panel. */
@@ -662,7 +686,7 @@ tr:last-child td{border-bottom:none}
       </div>
     </div>
     <div class="panel pad mt">
-      <div class="eyebrow">What a client environment needs<span class="info" tabindex="0" role="note" title="On this laptop the database is local, so nothing is in the way. At a client site these are what to request up front — the first one blocks everything else.">i</span></div>
+      <div class="eyebrow">What a client environment needs<span class="hint" tabindex="0" role="note" title="On this laptop the database is local, so nothing is in the way. At a client site these are what to request up front — the first one blocks everything else.">i</span></div>
       <div class="netreq" id="netreq"></div>
     </div>
   </section>
@@ -678,7 +702,7 @@ tr:last-child td{border-bottom:none}
          used to be a Phase 7 flag, which meant the assessment reported all
          three as CRITICAL on every run and the gate halted on them. -->
     <div class="panel pad" style="margin-bottom:16px">
-      <div class="eyebrow">Migration mode — how is this estate moving?<span class="info" tabindex="0" role="note" title="Answer this before discovery runs. It decides what counts as a blocker: ARCHIVELOG, supplemental logging and missing primary keys stop change data capture, and none of them affect a full load into an outage window.">i</span></div>
+      <div class="eyebrow">Migration mode — how is this estate moving?<span class="hint" tabindex="0" role="note" title="Answer this before discovery runs. It decides what counts as a blocker: ARCHIVELOG, supplemental logging and missing primary keys stop change data capture, and none of them affect a full load into an outage window.">i</span></div>
       <div class="paths" id="modeOpts"></div>
       <div id="modeNote" style="margin-top:12px"></div>
     </div>
@@ -848,7 +872,7 @@ tr:last-child td{border-bottom:none}
     <div class="panel pad" style="margin-bottom:16px">
       <div class="spread">
         <div>
-          <div class="eyebrow" style="margin:0">Measured utilization — optional<span class="info" tabindex="0" role="note" title="A catalogue scan cannot produce utilization percentiles — there is no history to take a percentile of. Without a feed this sizing is a capacity floor, not a load-derived recommendation. An AWS OLA / DB OLA, Migration Evaluator or monitoring export supplies it.">i</span></div>
+          <div class="eyebrow" style="margin:0">Measured utilization — optional<span class="hint" tabindex="0" role="note" title="A catalogue scan cannot produce utilization percentiles — there is no history to take a percentile of. Without a feed this sizing is a capacity floor, not a load-derived recommendation. An AWS OLA / DB OLA, Migration Evaluator or monitoring export supplies it.">i</span></div>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
           <button class="btn ghost sm" id="btnUtilSample">Show format</button>
@@ -861,7 +885,7 @@ tr:last-child td{border-bottom:none}
     </div>
 
     <div class="panel pad" style="margin-bottom:16px">
-      <div class="eyebrow">Migration path<span class="info" tabindex="0" role="note" title="A blocker is a feature the target engine cannot express at all, so the path is refused rather than warned about. Effort is work with a known shape. The stored-code figure is the one that decides this in practice, and it is measured by Phase 4b compiling the code for real — not estimated.">i</span></div>
+      <div class="eyebrow">Migration path<span class="hint" tabindex="0" role="note" title="A blocker is a feature the target engine cannot express at all, so the path is refused rather than warned about. Effort is work with a known shape. The stored-code figure is the one that decides this in practice, and it is measured by Phase 4b compiling the code for real — not estimated.">i</span></div>
       <div class="pathpick" id="pathPick"></div>
       <div id="pathEvidence" class="mt-s"></div>
       <div id="pathRec" class="mt-s"></div>
@@ -889,7 +913,7 @@ tr:last-child td{border-bottom:none}
           <div class="acc" id="forcedList"></div>
         </div>
         <div class="panel pad">
-          <div class="eyebrow">Detected, but not forcing<span class="info" tabindex="0" role="note" title="A feature showing as used is not a feature you owe a licence for.">i</span></div>
+          <div class="eyebrow">Detected, but not forcing<span class="hint" tabindex="0" role="note" title="A feature showing as used is not a feature you owe a licence for.">i</span></div>
           <div class="acc" id="dismissedList"></div>
         </div>
       </div>
@@ -942,12 +966,12 @@ tr:last-child td{border-bottom:none}
 
     <div class="split" style="margin-bottom:16px;margin-top:12px">
       <div class="panel pad">
-        <div class="eyebrow">Fix generation<span class="info" tabindex="0" role="note" title="Findings with exactly one correct remedy are templated, where a model would add cost and risk but no information. Anything needing judgement goes to the model tier, and every answer is labelled with what produced it. Whatever wrote the statement, the same gates decide whether it may run — a model proposes, it never approves.">i</span></div>
+        <div class="eyebrow">Fix generation<span class="hint" tabindex="0" role="note" title="Findings with exactly one correct remedy are templated, where a model would add cost and risk but no information. Anything needing judgement goes to the model tier, and every answer is labelled with what produced it. Whatever wrote the statement, the same gates decide whether it may run — a model proposes, it never approves.">i</span></div>
         <div class="status" id="genStatus"><span class="led"></span>
           <span id="genStatusText">Templates first — a model only where judgement is needed</span></div>
       </div>
       <div class="panel pad">
-        <div class="eyebrow">Rehearsal database<span class="info" tabindex="0" role="note" title="Every fix is applied and rolled back here before production. Without it no fix can be proven safe, so none may be applied. Build it with scripts/oracle-source/06_create_rehearsal.sql. The password is held in server memory only, never written to disk.">i</span></div>
+        <div class="eyebrow">Rehearsal database<span class="hint" tabindex="0" role="note" title="Every fix is applied and rolled back here before production. Without it no fix can be proven safe, so none may be applied. Build it with scripts/oracle-source/06_create_rehearsal.sql. The password is held in server memory only, never written to disk.">i</span></div>
         <div class="field" style="margin-bottom:6px">
           <input id="rehearsalDsn" placeholder="host:1521/SERVICE — a restored copy of the estate"
                  spellcheck="false"></div>
@@ -995,7 +1019,7 @@ tr:last-child td{border-bottom:none}
 
     <div class="split" style="margin-bottom:16px">
       <div class="panel pad">
-        <div class="eyebrow">Where a conversion comes from<span class="info" tabindex="0" role="note" title="A construct with exactly one correct translation is rewritten by a rule and the reason is recorded. Anything needing judgement goes to the model tier, and what it writes is labelled with the model that wrote it. Anything PostgreSQL cannot express goes to a person. Whatever produced the text, the same five gates decide whether it is ready — a model proposes, it never approves.">i</span></div>
+        <div class="eyebrow">Where a conversion comes from<span class="hint" tabindex="0" role="note" title="A construct with exactly one correct translation is rewritten by a rule and the reason is recorded. Anything needing judgement goes to the model tier, and what it writes is labelled with the model that wrote it. Anything PostgreSQL cannot express goes to a person. Whatever produced the text, the same five gates decide whether it is ready — a model proposes, it never approves.">i</span></div>
         <!-- Deliberately says nothing until the server answers. Hardcoding a
              mode here is how a false claim survives: this card read "static
              stand-ins -- not model output" on a console whose model tier was
@@ -1004,7 +1028,7 @@ tr:last-child td{border-bottom:none}
           <span>Checking the model tier…</span></div>
       </div>
       <div class="panel pad">
-        <div class="eyebrow">PostgreSQL compile target<span class="info" tabindex="0" role="note" title="Every converted object is created here and rolled back, so this database stays empty. Without it nothing is proven to compile, so nothing is ready. Start one with scripts\postgres-target\run_pg.ps1. The password is held in server memory only.">i</span></div>
+        <div class="eyebrow">PostgreSQL compile target<span class="hint" tabindex="0" role="note" title="Every converted object is created here and rolled back, so this database stays empty. Without it nothing is proven to compile, so nothing is ready. Start one with scripts\postgres-target\run_pg.ps1. The password is held in server memory only.">i</span></div>
         <div class="field" style="margin-bottom:6px">
           <input id="pgDsn" placeholder="host:5432/dbname" value="localhost:5432/dbshift"
                  spellcheck="false"></div>
@@ -1048,11 +1072,11 @@ tr:last-child td{border-bottom:none}
 
     <div class="split" style="margin-bottom:16px">
       <div class="panel pad">
-        <div class="eyebrow">The order, and why it is not alphabetical<span class="info" tabindex="0" role="note" title="Constraints and indexes come after the load. Validating a foreign key row by row during a bulk insert is the slowest possible way to do it, and an index maintained during a load is rebuilt far faster afterwards. This is the same order Phase 7's Data Pump path uses for the homogeneous case.">i</span></div>
+        <div class="eyebrow">The order, and why it is not alphabetical<span class="hint" tabindex="0" role="note" title="Constraints and indexes come after the load. Validating a foreign key row by row during a bulk insert is the slowest possible way to do it, and an index maintained during a load is rebuilt far faster afterwards. This is the same order Phase 7's Data Pump path uses for the homogeneous case.">i</span></div>
         <div id="ddlOrder" class="mt-s"></div>
       </div>
       <div class="panel pad">
-        <div class="eyebrow">What proves this DDL<span class="info" tabindex="0" role="note" title="Every statement runs on the registered PostgreSQL inside one transaction, which is then rolled back — so the database is left exactly as found and the DDL is still proven to execute. Register a target on Convert PL/SQL; without one this phase reports that the compile did not run, never that it passed.">i</span></div>
+        <div class="eyebrow">What proves this DDL<span class="hint" tabindex="0" role="note" title="Every statement runs on the registered PostgreSQL inside one transaction, which is then rolled back — so the database is left exactly as found and the DDL is still proven to execute. Register a target on Convert PL/SQL; without one this phase reports that the compile did not run, never that it passed.">i</span></div>
         <div class="status" id="ddlTargetStatus"><span class="led"></span>
           <span>Checking the target…</span></div>
       </div>
@@ -1087,7 +1111,7 @@ tr:last-child td{border-bottom:none}
 
     <div class="split" style="margin-bottom:16px">
       <div class="panel pad">
-        <div class="eyebrow">What is scanned<span class="info" tabindex="0" role="note" title="MyBatis <if>, <where> and <foreach> tags are kept: stripping them yields SQL that parses and is not the SQL the application sends. ${…} stays interpolated — rewriting it to #{…} turns a column name into a bound literal and the query fails at runtime, not at conversion.">i</span></div>
+        <div class="eyebrow">What is scanned<span class="hint" tabindex="0" role="note" title="MyBatis <if>, <where> and <foreach> tags are kept: stripping them yields SQL that parses and is not the SQL the application sends. ${…} stays interpolated — rewriting it to #{…} turns a column name into a bound literal and the query fails at runtime, not at conversion.">i</span></div>
         <div class="field" style="margin-bottom:8px">
           <input id="appsqlRoot" placeholder="path to the mapper files"
                  value="scripts/demo-app/mappers" spellcheck="false"></div>
@@ -1097,7 +1121,7 @@ tr:last-child td{border-bottom:none}
         </div>
       </div>
       <div class="panel pad">
-        <div class="eyebrow">What proves a rewrite<span class="info" tabindex="0" role="note" title="Two separate questions, and merging them is how a converter passes while being wrong. Parse asks whether the target accepts the statement — cheap, one connection. Result asks whether it returns the same rows as the Oracle original over the same data — and it is the only check that catches a ROWNUM pagination rewrite that parses perfectly and returns a different page. Without a target both report blocked, never a silent pass.">i</span></div>
+        <div class="eyebrow">What proves a rewrite<span class="hint" tabindex="0" role="note" title="Two separate questions, and merging them is how a converter passes while being wrong. Parse asks whether the target accepts the statement — cheap, one connection. Result asks whether it returns the same rows as the Oracle original over the same data — and it is the only check that catches a ROWNUM pagination rewrite that parses perfectly and returns a different page. Without a target both report blocked, never a silent pass.">i</span></div>
         <div class="status" id="appsqlTargetStatus"><span class="led"></span>
           <span>Checking the target…</span></div>
       </div>
@@ -1185,7 +1209,7 @@ tr:last-child td{border-bottom:none}
 
     <details class="panel pad" id="provOptions" style="margin-bottom:16px">
       <summary style="cursor:pointer;font-weight:600">Instance and database configuration
-        <span class="sub" id="provOptSummary" style="color:var(--ink-3);font-weight:400"></span><span class="info" tabindex="0" role="note" title="Every value below is derived from the evidence in Phases 1–3. You can change them, and the rendered plan will record what was derived, what you chose, and why — so the provenance table stays true. A change needs a reason.">i</span></summary>
+        <span class="sub" id="provOptSummary" style="color:var(--ink-3);font-weight:400"></span><span class="hint" tabindex="0" role="note" title="Every value below is derived from the evidence in Phases 1–3. You can change them, and the rendered plan will record what was derived, what you chose, and why — so the provenance table stays true. A change needs a reason.">i</span></summary>
 
       <div class="mt"><div class="eyebrow">Instance class</div>
         <div class="row2">
@@ -1275,7 +1299,7 @@ tr:last-child td{border-bottom:none}
       </div>
 
     <div class="panel pad mt" id="killPanel">
-      <div class="spread"><div class="eyebrow" style="margin:0">Kill switch<span class="info" tabindex="0" role="note" title="Acts only on resources named dbshift or tagged project=dbshift; anything else is listed and never touched. Destroy ends billing: it empties the exchange bucket, then deletes the stack. No final snapshot.">i</span></div>
+      <div class="spread"><div class="eyebrow" style="margin:0">Kill switch<span class="hint" tabindex="0" role="note" title="Acts only on resources named dbshift or tagged project=dbshift; anything else is listed and never touched. Destroy ends billing: it empties the exchange bucket, then deletes the stack. No final snapshot.">i</span></div>
         <button class="btn ghost sm" id="btnKillScan">Check what is billing</button></div>
       <div class="checks mt-s" id="killList"></div>
       <div class="row2 mt">
@@ -1303,7 +1327,7 @@ tr:last-child td{border-bottom:none}
       <div class="panel pad" style="margin-bottom:16px">
         <div class="spread">
           <div>
-            <div class="eyebrow" style="margin:0"><svg class="ico svcmark" aria-hidden="true"><use href="#ic-dms"></use></svg>AWS Database Migration Service<span class="info" tabindex="0" role="note" title="A replication instance reads the source and writes the target. It bills by the hour for as long as it exists, whether or not a task is running — unlike Data Pump, which finishes and stops. Planning below is free and creates nothing.">i</span></div>
+            <div class="eyebrow" style="margin:0"><svg class="ico svcmark" aria-hidden="true"><use href="#ic-dms"></use></svg>AWS Database Migration Service<span class="hint" tabindex="0" role="note" title="A replication instance reads the source and writes the target. It bills by the hour for as long as it exists, whether or not a task is running — unlike Data Pump, which finishes and stops. Planning below is free and creates nothing.">i</span></div>
           </div>
           <button class="btn ghost sm" id="btnDmsPlan">Plan</button>
         </div>
@@ -1315,18 +1339,18 @@ tr:last-child td{border-bottom:none}
 
       <div class="split" style="margin-bottom:16px">
         <div class="panel pad">
-          <div class="eyebrow">What DMS moves<span class="info" tabindex="0" role="note" title="Tables and their rows, and nothing else. Held-back tables are named, because a table missing from a migration looks the same as a bug.">i</span></div>
+          <div class="eyebrow">What DMS moves<span class="hint" tabindex="0" role="note" title="Tables and their rows, and nothing else. Held-back tables are named, because a table missing from a migration looks the same as a bug.">i</span></div>
           <div class="acc" id="dmsTables"></div>
         </div>
         <div class="panel pad">
-          <div class="eyebrow">What it leaves behind<span class="info" tabindex="0" role="note" title="Sequences, views and anything whose data lives outside the database. Each is routed to a rule, the model, or a person — and nothing here is applied.">i</span></div>
+          <div class="eyebrow">What it leaves behind<span class="hint" tabindex="0" role="note" title="Sequences, views and anything whose data lives outside the database. Each is routed to a rule, the model, or a person — and nothing here is applied.">i</span></div>
           <div id="dmsResidueNote"></div>
           <div class="acc" id="dmsResidue"></div>
         </div>
       </div>
 
       <div class="panel pad" id="dmsRunPanel" style="display:none">
-        <div class="eyebrow">Run it — this starts billing<span class="info" tabindex="0" role="note" title="Creates the replication instance, both endpoints and the task, then starts it. Stop the task when it is done, and delete the instance with the kill switch — a stopped task does not stop the bill.">i</span></div>
+        <div class="eyebrow">Run it — this starts billing<span class="hint" tabindex="0" role="note" title="Creates the replication instance, both endpoints and the task, then starts it. Stop the task when it is done, and delete the instance with the kill switch — a stopped task does not stop the bill.">i</span></div>
         <div class="row2">
           <div class="field"><label for="dmsSourcePw">Source schema owner password</label>
             <input id="dmsSourcePw" type="password" autocomplete="off" placeholder="held in memory only"></div>
@@ -1415,7 +1439,7 @@ tr:last-child td{border-bottom:none}
     <div class="checks mt" id="cutReqs"></div>
 
     <div class="panel pad mt" id="cutApprovePanel" style="display:none">
-      <div class="eyebrow">Approval<span class="info" tabindex="0" role="note" title="The gate blocks cutover on this estate. A person may accept those blockers, and the reason is recorded against the AWS identity making the call — the approver is never typed into this form. An approval names one collector run; it does not carry to another.">i</span></div>
+      <div class="eyebrow">Approval<span class="hint" tabindex="0" role="note" title="The gate blocks cutover on this estate. A person may accept those blockers, and the reason is recorded against the AWS identity making the call — the approver is never typed into this form. An approval names one collector run; it does not carry to another.">i</span></div>
       <div class="field"><label for="cutReason">Why this is acceptable</label>
         <textarea id="cutReason" spellcheck="false"
           placeholder="e.g. full-outage window agreed with the application owner for Saturday 02:00; no CDC required"></textarea></div>
@@ -1424,7 +1448,7 @@ tr:last-child td{border-bottom:none}
     </div>
 
     <div class="panel pad mt" id="cutExecPanel" style="display:none">
-      <div class="eyebrow">Run the cutover steps<span class="info" tabindex="0" role="note" title="Runs only the target-side steps listed above. It does not repoint any application, and the source is left untouched and authoritative.">i</span></div>
+      <div class="eyebrow">Run the cutover steps<span class="hint" tabindex="0" role="note" title="Runs only the target-side steps listed above. It does not repoint any application, and the source is left untouched and authoritative.">i</span></div>
       <div class="field"><label for="cutConfirm">Type the AWS account id to confirm</label>
         <input id="cutConfirm" class="mono" placeholder="000000000000"></div>
       <div class="spread"><button class="btn" id="btnCutExecute">Run cutover steps</button>
@@ -1504,7 +1528,7 @@ tr:last-child td{border-bottom:none}
       <div class="panel pad">
         <div class="eyebrow">Current access</div>
         <div id="awsState"><div class="empty">No credentials on this machine yet.</div></div>
-        <div class="eyebrow mt">Where this is stored<span class="info" tabindex="0" role="note"
+        <div class="eyebrow mt">Where this is stored<span class="hint" tabindex="0" role="note"
           title="A named profile in the shared AWS credentials file, which is the same place the CLI reads. Nothing is written into the project folder, so nothing can be committed. The secret is never sent back to the browser.">i</span></div>
         <div class="facts" id="awsWhere"></div>
       </div>
@@ -2055,7 +2079,7 @@ async function renderDiscovery(){
   $('#discAcc').innerHTML = d.datasets.map(ds => `
     <details class="item"><summary>
       <span class="title">${esc(ds.name)}<span class="sub">${esc(ds.probe || '')}</span></span>
-      <span></span><span class="count">${fmt(ds.row_count)}</span><span class="info" tabindex="0" role="note" title="Showing 60 of ${fmt(ds.row_count)} rows.">i</span></summary>
+      <span></span><span class="count">${fmt(ds.row_count)}</span><span class="hint" tabindex="0" role="note" title="Showing 60 of ${fmt(ds.row_count)} rows.">i</span></summary>
       <div class="body">
         ${ds.rows.length ? `<div class="tblwrap"><table>
           <thead><tr>${ds.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
@@ -2269,7 +2293,7 @@ function renderIssues(){
       <span class="title"><span class="sev ${i.severity}">${i.severity}</span>
         &nbsp;${esc(i.title)}<span class="sub">${esc(i.rule_id)} · ${esc(i.remediation_level)}</span></span>
       <span></span>
-      <span class="count">${i.occurrences > 1 ? '×' + i.occurrences : '1'}</span><span class="info" tabindex="0" role="note" title="Proposed by the ${esc(p.source)} proposer, then validated. ${d.agreed_with_proposal ? 'The rules engine confirmed it unchanged.' : 'The rules engine overruled part of the proposal.'}">i</span></summary>
+      <span class="count">${i.occurrences > 1 ? '×' + i.occurrences : '1'}</span><span class="hint" tabindex="0" role="note" title="Proposed by the ${esc(p.source)} proposer, then validated. ${d.agreed_with_proposal ? 'The rules engine confirmed it unchanged.' : 'The rules engine overruled part of the proposal.'}">i</span></summary>
       <div class="body">
         <p class="why"><b>${esc(i.sample_detail || '')}</b></p>
         <p class="why">${esc(i.rationale)}</p>
@@ -4075,7 +4099,7 @@ async function renderGate(){
       <span class="title"><span class="sev CRITICAL">CRITICAL</span>&nbsp;${esc(b.title)}
         <span class="sub">${esc(b.rule_id)}${b.known_blast_radius ? '' : ' · blast radius unknown'}</span></span>
       <span></span>
-      <span class="count">${b.occurrences > 1 ? '×' + b.occurrences : '1'}</span><span class="info" tabindex="0" role="note" title="Blocks: ${esc(b.blocks.join(', ').replace(/_/g,' ')) || 'everything'}">i</span></summary>
+      <span class="count">${b.occurrences > 1 ? '×' + b.occurrences : '1'}</span><span class="hint" tabindex="0" role="note" title="Blocks: ${esc(b.blocks.join(', ').replace(/_/g,' ')) || 'everything'}">i</span></summary>
       <div class="body">
         <p class="why">${esc(b.why)}</p>
         <p class="why"><b>Clears when.</b> ${esc(b.clears_when)}</p>
@@ -4101,7 +4125,7 @@ async function renderGate(){
       <span class="title">${esc(w.title)}<span class="sub">${esc(w.rule_id)} · waived</span></span>
       <span></span>
       <span style="display:flex;gap:10px;align-items:center" onclick="event.preventDefault()">
-        <button class="btn ghost sm" onclick="unwaive('${esc(w.rule_id)}')">Revoke</button></span><span class="info" tabindex="0" role="note" title="Accepted by ${esc(w.waiver.approved_by)}">i</span></summary>
+        <button class="btn ghost sm" onclick="unwaive('${esc(w.rule_id)}')">Revoke</button></span><span class="hint" tabindex="0" role="note" title="Accepted by ${esc(w.waiver.approved_by)}">i</span></summary>
       <div class="body">
         <p class="why">${esc(w.waiver.reason)}</p>
         <p class="why" style="color:var(--ink-3)">Still blocks, on paper: ${esc(w.blocks.join(', ').replace(/_/g,' '))}</p>
@@ -4927,14 +4951,19 @@ function renderModes(){
     // "Not ready" is only claimed once the preflight has actually looked. Before
     // connecting there is no evidence either way, and reporting the absence of a
     // reading as a fault accuses a source nobody has queried yet.
-    let needs = 'no source changes needed';
+    let needs = 'nothing needed on the source';
     if (m.mode === 'full-load-and-cdc') {
       const looked = CDC_READY && CDC_READY.log_mode;
-      needs = !looked ? 'needs ARCHIVELOG + supplemental logging — checked on connect'
-            : (CDC_READY.ready ? 'source is ready — ARCHIVELOG and supplemental logging are on'
-                               : `<b>source not ready</b> — ${esc(CDC_READY.unmet.join('; '))}`);
+      // The unmet list is the evidence and belongs on the element, not across
+      // the card -- it was the longest line on this screen.
+      needs = !looked ? 'needs ARCHIVELOG + supplemental logging'
+            : (CDC_READY.ready ? 'source ready'
+                               : `<b title="${esc(CDC_READY.unmet.join('; '))}">source not ready</b>`);
     }
-    return `<button class="pathopt" data-mode="${m.mode}" aria-pressed="${MODE === m.mode}">
+    // The long version is the tooltip. On the card it is one line: which of
+    // the two this is, and what it costs in downtime.
+    return `<button class="pathopt" data-mode="${m.mode}" aria-pressed="${MODE === m.mode}"
+              title="${esc(m.detail || m.description)}">
       <div class="n">${esc(m.label)}</div>
       <div class="s">${esc(m.description)}</div>
       <div class="m">${needs}</div></button>`;
