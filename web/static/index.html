@@ -420,6 +420,21 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
    on a wide block that read as a disabled panel. */
 #pathEvidence .acc{border:1px solid var(--rule);border-radius:3px;overflow:hidden}
 #pathEvidence .acc details{background:var(--surface)}
+/* The evidence fold. Shut, it is one line under the two path cards; open, it
+   is the working behind the number those cards already show. */
+.evfold>summary{display:flex;align-items:baseline;gap:8px;cursor:pointer;
+  list-style:none;padding:3px 0;color:var(--ink-2);font-size:12.5px}
+.evfold>summary::-webkit-details-marker{display:none}
+.evfold>summary::before{content:"▸";color:var(--ink-3);font-size:11px;
+  transition:transform .15s var(--ease);display:inline-block}
+.evfold[open]>summary::before{transform:rotate(90deg)}
+.evfold>summary:hover{color:var(--ink)}
+.evfold[open]>summary{margin-bottom:8px}
+.evfold>summary .ttl{font-size:12.5px}
+/* The point weight sits at the end of its row, away from the subject. */
+#pathEvidence .acc .count{margin-left:auto;font-family:"IBM Plex Mono",monospace;
+  font-size:12px;color:var(--ink-3);flex:none}
+#pathEvidence .acc>details>summary{display:flex;align-items:baseline;gap:4px}
 #pathRec{margin-top:12px}
 #pathRec .note{margin-bottom:0}
 .split2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
@@ -5169,12 +5184,32 @@ function renderPathEvidence(){
   const p = PATHS && PATHS.paths[ENGINE];
   if (!p) { $('#pathEvidence').innerHTML = ''; $('#pathRec').innerHTML = ''; return; }
   const rows = [...p.blockers, ...p.effort];
-  $('#pathEvidence').innerHTML = rows.length ? `<div class="acc">` + rows.map(i => `
-    <details><summary><span class="mono" style="font-size:12.5px;color:${i.kind === 'blocker' ? 'var(--bad)' : 'var(--ink-3)'}">
-      ${i.kind === 'blocker' ? 'blocker' : 'effort'}</span>&nbsp; ${esc(i.subject)}</summary>
-      <div class="body"><p>${esc(i.detail)}</p>
-      <p class="mono" style="font-size:12.5px;color:var(--ink-3);margin-top:8px">from ${esc(i.evidence)}</p>
-      </div></details>`).join('') + `</div>`
+  // Folded by default. The card above already carries the headline ("11
+  // effort points · 5 items"); this is the working behind it, and it only
+  // needs to be on screen when somebody asks how the number was reached.
+  // A blocked path opens itself, because then the list is the answer.
+  const nBlock = p.blockers.length;
+  const gist = nBlock
+    ? `${nBlock} blocker${nBlock === 1 ? '' : 's'} — this path is refused`
+    : `Why this path costs ${p.effort_points} point${p.effort_points === 1 ? '' : 's'}`
+      + ` — ${rows.length} item${rows.length === 1 ? '' : 's'}`;
+
+  $('#pathEvidence').innerHTML = rows.length
+    ? `<details class="evfold"${nBlock ? ' open' : ''}>
+         <summary><span class="ttl">${esc(gist)}</span></summary>
+         <div class="acc">` + rows.map(i => `
+           <details><summary>
+             <span class="mono" style="font-size:12.5px;color:${
+               i.kind === 'blocker' ? 'var(--bad)' : 'var(--ink-3)'}">${
+               i.kind === 'blocker' ? 'blocker' : 'effort'}</span>&nbsp;${esc(i.subject)}${
+             // The weight is why the total is what it is, so it belongs on the
+             // row rather than only in the sum. Zero-weight items carry no cost
+             // and say so -- DMS is listed because it bills, not because it is work.
+             i.kind === 'blocker' ? ''
+               : `<span class="count">${i.weight ? '+' + i.weight : 'no cost'}</span>`}</summary>
+           <div class="body"><p>${esc(i.detail)}</p>
+           <p class="mono" style="font-size:12.5px;color:var(--ink-3);margin-top:8px">from ${esc(i.evidence)}</p>
+           </div></details>`).join('') + `</div></details>`
     : `<div class="note ok">Nothing stands in the way of this path on this estate.</div>`;
 
   const r = PATHS.recommended;
