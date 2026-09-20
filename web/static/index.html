@@ -376,6 +376,55 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
    detail, one click away, so nothing is lost by truncating here. */
 #sctTable table{table-layout:fixed;min-width:0;width:100%}
 #sctTable th,#sctTable td{overflow:hidden;text-overflow:ellipsis}
+/* Which row is open. Without it the detail looks like it belongs to whatever
+   row happens to sit above it once the table has scrolled. */
+#sctTable tbody tr[data-idx]{cursor:pointer}
+#sctTable tbody tr[data-idx]:hover>td{background:var(--surface-2)}
+#sctTable tbody tr[data-idx].open>td{background:var(--accent-soft);
+  border-bottom-color:transparent}
+#sctTable tbody tr[data-idx].open>td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+/* Table and its detail panel, side by side. The panel is a column that
+   appears only when a row is open, so the table has the full width until
+   then. */
+/* !important because .sctsplit holds the .scrollcap table, and the rule that
+   builds the chain down to a scrollcap forces every ancestor to a column.
+   Here the two are meant to sit side by side. */
+.sctsplit{display:flex;gap:12px;min-height:0;flex:1 1 auto;flex-direction:row!important}
+/* Both widths are !important for the same reason as the direction: the
+   scrollcap chain rewrites flex on every ancestor of the table, and without
+   these the panel sizes to its text and squeezes the table to nothing. */
+.sctsplit>#sctTable{flex:1 1 0!important;min-width:0;width:auto}
+.sctdetail{flex:0 0 330px!important;width:330px;min-width:0;overflow-y:auto;scrollbar-width:thin;
+  background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+  padding:13px 15px;font-size:13px;line-height:1.5}
+.sctdetail[hidden]{display:none}
+.sctdetail .dhead{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.sctdetail .code{font-size:12px;color:var(--ink-3)}
+.sctdetail .dclose{margin-left:auto;background:none;border:none;cursor:pointer;
+  color:var(--ink-3);font-size:19px;line-height:1;padding:0 2px}
+.sctdetail .dclose:hover{color:var(--ink)}
+.sctdetail .dtitle{font-weight:600;margin:0 0 6px}
+.sctdetail .dbody{color:var(--ink-2);margin:0 0 10px}
+.sctdetail .drec{background:var(--surface-2);border-radius:3px;padding:9px 11px;margin-bottom:10px}
+.sctdetail .drec .k{font-size:11.5px;color:var(--ink-3);text-transform:uppercase;
+  letter-spacing:.05em;font-weight:600}
+.sctdetail .drec p{margin:4px 0 0;color:var(--ink-2)}
+.sctdetail .dl{display:grid;grid-template-columns:86px minmax(0,1fr);gap:8px;
+  padding:5px 0;border-top:1px solid var(--rule)}
+.sctdetail .dl .k{color:var(--ink-3);font-size:12px}
+.sctdetail .dl .v{min-width:0;overflow-wrap:anywhere}
+/* Side by side wherever the table still reads -- a 1117px window leaves it
+   ~460px, which holds the title column. Stacking was tried at 1200px and is
+   worse: the panel lands below the fold, which is the fault this replaced.
+   Below 900px the sidebar is an icon rail and there is genuinely no room, so
+   the panel goes under the table and caps its own height. */
+@media(max-width:900px){
+  .sctsplit{flex-direction:column!important}
+  .sctdetail{flex:0 0 auto!important;width:auto;max-height:40vh}
+}
+@media(min-width:901px) and (max-width:1250px){
+  .sctdetail{flex:0 0 290px!important;width:290px}
+}
 #sctTable table thead th,.tblwrap table thead th{position:sticky;top:0;z-index:1;
   background:var(--surface-2)}
 /* An explainer that became a tooltip. Focusable so the text is reachable
@@ -945,7 +994,15 @@ tr:last-child td{border-bottom:none}
             </div>
           </div>
           <div id="sctUnmapped" class="mt-s" style="display:none"></div>
-          <div id="sctTable" class="tblwrap scrollcap"></div>
+          <!-- Table and detail side by side. The detail used to expand inline
+               inside the scrolling table, where on a short window most of it
+               fell below the fold and scrolling it into view pushed the row
+               you clicked off the top. Beside the table it is always whole,
+               and the row stays where you left it. -->
+          <div class="sctsplit">
+            <div id="sctTable" class="tblwrap scrollcap"></div>
+            <aside id="sctDetail" class="sctdetail" hidden></aside>
+          </div>
         </div>
       </div>
     </div>
@@ -2728,34 +2785,7 @@ function renderSct(){
         esc(i.who_short || i.who_label || i.who || '')}</span></td>
       <td style="text-align:right">${i.occurrences}</td>
     </tr>
-    <tr class="rowdetail" data-for="${n}" style="display:none">
-      <td colspan="${SCT_COLS.length}" style="font-family:inherit">
-        <b>${esc(i.detail || i.title)}</b>
-        ${i.recommendation
-          ? `<div style="margin-top:6px;color:var(--ink-2)"><span style="color:var(--ink-3)">
-             SCT recommends:</span> ${esc(i.recommendation)}</div>` : ''}
-        <div style="margin-top:6px;color:var(--ink-3);font-size:12.5px">
-          ${i.object_type ? `<b>${esc(i.object_type)}</b> · ` : ''}${
-          i.occurrences} occurrence${i.occurrences === 1 ? '' : 's'} ·
-          complexity <b>${esc(i.complexity)}</b> — ${esc(i.complexity_meaning || '')}.
-          This is SCT's grading of the work involved, not a severity.</div>
-        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--rule)">
-          <span style="color:var(--ink-3)">Fix where:</span>
-          <b>${esc(i.where_label || '')}</b> · <b>${esc(i.who_label || '')}</b>
-          <div style="margin-top:4px;color:var(--ink-2)">${esc(i.route_why || '')}</div>
-          ${i.clears_when
-            ? `<div style="margin-top:4px"><span style="color:var(--ink-3)">Clears when:</span>
-               ${esc(i.clears_when)}</div>` : ''}
-          ${(i.blocks || []).length
-            ? `<div style="margin-top:4px"><span style="color:var(--ink-3)">Blocks:</span>
-               <span class="mono">${i.blocks.map(esc).join(', ')}</span></div>` : ''}
-        </div>
-        ${i.object_name
-          ? `<div style="margin-top:8px"><span style="color:var(--ink-3)">Object:</span>
-             <span class="mono">${esc(i.owner ? i.owner + '.' : '')}${esc(i.object_name)}</span></div>`
-          : ''}
-      </td>
-    </tr>`).join('');
+    `).join('');
 
   $('#sctTable').innerHTML = rows.length
     ? `<table class="tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
@@ -2770,8 +2800,7 @@ function renderSct(){
     renderSct();
   });
   $('#sctTable').querySelectorAll('tr[data-idx]').forEach(tr => tr.onclick = () => {
-    const d = $('#sctTable').querySelector(`tr.rowdetail[data-for="${tr.dataset.idx}"]`);
-    if (d) d.style.display = d.style.display === 'none' ? '' : 'none';
+    showSctDetail(rows[+tr.dataset.idx], tr);
   });
 
   const shown = rows.reduce((a, i) => a + i.occurrences, 0);
@@ -2779,6 +2808,53 @@ function renderSct(){
     ? `${rows.length} action item${rows.length === 1 ? '' : 's'}, ${shown} occurrences` +
       ' · click a row for SCT’s recommendation, a heading to sort'
     : '';
+}
+
+// The panel beside the action-item table. Clicking the open row again closes
+// it; clicking another swaps the contents, so only one is ever shown and the
+// table never moves under the reader.
+function showSctDetail(i, tr){
+  const box = $('#sctDetail'), wrap = $('#sctTable');
+  if (!box || !i) return;
+  const already = tr.classList.contains('open');
+  wrap.querySelectorAll('tr[data-idx]').forEach(o => o.classList.remove('open'));
+  if (already) { box.hidden = true; box.innerHTML = ''; return; }
+  tr.classList.add('open');
+
+  const line = (k, v) => v
+    ? `<div class="dl"><span class="k">${esc(k)}</span><span class="v">${v}</span></div>` : '';
+  box.innerHTML = `
+    <div class="dhead">
+      <span class="sev ${esc(String(i.complexity || '').toUpperCase())}">${esc(i.complexity || '')}</span>
+      <span class="mono code">${esc(String(i.issue_code || ''))}</span>
+      <button class="dclose" id="sctDetailClose" title="Close">&times;</button>
+    </div>
+    <p class="dtitle">${esc(i.title || '')}</p>
+    ${i.detail && i.detail !== i.title ? `<p class="dbody">${esc(i.detail)}</p>` : ''}
+    ${i.recommendation
+      ? `<div class="drec"><span class="k">SCT recommends</span>
+         <p>${esc(i.recommendation)}</p></div>` : ''}
+    <div class="dfacts">
+      ${line('Fix where', `<b>${esc(i.where_label || '')}</b>`)}
+      ${line('Who', `<b>${esc(i.who_label || '')}</b>`)}
+      ${line('Why', esc(i.route_why || ''))}
+      ${line('Clears when', esc(i.clears_when || ''))}
+      ${line('Blocks', (i.blocks || []).length
+        ? `<span class="mono">${i.blocks.map(esc).join(', ')}</span>` : '')}
+      ${line('Object', i.object_name
+        ? `<span class="mono">${esc(i.owner ? i.owner + '.' : '')}${esc(i.object_name)}</span>` : '')}
+      ${line('Type', esc(i.object_type || ''))}
+      ${line('Occurrences', String(i.occurrences ?? ''))}
+      ${line('Effort', `<b>${esc(i.complexity || '')}</b> — ${esc(i.complexity_meaning || '')}.
+        SCT's grading of the work involved, not a severity.`)}
+    </div>`;
+  box.hidden = false;
+  box.scrollTop = 0;
+  $('#sctDetailClose').onclick = e => {
+    e.stopPropagation();
+    wrap.querySelectorAll('tr[data-idx]').forEach(o => o.classList.remove('open'));
+    box.hidden = true; box.innerHTML = '';
+  };
 }
 
 /* ---------------- target decision ---------------- */
