@@ -312,17 +312,33 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
    panels overflowed the capped band and painted over the table header. Each
    panel then scrolls its own list. */
 .sctsummary{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,1.4fr);
-  gap:12px;align-items:stretch;flex:0 0 auto;max-height:30dvh}
-.sctsummary>.panel{padding:13px 15px;min-width:0;min-height:0;overflow:hidden;
-  display:flex;flex-direction:column}
-.sctsummary #sctSegregation,.sctsummary .bars{overflow-y:auto;min-height:0;
-  scrollbar-width:thin}
-.sctsummary #sctSegregation{flex:1 1 auto}
+  gap:12px;align-items:start;flex:0 0 auto}
+.sctsummary>.panel{padding:13px 15px;min-width:0;display:flex;flex-direction:column}
+/* Each panel sizes to its own content. Capping the band made every panel a
+   36px window onto 207px of content -- six scrollbars on one screen, and the
+   routing card unreadable. Nothing inside here scrolls; when the viewport is
+   too short for both, the band collapses (below) and the table keeps the
+   room, because the table is what the screen is for. */
 .sctsummary .bars{gap:7px}
 .sctsummary .bar{grid-template-columns:96px 1fr 34px;gap:9px;font-size:12.5px}
 .sctsummary .tile{padding:9px 11px}
 .sctsummary .tile .v{font-size:21px}
 #sctUnmappedRoutes{flex:0 0 auto}
+/* The summary fold. Its summary line carries the numbers, so closing it
+   loses the charts but not the headline. */
+.sctfold{flex:0 0 auto}
+.sctfold>summary{display:flex;align-items:baseline;gap:10px;cursor:pointer;
+  list-style:none;padding:5px 0;color:var(--ink-2);font-size:12.5px}
+.sctfold>summary::-webkit-details-marker{display:none}
+.sctfold>summary::before{content:"▸";color:var(--ink-3);font-size:11px;
+  transition:transform .15s var(--ease);display:inline-block}
+.sctfold[open]>summary::before{transform:rotate(90deg)}
+.sctfold>summary .ttl{font-family:Archivo,system-ui,sans-serif;font-weight:600;
+  font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.sctfold>summary .mono{font-size:12px;color:var(--ink-3);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sctfold>summary:hover{color:var(--ink)}
+.sctfold[open]>summary{margin-bottom:8px}
 /* Title, provenance, count and downloads on one line above the table. The
    count is the flexible one -- it is the longest and the least load-bearing,
    so it gives way first rather than pushing the buttons onto a second row. */
@@ -354,6 +370,12 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
 }
 /* The table scrolls sideways already; give it a vertical cap too, and keep
    the header visible while the body moves under it. */
+/* The action-item table fits its pane instead of scrolling sideways: fixed
+   layout honours the column widths, and the title column -- the only elastic
+   one -- takes the squeeze and ellipses. The full text is in the row's own
+   detail, one click away, so nothing is lost by truncating here. */
+#sctTable table{table-layout:fixed;min-width:0;width:100%}
+#sctTable th,#sctTable td{overflow:hidden;text-overflow:ellipsis}
 #sctTable table thead th,.tblwrap table thead th{position:sticky;top:0;z-index:1;
   background:var(--surface-2)}
 /* An explainer that became a tooltip. Focusable so the text is reachable
@@ -854,7 +876,13 @@ tr:last-child td{border-bottom:none}
              Stacked, they took ~660px and left the 36-row action-item table
              110px -- about one row. The table is the working surface here;
              these three are the context for it. -->
-        <div class="sctsummary mt">
+        <!-- Collapsible, and shut by default on a short window: the table is
+             what this screen is for, and on a laptop the summary was taking
+             the room the table needed. -->
+        <details class="sctfold mt" id="sctFold" open>
+          <summary><span class="ttl">Summary</span>
+            <span class="mono" id="sctFoldGist"></span></summary>
+        <div class="sctsummary">
           <div class="panel pad">
             <div class="eyebrow">By complexity</div>
             <div class="bars" id="sctBars"></div>
@@ -876,6 +904,7 @@ tr:last-child td{border-bottom:none}
             <div id="sctSegregation"></div>
           </div>
         </div>
+        </details>
         <div id="sctUnmappedRoutes" class="mt-s" style="display:none"></div>
 
         <div class="mt">
@@ -2540,16 +2569,21 @@ function sortSctIssues(list){
   });
 }
 
+// Six columns of fixed-width metadata left 151px for the action item on a
+// windowed browser -- the one column anybody reads. Object type moved into
+// the row's own detail, and the rest are trimmed to what they need, so the
+// title gets the remaining width instead of a sliver.
 const SCT_COLS = [
-  {key:'complexity',  label:'Complexity', w:'110px'},
-  {key:'issue_code',  label:'Code',       w:'70px'},
+  {key:'complexity',  label:'Effort',     w:'104px'},
+  {key:'issue_code',  label:'Code',       w:'62px'},
   {key:'title',       label:'Action item'},
   // The two columns the segregation adds, and the reason this screen is worth
-  // reading rather than just SCT's own PDF.
-  {key:'where',       label:'Fix where',  w:'150px'},
-  {key:'who',         label:'Who',        w:'134px'},
-  {key:'occurrences', label:'Occurrences', w:'100px', num:true},
-  {key:'object_type', label:'Object type', w:'108px'},
+  // reading rather than just SCT's own PDF. Wide enough for their longest
+  // value ("Needs a person to write it", "AI-drafted, gated") -- truncating
+  // the routing would forfeit the point of the column.
+  {key:'where',       label:'Fix where',  w:'104px'},
+  {key:'who',         label:'Who',        w:'126px'},
+  {key:'occurrences', label:'No.',        w:'52px', num:true},
 ];
 
 // Colour by actor, not by severity: "a person must write this" is the fact a
@@ -2569,12 +2603,19 @@ function renderSegregation(seg){
             g.by_who.person ? ` · ${g.by_who.person} human-only` : ''}</div>
         </div>`).join('')}
     </div>
-    <div class="mono mt-s" style="font-size:12.5px;color:var(--ink-3)"
-         title="Automatic: Phase 4 writes and applies the fix. AI-drafted: the model writes it and a person approves before anything runs. Engineer writes it: no correct automatic rewrite exists, so it is left for your migration engineer with the reason attached.">
-      ${t.items} items · <b>${t.automatable}</b> automatic ·
-      <b>${t.ai_draftable}</b> AI-drafted, you approve ·
-      <b>${t.human_only}</b> your engineer writes
-    </div>`;
+    `;
+
+  // The who-does-what split rides on the fold's own summary line, so closing
+  // the fold loses the charts but never the headline.
+  const gist = $('#sctFoldGist');
+  if (gist) {
+    gist.textContent = `${t.items} items · ${t.automatable} automatic · `
+      + `${t.ai_draftable} AI-drafted, you approve · ${t.human_only} your engineer writes`;
+    gist.title = 'Automatic: Phase 4 writes and applies the fix. '
+      + 'AI-drafted: the model writes it and a person approves before anything runs. '
+      + 'Your engineer writes: no correct automatic rewrite exists, so it is left '
+      + 'for a migration engineer with the reason attached.';
+  }
 
   // An SCT code this build has never seen must be visible, not silently
   // treated as safe -- it is routed to a person, and the screen says so.
@@ -2591,6 +2632,16 @@ function renderSct(){
   if (!SCT) return;
   $('#sctLive').style.display = 'none';
   $('#sctResult').style.display = '';
+  // On a short window the summary and a usable table cannot both fit, so the
+  // summary starts shut and its headline rides on the fold. Only ever set
+  // automatically once -- after that the reader's choice stands.
+  const fold = $('#sctFold');
+  if (fold && !fold.dataset.touched) {
+    // 1040 not 860: at 900 tall the open band left the table three rows of
+    // thirty-six, which is the state this fold exists to prevent.
+    fold.open = window.innerHeight >= 1040;
+    fold.addEventListener('toggle', () => { fold.dataset.touched = '1'; }, {once: true});
+  }
 
   const t = SCT.target || {}, by = SCT.by_complexity || {}, occ = SCT.occurrences_by_complexity || {};
   const total = SCT.action_item_count || 0;
@@ -2650,13 +2701,17 @@ function renderSct(){
             title="${esc(i.complexity_meaning || '')}">${esc(i.complexity)}</span></td>
       <td>${esc(i.issue_code)}</td>
       <td style="font-family:inherit">${esc(i.title)}</td>
-      <td title="${esc(i.route_why || '')}">${esc(i.where_label || i.where || '')}${
+      <!-- Short label in the cell, full label and reason on hover: the long
+           forms were ellipsed to "Needs a person to writ…", which reads worse
+           than the short word that fits. -->
+      <td title="${esc(i.where_label || '')}${i.route_why ? ' — ' + esc(i.route_why) : ''}">${
+        esc(i.where_short || i.where_label || i.where || '')}${
         i.route_mapped === false
-          ? '<span class="sub" style="display:block;color:var(--ink-3)">unmapped code</span>' : ''}</td>
+          ? '<span class="sub" style="display:block;color:var(--ink-3)">unmapped</span>' : ''}</td>
       <td><span class="sev ${WHO_TONE[i.who] || 'INFO'}"
-            title="${esc(i.clears_when || '')}">${esc(i.who_label || i.who || '')}</span></td>
+            title="${esc(i.who_label || '')}${i.clears_when ? ' — ' + esc(i.clears_when) : ''}">${
+        esc(i.who_short || i.who_label || i.who || '')}</span></td>
       <td style="text-align:right">${i.occurrences}</td>
-      <td>${esc(i.object_type)}</td>
     </tr>
     <tr class="rowdetail" data-for="${n}" style="display:none">
       <td colspan="${SCT_COLS.length}" style="font-family:inherit">
@@ -2665,7 +2720,9 @@ function renderSct(){
           ? `<div style="margin-top:6px;color:var(--ink-2)"><span style="color:var(--ink-3)">
              SCT recommends:</span> ${esc(i.recommendation)}</div>` : ''}
         <div style="margin-top:6px;color:var(--ink-3);font-size:12.5px">
-          Complexity <b>${esc(i.complexity)}</b> — ${esc(i.complexity_meaning || '')}.
+          ${i.object_type ? `<b>${esc(i.object_type)}</b> · ` : ''}${
+          i.occurrences} occurrence${i.occurrences === 1 ? '' : 's'} ·
+          complexity <b>${esc(i.complexity)}</b> — ${esc(i.complexity_meaning || '')}.
           This is SCT's grading of the work involved, not a severity.</div>
         <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--rule)">
           <span style="color:var(--ink-3)">Fix where:</span>

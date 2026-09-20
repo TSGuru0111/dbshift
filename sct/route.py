@@ -63,6 +63,23 @@ WHO_LABEL = {
     PERSON: "Human only",
 }
 
+# The same two facts for a table cell rather than a card. The long forms above
+# read well with room around them; in a column they were ellipsed to "Needs a
+# person to writ…" and "AI-drafted,", which is worse than a shorter label that
+# fits. The console shows these in the grid and the long form on hover.
+WHERE_SHORT = {
+    SOURCE: "Source",
+    TARGET: "Target",
+    DECISION: "Decision",
+    HUMAN: "Engineer",
+}
+
+WHO_SHORT = {
+    AUTO: "Automatic",
+    MODEL: "AI + approval",
+    PERSON: "Engineer",
+}
+
 
 def _r(where, who, why, clears_when, blocks=(), how=(), verify=()):
     """One routing row.
@@ -383,8 +400,10 @@ def annotate(issues: list[dict]) -> list[dict]:
             **issue,
             "where": r["where"],
             "where_label": WHERE_LABEL[r["where"]],
+            "where_short": WHERE_SHORT[r["where"]],
             "who": r["who"],
             "who_label": WHO_LABEL[r["who"]],
+            "who_short": WHO_SHORT[r["who"]],
             "route_why": r["why"],
             "clears_when": r["clears_when"],
             "blocks": r["blocks"],
