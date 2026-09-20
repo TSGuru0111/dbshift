@@ -479,7 +479,11 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
 .tick.run .nm{color:var(--accent-ink);font-weight:500}
 
 /* ---------- summary tiles ---------- */
-.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule);
+/* auto-fit rather than a fixed four: the tile count varies by phase, and a
+   fixed track leaves the remainder of the last row painted in the rule colour
+   -- a grey hole where a tile should be. */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(190px,100%),1fr));
+  gap:1px;background:var(--rule);
   border:1px solid var(--rule);border-radius:3px;overflow:hidden}
 @media(max-width:860px){.tiles{grid-template-columns:repeat(2,1fr)}}
 .tile{background:var(--surface);padding:16px 18px}
