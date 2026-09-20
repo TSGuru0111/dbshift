@@ -1215,6 +1215,11 @@ def sct_remediate(target: str = "", approve: str = ""):
             model_mode="off",   # entries are already planned; this only shapes totals
         )
         plan["entries"] = entries
+        # The build above is passed "off" because it must not re-plan entries
+        # that were just planned. The record still has to say which tier
+        # actually drafted them, or a plan built with the model reads as though
+        # it were built without one.
+        plan["model_mode"] = _model_mode()
         by_status: dict = {}
         for e in entries:
             by_status[e["status"]] = by_status.get(e["status"], 0) + 1

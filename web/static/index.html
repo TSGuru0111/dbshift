@@ -326,19 +326,19 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
 #sctUnmappedRoutes{flex:0 0 auto}
 /* The summary fold. Its summary line carries the numbers, so closing it
    loses the charts but not the headline. */
-.sctfold{flex:0 0 auto}
-.sctfold>summary{display:flex;align-items:baseline;gap:10px;cursor:pointer;
+.sctfold,.remfold{flex:0 0 auto}
+.sctfold>summary,.remfold>summary{display:flex;align-items:baseline;gap:10px;cursor:pointer;
   list-style:none;padding:5px 0;color:var(--ink-2);font-size:12.5px}
-.sctfold>summary::-webkit-details-marker{display:none}
-.sctfold>summary::before{content:"▸";color:var(--ink-3);font-size:11px;
+.sctfold>summary::-webkit-details-marker,.remfold>summary::-webkit-details-marker{display:none}
+.sctfold>summary::before,.remfold>summary::before{content:"▸";color:var(--ink-3);font-size:11px;
   transition:transform .15s var(--ease);display:inline-block}
-.sctfold[open]>summary::before{transform:rotate(90deg)}
-.sctfold>summary .ttl{font-family:Archivo,system-ui,sans-serif;font-weight:600;
+.sctfold[open]>summary::before,.remfold[open]>summary::before{transform:rotate(90deg)}
+.sctfold>summary .ttl,.remfold>summary .ttl{font-family:Archivo,system-ui,sans-serif;font-weight:600;
   font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
-.sctfold>summary .mono{font-size:12px;color:var(--ink-3);overflow:hidden;
+.sctfold>summary .mono,.remfold>summary .mono{font-size:12px;color:var(--ink-3);overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.sctfold>summary:hover{color:var(--ink)}
-.sctfold[open]>summary{margin-bottom:8px}
+.sctfold>summary:hover,.remfold>summary:hover{color:var(--ink)}
+.sctfold[open]>summary,.remfold[open]>summary{margin-bottom:8px}
 /* Title, provenance, count and downloads on one line above the table. The
    count is the flexible one -- it is the longest and the least load-bearing,
    so it gives way first rather than pushing the buttons onto a second row. */
@@ -1095,8 +1095,16 @@ tr:last-child td{border-bottom:none}
 
       <div id="sctRemLive" style="display:none"><div class="ticker" id="sctRemTicker"></div></div>
       <div id="sctRemResult" style="display:none">
-        <div class="tiles mt" id="sctRemTiles"></div>
-        <div id="sctRemGroups" class="mt scrollcap"></div>
+        <!-- Tiles fold away. They are a headline anyone reads once; the groups
+             below are the working surface, and on a laptop the tiles were
+             taking a third of the pane from them. -->
+        <details class="remfold mt" id="remFold">
+          <summary><span class="ttl">Summary</span>
+            <span class="mono" id="remFoldGist"></span></summary>
+          <div class="tiles" id="sctRemTiles"></div>
+          <div id="sctRemModel" class="mt-s"></div>
+        </details>
+        <div id="sctRemGroups" class="mt-s scrollcap"></div>
       </div>
       <div id="sctRemEmpty" class="panel"><div class="empty">Run the AWS SCT assessment first,
         then draft fixes for its action items.</div></div>
@@ -3873,7 +3881,7 @@ const SCT_STATUS = {
   AUTO_APPLY:              ['LOW',      'ready'],
   ADVICE_DRAFTED:          ['MEDIUM',   'advice'],
   BLOCKED:                 ['MEDIUM',   'blocked'],
-  HUMAN_AUTHORED_REQUIRED: ['HIGH',     'a person'],
+  HUMAN_AUTHORED_REQUIRED: ['HIGH',     'engineer'],
   DECISION_REQUIRED:       ['HIGH',     'decide'],
   REJECTED:                ['CRITICAL', 'rejected'],
 };
@@ -3990,13 +3998,56 @@ async function renderSctRemediation(){
   $('#sctRemEmpty').style.display = 'none';
   $('#sctRemResult').style.display = '';
 
+  // "Need a person" has two very different causes and the tile used to give
+  // only one of them. Some items have no statement by their nature -- an
+  // architecture decision, an Oracle-internal object. Others have none
+  // *because the model tier was off for this run*, which is a setting, not a
+  // property of the estate, and reads as a much worse result than it is.
+  const mode = SCTREM.model_mode || 'off';
+  const drafted = (SCTREM.entries || []).filter(e => e.generated_by === 'bedrock').length;
+  const personHint = mode === 'live'
+    ? 'no statement can be drafted'
+    : `model tier is ${esc(mode)} — nothing was drafted`;
   $('#sctRemTiles').innerHTML = [
     ['Action items', t.items ?? 0, 'from AWS SCT'],
+    ['AI drafted', drafted, mode === 'live' ? 'a person still approves each'
+                                            : 'model tier off for this run'],
     ['Ready to apply', t.ready ?? 0, 'every gate passed'],
-    ['Rejected', t.rejected ?? 0, 'a gate refused the statement'],
-    ['Need a person', t.needs_a_person ?? 0, 'no statement can be drafted'],
+    ['Need a person', t.needs_a_person ?? 0, personHint],
   ].map(([k, v, h]) => `<div class="tile"><div class="k">${esc(k)}</div>
-      <div class="v">${fmt(v)}</div><div class="h">${esc(h)}</div></div>`).join('');
+      <div class="v">${fmt(v)}</div><div class="h">${h}</div></div>`).join('');
+
+  // What the model actually did on this run, in one line. The phase is
+  // described as "AI drafts, a person approves", so a screen where nothing was
+  // drafted has to say why rather than leaving a reader to infer that the AI
+  // failed. Routed-to-a-person items are a property of the estate; an off
+  // model tier is a setting.
+  const noDraft = (SCTREM.entries || []).filter(
+    e => e.status === 'HUMAN_AUTHORED_REQUIRED' && e.who !== 'person').length;
+  $('#sctRemModel').innerHTML = mode === 'live'
+    ? `<div class="note info" style="font-size:12.5px">The model drafted
+       <b>${drafted}</b> of ${t.items ?? 0}. Each still needs a named approval before
+       anything runs. The rest are routed to an engineer by
+       <span class="mono">sct/route.py</span> — an architecture decision or an
+       Oracle-internal object has no statement to draft.</div>`
+    : `<div class="note warn" style="font-size:12.5px"><b>The model tier is
+       ${esc(mode)}, so nothing was drafted.</b> ${noDraft
+         ? `${noDraft} item${noDraft === 1 ? '' : 's'} would have been offered to it; the`
+         : 'The'} rest are routed to an engineer regardless — an architecture decision or
+       an Oracle-internal object has no statement to draft. Set
+       <span class="mono">DBSHIFT_MODEL_MODE=live</span> and re-run to draft them.</div>`;
+
+  // The fold's own line carries the headline, so closing it loses the tiles
+  // and never the numbers. Shut on a short window, where the groups need the
+  // room more than the summary does.
+  const rf = $('#remFold'), rg = $('#remFoldGist');
+  if (rg) rg.textContent = `${t.items ?? 0} items · ${drafted} AI drafted · `
+    + `${t.ready ?? 0} ready · ${t.needs_a_person ?? 0} need an engineer`
+    + (mode === 'live' ? '' : ` · model ${mode}`);
+  if (rf && !rf.dataset.touched) {
+    rf.open = window.innerHeight >= 900;
+    rf.addEventListener('toggle', () => { rf.dataset.touched = '1'; }, {once: true});
+  }
 
   // Grouped by where the fix belongs -- the same four groups as the assessment,
   // so a reader moving between the screens is not learning a second layout.
