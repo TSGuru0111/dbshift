@@ -284,14 +284,21 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
    panels with an inline display:none, and an !important rule outranks inline
    styles -- so this was forcing every not-yet-run panel visible, which is how
    an empty Headline box and a blank table appeared before anything had run. */
-.view.on:has(.scrollcap) *:has(.scrollcap):not([style*="display:none"]):not([style*="display: none"]){
+/* A closed <details> hides its children by leaving them out of the box tree,
+   but an explicit `display` on a child puts the box back -- .acc is
+   display:flex, so the evidence list laid out under its own one-line summary
+   and painted over the recommendation below. Forcing it shut is the reliable
+   fix; :not(details:not([open]) *) on the chain rules below keeps the
+   scrollcap machinery out of shut accordions for the same reason. */
+details:not([open])>*:not(summary){display:none!important}
+.view.on:has(.scrollcap) *:has(.scrollcap):not([style*="display:none"]):not([style*="display: none"]):not(details:not([open]) *){
   display:flex!important;flex-direction:column;flex:1 1 auto;min-height:0}
 /* Everything that is NOT on the path to the list keeps its own height. Without
    this, flex-shrink squashes a tile row or a chart panel to a fraction of its
    content -- the box shrinks but the text does not, so it paints over the
    heading underneath. That was the overlapping text on Discover and Assess. */
 .view.on:has(.scrollcap) > *:not(:has(.scrollcap)),
-.view.on:has(.scrollcap) *:has(.scrollcap) > *:not(:has(.scrollcap)):not(.scrollcap){
+.view.on:has(.scrollcap) *:has(.scrollcap) > *:not(:has(.scrollcap)):not(.scrollcap):not(details:not([open]) *){
   flex:0 0 auto;min-height:auto}
 /* flex-basis:0 is the point: 1 1 auto lets the list keep its content height
    and push the rest of the view off the screen instead of scrolling itself.
@@ -3899,6 +3906,20 @@ const SCT_ACTION = {
   HUMAN_AUTHORED_REQUIRED: 'Assign to an engineer',
   DECISION_REQUIRED:       'Decide the approach first',
 };
+// The seven states in one place. Every row already says what to do; this says
+// what the word in the state column means, which the column itself did not.
+// Wording follows remediate/sct_plan.py and gates.verdict() -- rejected and
+// blocked are both "a gate said no" and the difference matters: one is the
+// draft's fault, the other is a missing approval or an unreachable rehearsal.
+const SCT_STATE_KEY = [
+  'ready — a statement was drafted and all five gates passed. Apply it.',
+  'blocked — a gate could not finish: no named approver, or the rehearsal database was unreachable. Nothing is wrong with the draft.',
+  'rejected — a gate refused the draft itself: it broke policy, failed to parse, or did not survive the dry run. Rewrite by hand.',
+  'advice — the model was asked and concluded no safe statement exists. It explained why instead of inventing SQL.',
+  'engineer — routed to a person by sct/route.py. A draft would need more review than writing it.',
+  'decide — an architecture choice. No statement can fix it, so none was drafted.',
+].join('\n');
+
 function sctAction(e){
   // An item whose every occurrence is an Oracle-generated object is not work.
   // Telling someone to "assign to an engineer" for DR$ and AQ$ tables is how a
@@ -4074,7 +4095,7 @@ async function renderSctRemediation(){
     // group, matching the row template exactly so the columns line up.
     const head = `<div class="sctrow" style="padding:4px 14px;font-size:11px;
         letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)">
-        <span>state</span><span>code</span><span>what SCT found</span>
+        <span>state<span class="hint" tabindex="0" role="note" title="${esc(SCT_STATE_KEY)}">i</span></span><span>code</span><span>what SCT found</span>
         <span class="obj">object</span><span class="act">what to do</span></div>`;
     return `<div class="mt-s"><div class="eyebrow">${esc(items[0].where_label)}
       <span style="color:var(--ink-3);font-weight:400"> — ${items.length}${
@@ -4085,7 +4106,13 @@ async function renderSctRemediation(){
         return `
         <details>
           <summary class="sctrow">
-            <span class="sev ${tone}" title="${esc(e.status)}">${esc(label)}</span>
+            <!-- Which gate said no, on hover. "blocked" and "rejected" are
+                 both a gate refusing, and which one it was decides whether
+                 the draft needs rewriting or an approver needs naming. -->
+            <span class="sev ${tone}" title="${esc(e.status)}${(() => {
+              const bad = (e.gates || []).filter(g => g.status === 'fail' || g.status === 'blocked');
+              return bad.length ? ' — ' + bad.map(g => `${g.gate}: ${g.detail}`).join('; ') : '';
+            })()}">${esc(label)}</span>
             <span class="mono">${esc(e.issue_code)}</span>
             <span>${esc(e.title || '')}
               ${(e.actionable_occurrences ?? e.occurrences) > 1
