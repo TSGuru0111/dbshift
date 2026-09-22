@@ -110,7 +110,6 @@ def byte_length_semantics(finding: dict) -> dict:
     table, column = _split_object(finding["object_name"])
     if not column:
         raise TemplateError("DQ-009 needs TABLE.COLUMN")
-    owner = finding["owner"]
     # The declared length is not in the finding, so this template deliberately
     # declines rather than guessing a width and silently truncating a column.
     raise TemplateError(
