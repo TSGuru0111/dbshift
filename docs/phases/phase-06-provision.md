@@ -1,6 +1,75 @@
 # Phase 6 — Provision
 
-> **Latest update — 2026-09-16.** **A person can choose the instance class and
+> **Latest update — 2026-09-21: the template downloads from the Plan pane.**
+> **Download .json** sends the rendered CloudFormation as a file. It prefers
+> what the live stack ran and falls back to the local render when no stack
+> exists — which is the ordinary case both *before* a deploy and *after* a
+> destroy, and exactly when someone wants to read it. The response header
+> `X-Dbshift-Template-Origin` says which, and the console repeats it under the
+> button, so a downloaded file is never ambiguous about whether it was live.
+>
+> **The `dbshift-target-dbmig-telco-pg` stack was destroyed on 2026-09-21** —
+> instance, security group, subnet group, empty exchange bucket, IAM role and
+> the one automated snapshot, all five resources, `DELETE_COMPLETE`, nothing
+> billing. It had run 4.8 hours on 09-18 (~$0.51) and been stopped since; it
+> was deleted to test a clean Phase 6 deploy from the console. The render is
+> still on disk and the plan still says `ready`.
+>
+> Earlier — **the phase reads AWS SCT's records.** With the button unlocked, the render then refused: *records come
+> from different collector runs*. The check was right and was reading the wrong
+> three files. A run assessed, remediated and gated entirely through SCT leaves
+> `assessment.json`, `remediation_plan.json` and `gate_decision.json` untouched
+> — they are the **50-rule** path's files — so Phase 6 compared today's sizing
+> against whatever that path had written last. On the reported run: sizing from
+> `c1f08513` (today), the other three from `a62c7f5f` (three days earlier).
+>
+> `provision/records.py` now prefers `sct_gate_decision.json` and
+> `sct_remediation_plan.json` where they exist, falls back to the 50-rule files
+> where they do not, and **derives the assessment from the SCT gate** rather
+> than reading a fourth file — there is no fixed-path SCT assessment (it is
+> per-estate, per-target, and records the run rather than the findings), and one
+> source means the two cannot drift. **The consistency rule itself is
+> unchanged**: a genuine mismatch is still a failure, and the new
+> `provision.selftest_records` asserts that with an SCT gate from another run.
+> Two smaller fixes fell out: `sct_plan.build` never stamped a
+> `collector_run_id`, so its own record could not identify its estate; and
+> `preflight.gate_allows` read `gate['critical_findings']`, which an SCT gate
+> does not carry — a `KeyError` in the branch whose job is to report a HALT
+> clearly.
+>
+> **Rendered for real afterwards**: `dbshift-target-dbmig-telco-pg`, postgres
+> **16.9**, `db.t3.medium`, 20 GB gp3, **11 preflight checks pass, 0 fail**,
+> CloudFormation accepted the template, $0.106/hour. `provision.selftest_records`
+> **16/16**; every other suite unchanged (provision 50/50 + 49/49, remediate
+> 102/102, blocker 70/70, dms 113/113, cutover 51/51, sct 279/279).
+>
+> Earlier — **the SCT gate never unlocked this phase.** The gate said
+> **PROCEED**, the rail lit Provision green, and
+> **Render and check stayed disabled** — because lighting the rail and enabling
+> the button were separate acts and only the old 50-rule path did both. The SCT
+> gate has been the one the console leads with since 2026-09-17. Both gates now
+> call one `openProvision()`; a *second* evaluation unlocks too (the old guard
+> required `stageState.provision === 'idle'`); and a reload restores the SCT
+> gate from `has_sct_gate`, which the server had always exposed and the console
+> never read. Restoring it on load then exposed a real overlap on the gate
+> screen that an empty panel had hidden — Phase 4c's `.scrollcap` fault exactly.
+> `check_overlap.js` is now **17/17**, above the old 16/17 baseline.
+>
+> Earlier the same day — **the screen says where its actions are.** Three
+> console faults, none in `provision/`, all found by someone who could not find
+> the deploy button and reasonably concluded the CloudFormation template did not
+> exist. It did — `provision/output/` is gitignored because templates are
+> *generated*, so they appear only after **Render and check**, and the console
+> deliberately reads the template back from the live stack rather than from that
+> file. The button is disabled until Phase 5 clears provisioning and **never said
+> so**; the deploy form sits behind the third of three identical-looking chips;
+> and none of the chips reported state. The button now gives its reason, the
+> empty state names the button and links to Phase 5, `Deploy` is marked as the
+> billing action, and each chip carries its own state — `Plan · ready`,
+> `Live · nothing yet`, `Deploy · $0.106/h`. `check_overlap.js` 16/17 at both
+> 1440×900 and 1280×720, the baseline.
+>
+> Earlier — **2026-09-16.** **A person can choose the instance class and
 > fill in the database configuration**, and the plan still says where every
 > value came from. The instance class was taken straight from Phase 3 with no
 > way to depart from it, and nine configuration values were module constants in
@@ -283,6 +352,150 @@ To remove anything this project created: `python -m killswitch --destroy --confi
 the stack, because a stack cannot delete a bucket that holds objects.
 
 ## Change log
+
+**2026-09-21 — the template downloads, and says which one it is.**
+`GET /api/provision/template/download` sends the rendered CloudFormation as a
+`.json` attachment, with a **Download .json** button on the Plan pane beside the
+new `CloudFormation template` heading.
+
+Until now the template could only be read inside a `<details>` on the **Live**
+pane, via `/api/provision/template` — which reads it back from the live stack
+and therefore exists only while a stack does. That is exactly backwards for the
+two moments someone wants to read it: **before** a deploy, to review what will
+be created, and **after** a destroy, to hand it to someone. So the download
+prefers what CloudFormation actually ran and **falls back to the local render**
+when no stack exists.
+
+The response says which, in `X-Dbshift-Template-Origin` (`deployed` or
+`render`), and the console reports it under the button — "the template
+CloudFormation actually ran" versus "the local render. No stack exists, so
+there is nothing deployed to read it back from." A file called
+`<stack>.template.json` with no provenance is the ambiguity the rest of this
+screen exists to avoid. That header is why the button **fetches** rather than
+being an `<a download>`: a plain link cannot read it.
+
+Verified both ways on 2026-09-21 against the real account: `deployed` while the
+stack was still being deleted, `render` once it was gone, valid JSON carrying
+all five resources each time.
+
+**2026-09-21 (later still) — the four records are SCT's where SCT ran.**
+Reported from a live run: the gate said PROCEED, the button was unlocked, and
+the render then refused with `records come from different collector runs`.
+Phase 6 reads four records; three of them had two implementations, and it was
+reading the wrong one.
+
+| Record | Phase 6 read | The SCT run wrote |
+|---|---|---|
+| assessment | `assess/output/assessment.json` | *(no fixed-path file — see below)* |
+| sizing | `sizing/output/sizing.json` | the same file |
+| remediation | `remediate/output/remediation_plan.json` | `sct_remediation_plan.json` |
+| gate | `blocker/output/gate_decision.json` | `sct_gate_decision.json` |
+
+`SCT_PATHS` holds the two SCT files, preferred where they exist; the 50-rule
+files stay the fallback, and `load(prefer_sct=False)` forces them.
+
+**The assessment is derived from the SCT gate, not read from a file.** There is
+no fixed-path SCT equivalent: `sct/output/<estate>-<target>/sct_assessment.json`
+is per estate and per target, and it records the *run* — host, exit code,
+artefacts — not the findings. The findings are on the gate, already routed. Only
+what downstream reads is synthesised: `collector_run_id`, and `findings`
+carrying `owner` (for `estate_of`) and `rule_id`. An SCT item is keyed by
+`issue_code`, so that is what `rule_id` carries — SCT's `5984` where the rules
+engine had `RDS-004`. The Oracle-only branches in `render.py` that test for
+specific `RDS-*` ids therefore do not match, **which is correct**: those are
+Data Pump and option-group concerns that do not arise on the PostgreSQL path SCT
+is assessing.
+
+**The consistency rule is untouched.** It compares the same way; it now compares
+the right files. `selftest_records` asserts a mismatch still fails, using an SCT
+gate from a second run — the check exists because on 2026-09-11 the records
+disagreed twice for real, and loosening it would throw that away.
+
+Two faults fell out of fixing it:
+
+- **`sct_plan.build` stamped no `collector_run_id`**, so its own record could
+  not say which estate it was about — a plan carrying `None` read as a mismatch
+  against three records that agreed. It takes it from the assessment it is
+  passed; the console passes `STATE.run_id`.
+- **`preflight.gate_allows` read `gate['critical_findings']`**, which the SCT
+  gate does not carry — a `KeyError` in the one branch whose job is to report a
+  HALT clearly. It falls back to `len(blockers)`, and the 50-rule gate still
+  reports its own count.
+
+`_source` on the returned records says which files were read, and the passing
+detail line ends `(via AWS SCT: gate, remediation)` — the screen should never
+have to be asked which assessment it judged. Keys beginning `_` are metadata and
+are excluded from the comparison.
+
+Rendered for real afterwards against the live account: 11 preflight checks pass,
+0 fail, CloudFormation accepted the template. `provision.selftest_records`
+**16/16**.
+
+**2026-09-21 (later) — the SCT gate never unlocked Phase 6.** The gate returned
+**PROCEED**, the rail lit Provision green, and **Render and check stayed
+disabled**, with no way forward except re-running a gate that had already
+passed. Reported from a live run: `has_gate: false`, `has_sct_gate: true`.
+
+Three faults, one cause — *marking a stage active* and *unlocking its control*
+were separate acts, and only one path did both:
+
+- **The SCT gate lit the rail and stopped there.** It called
+  `setStage('provision', 'active')`; `$('#btnProvision').disabled = false` lived
+  only in `renderGate()`, the 50-rule path. Since 2026-09-17 the console leads
+  with the SCT gate, so the button had no writer on the path people actually
+  take. Both gates now call one `openProvision()`.
+- **A second evaluation skipped the unlock.** The condition was
+  `verdict !== 'HALT' && stageState.provision === 'idle'`, so re-running the
+  gate — the ordinary case after fixing something — did nothing, because the
+  stage was no longer idle. The verdict is the whole condition now; the idle
+  check stays inside `openProvision()`, on the rail state alone.
+- **A reload lost the gate entirely.** `restore()` read `has_gate` and never
+  `has_sct_gate`, which the server had exposed all along, so refreshing the
+  page after a PROCEED locked Phase 6 again. It re-evaluates
+  `GET /api/sct/gate` for the assessed target — deterministic over records
+  already held, and it creates nothing.
+
+**And restoring the gate on load exposed a layout fault that an empty panel had
+been hiding**, the same one Phase 4c had on 2026-09-20: `#sctGateGroups` was a
+`.scrollcap` while the CDC panel, the downstream-phase list and the 50-rule
+`<details>` below it were not, so those took the height, the cap collapsed to
+its floor with 343px of content in 110px, and the phase list ran 27px past the
+bottom of the view and painted over the `<details>` summary. The region scrolls
+now and the lists inside it do not. `check_overlap.js` **17/17** at 1440×900
+and 1280×720 — above the 16/17 that had been the baseline.
+
+**2026-09-21 — the screen says where the phase's actions are.** Nothing in
+`provision/` changed; all three faults were the console hiding its own
+controls, and all three were found by a person who could not find the deploy
+button and assumed the template did not exist.
+
+- **A disabled button with no reason.** `#btnProvision` ships disabled and is
+  enabled only where the gate reports `by_phase.provision === 'clear'`. Neither
+  the button nor the empty state below it said so: the empty state read
+  "Evaluate the gate first, then render the target", which names a step but not
+  the control it unlocks and not where that step lives. The button now carries
+  the reason as its `title`, the empty state names **Render and check** and
+  states that rendering creates nothing, and it offers a button through to
+  Phase 5. The gate's unlock rewrites both, so an enabled button never keeps a
+  title claiming it is blocked.
+- **The deploy form was behind a chip that looked like the other two.** The
+  three panes are a switcher with `Plan` pre-selected, and `Deploy` — the one
+  action in this phase that bills — rendered identical to the two free panes.
+  It is marked `.chip.act` in `--bad` now, so the billing action is visible
+  without opening anything.
+- **The chips said nothing about state.** `provChipState()` writes each pane's
+  state onto its own chip: `Plan · ready`, `Live · nothing yet`,
+  `Deploy · $0.106/h` — and `Deploy · deployed` once a stack exists. The rate
+  is the fact a person needs *before* opening the pane, not after. It is
+  written from `refreshStatus`, the one place holding both the rendered plan
+  (the rate) and the live status (whether anything is deployed), so the two
+  halves cannot disagree.
+
+The separator is a real `' · '` in `textContent`, not the `margin-left` it
+started as: the margin spaced the words on screen while `innerText` still read
+`Plan· ready` as one token, to a screen reader and to the drivers alike.
+`check_overlap.js` **16/17** at 1440×900 and at 1280×720 — the baseline, with
+the one failure the pre-existing 400 rather than anything from this change.
 
 **2026-09-16** — **Manual instance choice and a database configuration form.**
 Client feedback: "Provisioning -- give option to manual inputs to choose

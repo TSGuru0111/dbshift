@@ -13,6 +13,14 @@
 > applies nothing: it compiles into a transaction and rolls back. Only
 > `ddl_apply_run --apply` writes, and it asks for the target DSN typed back and
 > a named approver, like `convert.apply_run`.
+>
+> **Update — 2026-09-20 (the console screen was rebuilt).** The screen showed
+> two lists where it had room for one, and the second is what broke it: the
+> statements list is a `.scrollcap` and the notes list below it was not, so the
+> notes took the height, the capped list collapsed to its 150px floor and
+> painted **119px of statements over the notes' own heading**. One band and one
+> scroll region now, and the band's dead half is gone. Nothing in
+> `convert/ddl.py` changed. `check_4bcd.js` covers it.
 
 ## Purpose
 
@@ -125,7 +133,58 @@ possible way to do it. Records go to `convert/output/ddl_apply_record.json` and
 the existing 19- and 41-statement records from the real RDS apply are continued
 rather than orphaned.
 
+## The console screen
+
+**Phase 4c · Schema DDL.** One band of context, then one list.
+
+The band carries the execution order as a strip — `schema → tables → THE DATA
+LOAD → keys → foreign keys → checks → indexes` — with the counts on each step
+and the reason on hover, the one-sentence version of why it is not
+alphabetical, and **the compile evidence**. It is drawn before anything is run,
+because the order is what the phase teaches and an empty screen is the moment
+someone reads it.
+
+The result is three panes of one scroll region:
+
+| Pane | What it holds | On `DBMIG_APP` |
+|---|---|---|
+| Statements | every statement, grouped in execution order, each opening to its SQL | 31 |
+| Needs a person | the notes at `warn` or `error` — a renamed reserved word, an untranslated check, a virtual column | 6 |
+| Type mappings | the `info` notes, recorded rather than acted on | 25 |
+
+**The statement count and the compile count differ by one on purpose.** The
+pane lists 31 statements including `CREATE SCHEMA`; `compile_check` runs that
+one as setup before the counted loop, so the evidence line says 30.
+
 ## Change log
+
+**2026-09-20 — the console screen, rebuilt.** Three faults, all layout, none in
+`convert/ddl.py`:
+
+- **The two lists merged.** `#ddlGroups` is a `.scrollcap` and the notes list
+  below it was not, so the notes took the height the view had, the capped list
+  collapsed to its 150px floor, and 119px of statements painted over the notes'
+  heading — measured, not eyeballed. A view gets **one** scroll region; the
+  statements, the things needing a person and the type mappings are three panes
+  of it. Notes are also split by whether anyone has to act: 25 of the 31 on
+  `DBMIG_APP` are automatic type mappings, and listing them with the six that
+  need a decision buried them under a heading claiming all 31 were things a
+  reviewer must know.
+- **A panel that said "Checking the target…" forever.** `#ddlTargetStatus` had
+  no writer anywhere in the console — half the band, 310px above the fold, for
+  a status nothing ever set. It is wired to the registered DSN now (from
+  `/api/state` on load and from the Convert PL/SQL registration) and is the
+  **single** place the compile is reported: the note box under the tiles said
+  the same thing a third time and is gone.
+- **The reviewer rows collided.** The 50px column held `kind.slice(0, 8)` —
+  eight monospace characters in room for seven — so `virtual_` sat on top of
+  the subject beside it. The kind is the group heading above the rows, so the
+  row no longer repeats it; that room goes to the detail, and a note is now a
+  flat row rather than an accordion whose body repeated its own summary.
+
+The band went 439px → 199px and the list 110px → 365px at 1440×900, with no
+spill outside the view at 1280×720 or 400px. `check_4bcd.js` gained the
+measurements that would have caught all three; `check_overlap.js` 17/17.
 
 **2026-09-18 — `ddl_apply_run.py`, a command line for the apply.** `ddl_apply.py`
 had no CLI: Phase 4c's apply to the live RDS target was driven by a `python -c`

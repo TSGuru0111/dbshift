@@ -45,6 +45,7 @@ When you make a change:
 | 4 | Detect & Remediate | ◐ plans only; 2 fixes proven on the rehearsal copy | [phase-04-remediate.md](phase-04-remediate.md) |
 | 4b | Convert PL/SQL | ✅ built 2026-09-12 — 6/6 convertible objects compile on PostgreSQL 16, both estates, nothing applied | [phase-04b-convert.md](phase-04b-convert.md) |
 | 4c | Schema DDL | ✅ built 2026-09-14 — tables, keys, checks and indexes for PostgreSQL, **compiled for real** (30/30 and 52/52 on the two estates), nothing applied | [phase-04c-schema-ddl.md](phase-04c-schema-ddl.md) |
+| 4d | Application SQL | ✅ built 2026-09-18 — the SQL in the application's mapper files, which **AWS SCT never reads**. Parsed against a shadow schema built from 4c's own DDL and rolled back; nothing is written to a mapper file | [phase-04d-appsql.md](phase-04d-appsql.md) |
 | 5 | Blocker gate | ✅ built | [phase-05-blocker-gate.md](phase-05-blocker-gate.md) |
 | 6 | Provision | ✅ built, deployed and verified 2026-09-11 | [phase-06-provision.md](phase-06-provision.md) |
 | 7 | Migrate | ✅ built and run 2026-09-11 — full load, 11/11 tables match | [phase-07-migrate.md](phase-07-migrate.md) |

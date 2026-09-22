@@ -1,6 +1,35 @@
 # Phase 8 — Validate
 
-> **Latest update — 2026-09-14 (cross-engine comparison).** Validation now
+> **Latest update — 2026-09-21 (later): it found real data loss.**
+> Run against the 32.9M-row migration. **Level 3: 11 of 11 comparable tables
+> match exactly.** Level 4 then caught what nothing else did: Oracle `FLOAT`
+> mapped to `DOUBLE PRECISION` had **truncated 38 significant digits to 15**
+> on `SUBSCRIBER.RISK_FACTOR`. Row counts matched, DMS reported zero errors,
+> and the load looked perfect. `convert/types.json` now maps `FLOAT` to
+> `NUMERIC`.
+>
+> Four faults in the phase itself, each reporting as a *data* problem and none
+> being one: results were unwrapped with `isinstance(x, list)` and pg8000
+> returns a **tuple**, so every PostgreSQL value filed as "unreadable"; a dead
+> connection stayed cached so one socket drop became twelve unreadable tables;
+> the target connection had no keepalive, and a 60-second checksum sends no
+> bytes while the server works; and Oracle's `TM9` drops the leading zero, so
+> `0.023` rendered `.023` and hashed differently on 250,000 identical rows.
+>
+> **The screen states its verdict.** The conclusion used to live only in a 12px
+> string beside the button. There is now a panel above the levels: the verdict,
+> which levels compared *for real*, four counts, and every unexplained
+> difference with its reason.
+>
+> Earlier — **2026-09-21 (the screen says what it needs).**
+> `Run validation` shipped **enabled**, offering to compare a target that may
+> hold nothing against a source, and failing at the API. It now locks until a
+> migration has completed *and* the target is running, and the empty state
+> names which of the two is missing — with a button through to Phase 7. The
+> lock is deliberately two conditions, not one: a running target with no rows
+> on it is the case that reads as a clean validation and is not.
+>
+> Earlier — **2026-09-14 (cross-engine comparison).** Validation now
 > works against a **PostgreSQL** target as well as an Oracle one.
 > `validate/crossengine.py` reduces each row to a **canonical text form** on
 > both sides before hashing, so trailing zeros, CHAR padding, timestamp zones
@@ -141,6 +170,40 @@ card per level, each finding marked with its verdict, its reason, and its
 evidence.
 
 ## Change log
+
+**2026-09-20 — the levels list actually scrolls, and a bug in the shared
+layout rule.** Phase 8's console screen did not cap its list: `#valLevels`
+carries `.scrollcap` and still rendered **2089px tall, hanging 1743px below
+the bottom of the pane**, so the whole page scrolled instead of the list.
+
+The cause was not in this phase. The rule that hands a view's leftover height
+to its capped list has two halves, and only the second was guarded:
+
+```css
+.view.on:has(.scrollcap) > *:not(:has(.scrollcap)),                    /* was missing :not(.scrollcap) */
+.view.on:has(.scrollcap) *:has(.scrollcap) > *:not(:has(.scrollcap)):not(.scrollcap):not(...)
+```
+
+**A list does not contain itself**, so `*:not(:has(.scrollcap))` matches the
+`.scrollcap` as well and pinned it to `flex:0 0 auto`. Every other view
+survived because its list sits inside a result wrapper and is therefore
+matched by the guarded second half; Phase 8 is the only view whose list is a
+**direct child of the section**, so it was the only one that broke. One
+`:not(.scrollcap)` on the first half fixes it — `#valLevels` now caps at
+458px and scrolls its 2089px of content, and the pane does not scroll at all.
+
+Two smaller things on the same screen:
+
+- **The cross-engine explanation was 202px of prose** permanently above the
+  fold, taken straight off the list below it. The claim is one sentence and
+  the working is on the hint now, where the rest of the console puts it —
+  202px → 91px.
+- **`mismatch · 1 mismatch(es)`** said the same fact twice, because the status
+  word and the count are the same thing when the status *is* `mismatch`. Now
+  `1 mismatch(es)`, via `valStatusLine()`, which both the restore path and the
+  live path share.
+
+Nothing in `validate/` changed. `check_overlap.js` 17/17.
 
 **2026-09-14 — cross-engine comparison.** `validate/crossengine.py` added:
 canonical text expressions per engine, a shared MD5 checksum, the list of

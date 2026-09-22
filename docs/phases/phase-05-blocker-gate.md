@@ -1,6 +1,44 @@
 # Phase 5 — Blocker gate
 
-> **Latest update — 2026-09-17.** **The gate now runs over AWS SCT's action
+> **Latest update — 2026-09-21 (the console screen, and what it was hiding).**
+> Two faults, both on the screen rather than in `sct_gate.py`, and the first hid
+> the second.
+>
+> **A PROCEED did not open Phase 6.** The SCT gate lit the rail and stopped
+> there — enabling `#btnProvision` lived only in the 50-rule `renderGate()`, so
+> on the path the console has led with since 2026-09-17 the button had no
+> writer. The gate said PROCEED and the next phase stayed shut. Both gates call
+> one `openProvision()` now, the verdict is the whole condition (a *second*
+> evaluation used to skip the unlock because the stage was no longer `idle`),
+> and a reload restores the gate from `has_sct_gate`, which the server had
+> always exposed and the console never read.
+>
+> **Restoring the gate on load then exposed a real overlap**, previously hidden
+> because nothing rendered here until the button was pressed:
+> `#sctGateGroups` was a `.scrollcap` while the CDC panel, the downstream-phase
+> list and the 50-rule `<details>` below it were not, so those three took the
+> height the view had — the cap collapsed to its 110px floor holding 343px of
+> content, and the phase list ran 27px past the bottom of the view and painted
+> over the `<details>` summary. One scroll region now, on `#sctGateResult`; the
+> lists inside it keep their own height. The identical fault Phase 4c fixed on
+> 2026-09-20, and the same fix. `check_overlap.js` **17/17** at 1440×900 and
+> 1280×720, above the 16/17 that had been the baseline; `blocker.selftest_sct`
+> unchanged at 70/70.
+>
+> **Moving the cap onto `#sctGateResult` then stopped the panel hiding.**
+> `.scrollcap` carries `display:block!important`, which outranks the inline
+> `display:none` the console uses to hide a not-yet-run result — so on a clean
+> server Phase 5 rendered **286px of empty headings** ("Where the work
+> belongs", "Change data capture readiness", "Downstream phases") above its own
+> *"Run the AWS SCT assessment first"* empty state. Verified against a second
+> console on port 8766 with nothing run, because the demo server had a restored
+> gate and could not show it. The cap now carries the same
+> `[style*="display:none"]` guard the chain rules below it already use, so a
+> scroll region that is also a result panel can still be hidden. This is the
+> fault the comment above `.scrollcap` records as previously fixed once — it
+> returns whenever `.scrollcap` lands on an element the JS hides.
+>
+> Earlier — **2026-09-17.** **The gate now runs over AWS SCT's action
 > items, split by where the work belongs.** `blocker/sct_gate.py` +
 > `sct_run.py`. SCT is the assessment a client reads since 2026-09-17, so it is
 > what the gate judges; `gate.py` is unchanged and still runs on the 50-rule

@@ -1,6 +1,56 @@
 # Phase 7b — Migrate with AWS DMS (the heterogeneous path)
 
-> **Latest update — 2026-09-16.** `--migration-type` now **defaults to the mode
+> **Latest update — 2026-09-21 (later still): the console never passed its own
+> target.** `/api/dms/plan` called `plan()` without `target_counts`, so
+> `target_has_tables` and `target_empty` reported **blocked** on a console where
+> the target was registered -- and their remedy line read "run this from the
+> console where the target is registered", sending a reader to do the thing they
+> were already doing. `dms.run.target_counts_from` reads the counts through the
+> registered `PgTarget` (the CLI's helper takes a DSN and finds the password in
+> the environment; the console has neither). Both checks now answer, and a
+> target that cannot be read says *why* rather than restating the remedy.
+>
+> On the live target the second one correctly **fails**: 11 tables already hold
+> 32.9M rows from the earlier load, and DMS would add rows alongside them rather
+> than replacing them -- which looks successful and is wrong.
+>
+> Earlier — **2026-09-21 (later): run for real, and three bugs it hid.**
+> **32,971,741 rows moved Oracle→PostgreSQL, 11 tables, zero errors** — the
+> first time this phase has completed. Getting there exposed three faults that
+> only a live run could show, all now fixed:
+>
+> - **No security group on the replication instance.** AWS attached the VPC
+>   *default*, so every ingress rule naming a purpose-built `dbshift-dms-sg`
+>   pointed at a group nothing used, and the source test failed `ORA-12170` —
+>   indistinguishable from the NAT problem. `actions.ensure_security_group`
+>   creates and attaches one; it returns `None` rather than blocking if it
+>   cannot, because the default group still works once the databases admit it.
+> - **"Endpoint already exists; reusing it" never checked where it pointed.**
+>   A source endpoint from a week earlier still carried a laptop's public IP,
+>   was reused silently, and failed its test. The plan is now the authority:
+>   drift in host, port, database or user is corrected and said out loud.
+> - **A task-creation failure reported as the string `"None"`.** Some
+>   exceptions stringify to nothing; the handler now keeps the type and the
+>   failing frame, and stores the traceback on the record.
+>
+> **The screen shows the task, live from AWS.** `dms.run.status` falls back to
+> asking AWS when the console has no record of starting one — a task run from
+> the CLI left the screen saying "no DMS task has been started" while 32.9M
+> rows were moving. A `dbshift-` task that exists is a fact whoever created it.
+>
+> Earlier — **2026-09-21 (the screen says what it needs).** Every button
+> on this phase shipped **enabled**, so `Run the migration` and `Create and run`
+> offered to migrate into a target that did not exist, failing with an API error
+> where a disabled button and a reason were the honest answer. Both are now
+> locked until the stack is `CREATE_COMPLETE` and say which — `Plan` stays open,
+> because planning is free and reads records rather than the database.
+>
+> **The empty state was inside `#dataPumpPanel`.** On the PostgreSQL path that
+> whole panel is `display:none`, so the one line explaining why the phase was
+> locked could never be seen, and the DMS path had no empty state at all. It is
+> a sibling of both panels now and serves either path.
+>
+> Earlier — **2026-09-16.** `--migration-type` now **defaults to the mode
 > declared in Phase 1** instead of carrying its own default. Before this, a run
 > could be gated for a full load and then executed with CDC — or the reverse —
 > with nothing in the record contradicting it. Passing the flag explicitly still
@@ -247,3 +297,52 @@ that looked successful:
 - **The chosen target only restored when connected.** The Migrate screen showed
   Data Pump while the server held PostgreSQL. The target is server state
   independent of any connection, so it now restores before that early return.
+
+**2026-09-21 — the screen said the wrong thing about the target, twice.**
+
+Four faults, found by running the phase against the real estate rather than by
+reading it. Each one produced a confident, wrong answer on screen.
+
+- **The target checks read the wrong database.** `target_has_tables` and
+  `target_empty` resolved `STATE.pg_target`, which is whatever Phase 4b
+  registered — and 4b registers the local Docker container it compiles and
+  rolls back against. The screen reported "0 of 11 tables exist" and "0 target
+  tables" while the provisioned RDS instance held 11 tables and 21M rows. Both
+  numbers were true of a database nobody was migrating to. `_provisioned_pg_target()`
+  now resolves the instance Phase 6 built, via `describe_db_instances` and the
+  SSM parameter the deploy wrote, falling back to the registered target.
+  This is the same class of error as the `DBSHIFT_DSN` mistake: pointing at the
+  wrong database and trusting the resulting counts.
+- **Every DMS client was built without a region.** `session.client("dms")` in
+  five places and `session.client("ec2")` in one, against a session with no
+  default region, so `no_instance_running` reported "AWS could not be reached:
+  You must specify a region" and the reader had no way to tell a permissions
+  problem from a missing keyword argument. `dms.policy.REGION` already existed
+  and was already used for the SSM client one screen away. Passing it makes the
+  check answer `instance_absent` truthfully.
+- **Phase 8 re-locked on reload.** `MIGRATED` was set only by a run in the
+  current browser session, so refreshing the page locked Validate again while
+  32.9M migrated rows sat on the target. It is now derived from DMS task
+  status, so a completed load unlocks Validate whoever ran it.
+- **The Data Pump panel could shadow a rendered DMS plan.** `renderDmsPlan`
+  now asserts `#dmsPanel` visible and `#dataPumpPanel` hidden, because the two
+  are mutually exclusive and a reload could leave the Oracle panel on top of a
+  PostgreSQL plan that had rendered invisibly beneath it.
+
+Two things were added to the screen, both of which the plan had carried all
+along without ever showing:
+
+- **`#dmsStory`** — source → DMS → target, named and with the instance class,
+  above everything else; and the blocking reason as a sentence that says what
+  to do, not a check name. `target_empty` now reads "The target already holds
+  data. DMS never empties a table it did not create…", because the failure is
+  the useful part: DMS would add a second copy alongside the rows already there
+  and report success.
+- **`#dmsArtefacts`** — the four AWS resources named before anything is
+  created, plus the table mapping and task settings as collapsible JSON. These
+  are what a person would paste into the AWS console by hand, and "where do I
+  see the mapping?" previously had no answer.
+
+`convert/selftest_ddl_apply.py` also had a stub `_Target.connect()` that was
+never updated when `connect(timeout=)` was added, so the module had been
+failing on a `TypeError` unrelated to what it tests. Signature parity restored.

@@ -1,6 +1,25 @@
 # Phase 10 — Report
 
-> **Latest update — 2026-09-12 (built).** One self-contained HTML page that
+> **Latest update — 2026-09-21 (later): it builds from SCT's records too.**
+> `_report_data()` read `STATE.assessment` and `STATE.gate`, both of which are
+> the 50-rule path's and both `None` on an SCT-only run — so the report refused
+> with *"run the assessment first"* on a console whose rail said the assessment
+> was done. It now prefers SCT's where SCT ran, deriving the assessment from
+> the SCT gate exactly as `provision/records.py` does.
+>
+> Built for real against the EC2 estate: **`same_run: True`**, carrying the
+> gate verdict, the provisioned target, the validation result and the cutover
+> certificate's unmet requirements.
+>
+> Earlier — **2026-09-21 (the screen says what it needs).**
+> `Build report` shipped **enabled** with nothing behind it, failing at the API
+> when no assessment had run. It now unlocks on **either** assessment being
+> present — SCT's or the 50-rule one — because the report is built from records
+> on disk and reads no database. That is also why it is the one phase here that
+> does *not* wait on a target: a report about a migration that has not run yet
+> is still a real document, and says so itself.
+>
+> Earlier — **2026-09-12 (built).** One self-contained HTML page that
 > follows the structure of the two documents an AWS migration usually produces
 > — the **SCT assessment report** (what converts automatically, action items by
 > complexity) and the **DMS pre-migration assessment** (whether the tables can
@@ -93,6 +112,27 @@ validation or cutover records on disk describe a different collector run than
 the one on screen, because the report will not silently mix runs.
 
 ## Change log
+
+**2026-09-20 — the refusal names which assessment, because there are two.**
+On the SCT console path the last screen of the demo read **"Run the assessment
+first"** while the rail two inches away read **Assess ✓ · 14 action items**.
+
+Both were true and the screen was still wrong. `_report_data` refuses without
+`STATE.assessment` — the **50-rule** assessment — and the SCT path sets
+`STATE.sct_assessment` instead and never the other. So a client is shown a
+console that says the assessment is done and a report that says to go and run
+it, with nothing on screen explaining that these are different artefacts.
+
+The screen now reads the state and names the one it is missing: that the
+report is built from the 50-rule assessment, that SCT reads the schema for
+conversion work while the 50 rules add the OPS, SEC, DQ and PERF findings this
+report scores, and the command to run it. The meta line no longer echoes the
+server's `detail`, because that sentence is the ambiguous one.
+
+**This is the message, not the behaviour.** Whether the report should also
+build from an SCT assessment is a scope question — the report is defined as
+being built from the 50 rules' findings — and it is flagged here rather than
+changed. Nothing in `report/` changed.
 
 **2026-09-12 — console stage.** The report was reachable only from a header
 link, and the page navigation still said "Phase 10 (Report) is not built", so

@@ -1,6 +1,27 @@
 # Phase 9 — Cutover
 
-> **Latest update — 2026-09-12 (later): cut over.** With the local phases
+> **Latest update — 2026-09-21 (later): the certificate builds again.**
+> `/api/cutover` had been returning **400** on every SCT-planned run — a bare
+> `KeyError: 'rule_id'`, because SCT entries key on `issue_code`. That is the
+> failure the layout driver has been reporting as "16/17" all day. Also fixed:
+> `_source`, the metadata key naming which files were read, was compared as if
+> it were a record, so a certificate whose four real records agreed reported
+> "`_source` describes None" as unmet.
+>
+> Against the EC2 estate it now returns **6 of 8 met**, refusing on two honest
+> grounds: the last validation ended `mismatch` (it found real data loss), and
+> no replication task has been started for CDC. `records` is **met** — the
+> target was destroyed and re-provisioned so its tag matches the run.
+>
+> Earlier — **2026-09-21 (the refusal is legible).** The certificate
+> already rendered whether or not it issued, which is right — the docs call the
+> refusal the moment it is most useful. What it did not do was **say how far
+> off it was**: the exec panel simply vanished. The empty state now carries the
+> count of unmet and waived requirements, and the rail sub-label reads
+> `N unmet` rather than a bare `not ready`, so the distance is visible without
+> reading every row.
+>
+> Earlier — **2026-09-12 (later): cut over.** With the local phases
 > re-run for the target's own collector run (`6e48d16a`), the certificate met
 > every requirement but the gate; the operator started the stopped instance,
 > **accepted `OPS-001` and `OPS-002` by name** (`guru.ts@ganitinc.com`, 07:11 UTC,
