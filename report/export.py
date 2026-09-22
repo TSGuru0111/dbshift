@@ -212,7 +212,7 @@ def pdf(rec: dict, assessment: dict | None = None) -> bytes:
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
-    from reportlab.platypus import (KeepTogether, PageBreak, Paragraph,
+    from reportlab.platypus import (PageBreak, Paragraph,
                                     SimpleDocTemplate, Spacer, Table, TableStyle)
 
     styles = getSampleStyleSheet()

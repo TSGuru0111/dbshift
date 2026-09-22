@@ -141,10 +141,21 @@ def build_prompt(obj: dict, constructs: list[dict], column_types: dict[str, list
 def validate_output(text: str, obj: dict, constructs: list[dict]) -> dict:
     raw = text.strip()
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE)
+    # **An empty reply is not a malformed reply.** `json.loads("")` raises
+    # `Expecting value: line 1 column 1 (char 0)`, which read on the screen as
+    # though the model had answered with something unusable and the object
+    # therefore needed a person. It had answered with nothing -- a throttle, a
+    # timeout, or a filtered completion -- and the same call a second time
+    # usually succeeds. Separate the two so the summary can advise correctly,
+    # and never put a raw JSONDecodeError in front of a reader.
+    if not raw:
+        raise ModelOutputInvalid("the model returned an empty reply")
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ModelOutputInvalid(f"not JSON: {exc}") from exc
+        raise ModelOutputInvalid(
+            f"the reply was not valid JSON at line {exc.lineno}, column {exc.colno}"
+        ) from exc
     if not isinstance(payload, dict):
         raise ModelOutputInvalid("top level is not an object")
     stmts = payload.get("statements")

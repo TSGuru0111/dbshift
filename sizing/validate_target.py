@@ -32,16 +32,7 @@ import re
 
 from . import propose_target as pt
 from . import target as target_mod
-
-
-def _check(name, verdict, detail, proposed=None, decided=None):
-    return {
-        "check": name,
-        "verdict": verdict,
-        "detail": detail,
-        "proposed": proposed,
-        "decided": decided,
-    }
+from .validate import _check
 
 
 # Numbers in a reason that are allowed without appearing in the evidence:

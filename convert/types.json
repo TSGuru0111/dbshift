@@ -23,7 +23,7 @@
     "BLOB": {"postgres": "BYTEA"},
     "LONG RAW": {"postgres": "BYTEA"},
     "RAW": {"postgres": "BYTEA"},
-    "FLOAT": {"postgres": "DOUBLE PRECISION"},
+    "FLOAT": {"postgres": "NUMERIC", "note": "Oracle FLOAT is a NUMBER with binary precision, not an IEEE float: it carries up to 38 significant decimal digits. DOUBLE PRECISION holds about 15, so that mapping silently truncated every value -- measured 2026-09-21 on SUBSCRIBER.RISK_FACTOR, where .02194612401058669157088245010444262393 arrived as 0.0219461240105867. NUMERIC is arbitrary precision and keeps them. BINARY_FLOAT and BINARY_DOUBLE are the genuinely binary types and still map to REAL and DOUBLE PRECISION."},
     "BINARY_DOUBLE": {"postgres": "DOUBLE PRECISION"},
     "BINARY_FLOAT": {"postgres": "REAL"},
     "XMLTYPE": {"postgres": "XML", "note": "XML type only; no schema validation on the target"},

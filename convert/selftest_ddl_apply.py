@@ -74,7 +74,7 @@ class _Target:
         self.cur = _Cur(fail_on, existing)
         self.closed = 0
 
-    def connect(self):
+    def connect(self, *, timeout: int = 10):  # noqa: ARG002 -- signature parity with PgTarget
         outer = self
 
         class _Conn:
@@ -132,7 +132,7 @@ def main() -> int:
             c(f"{why} is refused", False, "it proceeded")
         except ddl_apply.ApplyRefused as exc:
             c(f"{why} is refused", True)
-            c(f"  ...and says why", expect in str(exc), str(exc))
+            c("  ...and says why", expect in str(exc), str(exc))
 
     try:
         ddl_apply.apply(_plan(compiled=False), _Target(), approved_by="a@b.c")

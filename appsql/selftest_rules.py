@@ -28,7 +28,6 @@ else clearly. So these checks are mostly about the declining:
 from __future__ import annotations
 
 import sys
-from collections import Counter
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -141,7 +140,7 @@ def main() -> int:
             c(f"{what} is declined", False, "it converted instead")
         except rules.Declined as exc:
             c(f"{what} is declined", True)
-            c(f"  ...and the reason is substantive", len(str(exc)) > 50, str(exc))
+            c("  ...and the reason is substantive", len(str(exc)) > 50, str(exc))
 
     c("a statement with no catalogued construct is declined too",
       _declines("SELECT a FROM t WHERE b = 1"))

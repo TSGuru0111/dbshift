@@ -39,7 +39,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "appsql"
 
-from . import classify, extract, gates
+from . import extract, gates
 
 MAPPERS = Path(__file__).resolve().parent.parent / "scripts" / "demo-app" / "mappers"
 

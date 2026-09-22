@@ -25,7 +25,7 @@ import os
 import re
 from dataclasses import dataclass
 
-from . import inventory, policy, typemap
+from . import inventory, typemap
 from .typemap import Unmappable
 
 
@@ -62,11 +62,22 @@ class PgTarget:
     def describe(self) -> str:
         return f"{self.user}@{self.dsn}"
 
-    def connect(self):
+    def connect(self, *, timeout: int = 10):
+        """A connection to the target.
+
+        `timeout` is pg8000's socket read timeout, and 10s is right for the
+        compile gate: every statement there is a CREATE that is rolled back,
+        so a slow one means something is wrong. It is wrong for Phase 4c's
+        **post-load** apply, where `ALTER TABLE ... ADD PRIMARY KEY` builds an
+        index over the migrated rows -- on 21M rows that took well over 10s and
+        the read timed out client-side while PostgreSQL was still working. The
+        transaction rolled back correctly, but the failure looked like a
+        database error rather than a driver deadline.
+        """
         import pg8000.dbapi
 
         conn = pg8000.dbapi.connect(user=self.user, password=self.password, host=self.host,
-                                    port=self.port, database=self.database, timeout=10)
+                                    port=self.port, database=self.database, timeout=timeout)
         conn.autocommit = False
         return conn
 

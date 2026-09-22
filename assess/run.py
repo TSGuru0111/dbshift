@@ -154,7 +154,7 @@ def _report(a: dict) -> None:
         print(f"  Findings:        {k['additional_findings']}  (all triage pending)")
         return
 
-    print(f"\nANSWER KEY  (docs/04-defects.md)")
+    print("\nANSWER KEY  (docs/04-defects.md)")
     for d in k["defects"]:
         if d["detected"]:
             mark = "OK  "

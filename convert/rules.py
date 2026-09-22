@@ -648,8 +648,7 @@ def convert_package_body(text: str, *, owner: str, known_types: set[str] | None,
         raise Declined(f"package body does not end with END {pkg}")
     inner = rest[:em.start()]
 
-    members, pos, statements, creates, cs, names = [], 0, [], [], [], []
-    stripped_inner = _strip_comments(inner)
+    pos, statements, creates, cs, names = 0, [], [], [], []
     while True:
         mm = re.search(r"\b(PROCEDURE|FUNCTION)\s+(\"?)([\w$#]+)\2", inner[pos:], I)
         if not mm:

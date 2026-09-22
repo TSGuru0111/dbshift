@@ -225,7 +225,7 @@ def write(plan: dict, output_dir: Path = OUTPUT) -> Path:
         header = (f"-- {e['namespace']}.{e['statement_id']}  ({e['kind']})\n"
                   f"-- status: {e['status']}   source: {e['source']}"
                   + (f"   model: {e['model_id']}" if e.get("model_id") else "") + "\n"
-                  f"-- constructs: "
+                  "-- constructs: "
                   + ", ".join(f"{x['id']}({x['tier']})" for x in e["constructs"]) + "\n"
                   + (f"-- caveat: {e['caveat']}\n" if e.get("caveat") else "")
                   + "-- NOT APPLIED. Phase 4d proposes; a person approves.\n\n")

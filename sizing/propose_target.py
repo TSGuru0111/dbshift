@@ -248,12 +248,19 @@ def _construct_count() -> str:
     Hardcoding the number here would let the prompt drift away from the
     catalogue silently, and a prompt that misstates its own evidence is the one
     thing this module exists to prevent.
+
+    An unreadable catalogue degrades to "many" rather than raising: the count is
+    context for the prompt, not evidence the recommendation rests on, and losing
+    it must not take the whole proposal down. It is logged so the degradation is
+    visible rather than silent.
     """
     try:
         from convert import classify
         return str(len(classify.catalogue()))
-    except Exception:
-        return "a catalogue of"
+    except (OSError, ValueError, KeyError, ImportError) as exc:
+        log.warning("sizing.propose_target: construct catalogue unreadable (%s); "
+                    "the prompt will say 'many' instead of a count", exc)
+        return "many"
 
 
 _BASIS_EXPLANATION = {

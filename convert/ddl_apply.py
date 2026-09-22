@@ -41,7 +41,6 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from . import ddl as ddl_mod
 
 # Phase 4c's own ordering, split at the data load. The keys are the plan's.
 PRE_LOAD = ("schema", "tables")
@@ -161,7 +160,12 @@ def apply(plan: dict, target, *, approved_by: str, post_load: bool = False,
 
     attempted: list[dict] = []
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    conn = target.connect()
+    # Post-load statements build indexes over the migrated rows: on 21M rows an
+    # ADD PRIMARY KEY runs for minutes, and the compile gate's 10s read timeout
+    # aborted it client-side while PostgreSQL was still working. The rollback
+    # was correct but the message read as a database error rather than a
+    # deadline. An hour is a ceiling, not an expectation.
+    conn = target.connect(timeout=3600)
     ok, error = False, None
     try:
         cur = conn.cursor()

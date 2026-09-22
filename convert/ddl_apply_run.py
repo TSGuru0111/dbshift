@@ -106,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if not args.apply:
-        print(f"\nnothing was applied")
+        print("\nnothing was applied")
         cmd = ("python -m convert.ddl_apply_run --apply"
                + (" --post-load" if args.post_load else "")
                + f" --confirm {args.pg_dsn} --approved-by <you>")

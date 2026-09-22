@@ -4,7 +4,7 @@ import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from typing import Sequence
 
 import oracledb
 
@@ -41,7 +41,7 @@ class QueryRecord:
 
 @dataclass
 class Session:
-    connection: Any
+    connection: oracledb.Connection
     query_log: list[QueryRecord] = field(default_factory=list)
     # Column names per query label, captured from cur.description.
     #
@@ -78,7 +78,7 @@ class Session:
         return [q.label for q in self.query_log[mark:]]
 
 
-def connect(cfg) -> Any:
+def connect(cfg) -> oracledb.Connection:
     """Thin mode: no Oracle Instant Client on the machine, by design."""
     conn = oracledb.connect(user=cfg.user, password=cfg.password, dsn=cfg.dsn)
     log.info("connected user=%s dsn=%s thin=%s", cfg.user, cfg.dsn, conn.thin)

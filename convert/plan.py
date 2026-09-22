@@ -202,7 +202,14 @@ def build(inv: dict, *, model_mode: str = "static", pg_target: target_mod.PgTarg
         # a run where the model answered for four objects and returned
         # unparseable output for a fifth, the summary blamed the account. The
         # per-object reason already carries the real cause; surface it.
-        reasons = []
+        # **Retryable and unconvertible are different outcomes and get
+        # different advice.** An empty reply means the call did not land --
+        # a throttle, a timeout, a filtered completion -- and running the
+        # phase again normally clears it. Output that arrived but broke the
+        # contract is a real disagreement about the object. Telling a reader
+        # "the object goes to a person" for the first kind sends them to do
+        # by hand what a second click would have done.
+        retryable, genuine = [], []
         for e in entries:
             if e["status"] != "MODEL_REQUIRED":
                 continue
@@ -210,15 +217,24 @@ def build(inv: dict, *, model_mode: str = "static", pg_target: target_mod.PgTarg
             # The route reason names the constructs; anything after "model:" is
             # what actually went wrong on the call.
             detail = reason.split("model:", 1)[1].strip() if "model:" in reason else ""
-            reasons.append(f"{e['object_name']}"
-                           + (f" ({detail[:90]})" if detail else ""))
-        in_the_way.append(
-            f"{totals['MODEL_REQUIRED']} object(s) still need the reasoning tier: "
-            + "; ".join(reasons)
-            + ". Each needs judgement no rule covers, and the model tier did not "
-              "return a usable conversion for it -- re-running may succeed, or the "
-              "object goes to a person."
-        )
+            bucket = retryable if "empty reply" in detail else genuine
+            bucket.append(f"{e['object_name']}"
+                          + (f" ({detail[:90]})" if detail else ""))
+        if retryable:
+            in_the_way.append(
+                f"{len(retryable)} object(s) got no answer from the reasoning tier: "
+                + "; ".join(retryable)
+                + ". The call did not land rather than the object being hard --"
+                  " run the conversion again and it normally clears."
+            )
+        if genuine:
+            in_the_way.append(
+                f"{len(genuine)} object(s) still need the reasoning tier: "
+                + "; ".join(genuine)
+                + ". Each needs judgement no rule covers, and the model tier did not "
+                  "return a usable conversion for it -- re-running may succeed, or the "
+                  "object goes to a person."
+            )
 
     return {
         "phase": "4b-convert",
