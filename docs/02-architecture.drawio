@@ -1,0 +1,416 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Page-1" id="TqpO-i0ok5VkINe7K7m3">
+    <mxGraphModel dx="3408" dy="1872" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="ttl" parent="1" style="text;html=1;align=left;verticalAlign=middle;fontSize=17;fontColor=#232F3E;" value="&lt;b&gt;DBShift AI — Oracle Migration Intelligence Agent&lt;/b&gt;  ·  revision 3  ·  single-target scope&#xa;On-prem Oracle 19c → Amazon RDS for Oracle.  Discover → Assess → Remediate → Migrate → Validate → Cutover.  Bedrock reasons · Step Functions executes · deterministic rules decide · humans approve" vertex="1">
+          <mxGeometry height="60" width="2000" x="40" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="onprem" parent="1" style="swimlane;startSize=30;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontColor=#7F6000;fontStyle=1;fontSize=12;pointerEvents=0;" value="ON-PREMISES SOURCE ESTATE — laptop / Docker" vertex="1">
+          <mxGeometry height="770" width="380" x="40" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="src" parent="onprem" style="shape=image;html=1;verticalAlign=top;verticalLabelPosition=bottom;imageAspect=0;aspect=fixed;image=https://icons.diagrams.net/assets/databases/1/Oracle_Database.svg;fontSize=11;" value="Oracle Database 19c&#xa;source estate" vertex="1">
+          <mxGeometry height="78" width="70" x="40" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="rehearse" parent="onprem" style="shape=image;html=1;verticalAlign=top;verticalLabelPosition=bottom;imageAspect=0;aspect=fixed;image=https://icons.diagrams.net/assets/databases/1/Oracle_Database.svg;fontSize=11;" value="Rehearsal copy&#xa;dry-run sandbox" vertex="1">
+          <mxGeometry height="78" width="70" x="240" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="verfix" parent="onprem" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontSize=10;align=left;spacingLeft=8;verticalAlign=middle;" value="&lt;b&gt;19c, matched to the target.&lt;/b&gt; RDS for Oracle offers 19c, 21c and 26ai, and Data Pump does not import downward — a 23ai dump cannot land on 19c or 21c. Matching source to target closes the path with no verification work." vertex="1">
+          <mxGeometry height="90" width="340" x="20" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="objs" parent="onprem" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D6B656;fontSize=10;align=left;spacingLeft=8;verticalAlign=middle;" value="&lt;b&gt;Seeded estate&lt;/b&gt;  4 schemas · ~1,200 objects · 3–5 GB&lt;br&gt;Tables · indexes · constraints · packages · PL/SQL · triggers · views · materialized views · sequences · scheduler jobs · grants&lt;br&gt;&lt;br&gt;&lt;b&gt;ARCHIVELOG + supplemental logging&lt;/b&gt; — required for DMS CDC&lt;br&gt;&lt;b&gt;Keep partitioning, TDE and Advanced Compression usage seeded&lt;/b&gt; — with one target these are the only branching decision left, and they drive the SE2 / EE verdict&lt;br&gt;&lt;b&gt;DROPPED:&lt;/b&gt; the RPT_MART star schema. It existed only to make the Redshift branch routable." vertex="1">
+          <mxGeometry height="160" width="340" x="20" y="262" as="geometry" />
+        </mxCell>
+        <mxCell id="coll" parent="onprem" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D6B656;fontSize=10;align=left;spacingLeft=8;verticalAlign=middle;" value="&lt;b&gt;Discovery Collector&lt;/b&gt; — runs locally&lt;br&gt;Python · oracledb thin · read-only account&lt;br&gt;DBA_* views · DBMS_METADATA.GET_DDL&lt;br&gt;&lt;b&gt;DBA_FEATURE_USAGE_STATISTICS&lt;/b&gt; — proves feature use rather than assuming it&lt;br&gt;V$SYSMETRIC + DBA_HIST — utilization percentiles&lt;br&gt;&lt;br&gt;&lt;b&gt;Pushes outbound over HTTPS.&lt;/b&gt; Nothing in AWS connects inbound to the laptop; Site-to-Site VPN or Direct Connect is the production pattern only." vertex="1">
+          <mxGeometry height="150" width="340" x="20" y="435" as="geometry" />
+        </mxCell>
+        <mxCell id="dump" parent="onprem" style="shape=mxgraph.flowchart.document;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D6B656;fontSize=10;" value="Data Pump dump&#xa;golden reset" vertex="1">
+          <mxGeometry height="80" width="160" x="20" y="640" as="geometry" />
+        </mxCell>
+        <mxCell id="defects" parent="onprem" style="shape=mxgraph.flowchart.document;whiteSpace=wrap;html=1;fillColor=#FFF9E6;strokeColor=#D6B656;fontSize=10;" value="defects.md&#xa;answer key, 80 seeded" vertex="1">
+          <mxGeometry height="80" width="160" x="200" y="640" as="geometry" />
+        </mxCell>
+        <mxCell id="chg" parent="1" style="swimlane;startSize=32;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontStyle=1;fontSize=13;pointerEvents=0;" value="What changed in revision 3" vertex="1">
+          <mxGeometry height="830" width="380" x="40" y="900" as="geometry" />
+        </mxCell>
+        <mxCell id="chgt" parent="chg" style="text;html=1;align=left;fontSize=11;verticalAlign=top;spacingLeft=12;spacingTop=4;" value="&lt;b&gt;Single target — RDS for Oracle only&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;b&gt;Removed&lt;/b&gt;&lt;br&gt;· Aurora PostgreSQL, Redshift and ODB@AWS as migration targets&lt;br&gt;· The target-recommendation engine&lt;br&gt;· DMS Schema Conversion — same engine on both sides converts nothing&lt;br&gt;· The Convert Schema phase — not deferred, &lt;i&gt;inapplicable&lt;/i&gt; to a homogeneous migration&lt;br&gt;· The seeded RPT_MART star schema&lt;br&gt;&lt;br&gt;&lt;b&gt;Repurposed, not deleted&lt;/b&gt;&lt;br&gt;· Phase 3 becomes &lt;b&gt;Size &amp;amp; Edition Decision&lt;/b&gt;. SE2 license-included vs EE BYOL, instance class, storage. This is now the only place a model makes a judgement a rules engine validates — and that pattern is the architectural differentiator. Deleting it would leave a migration script with good reporting.&lt;br&gt;&lt;br&gt;&lt;b&gt;Weight shifted&lt;/b&gt;&lt;br&gt;· The Licensing &amp;amp; TCO engine carries the commercial story that target selection used to. Partitioning, TDE and Advanced Compression usage stay seeded because they are what force the edition verdict.&lt;br&gt;&lt;br&gt;&lt;b&gt;Result&lt;/b&gt;&lt;br&gt;· 12 phases → 10. Genuinely shippable in 6–8 weeks.&lt;br&gt;· The claim narrows from &quot;decision engine across four AWS targets&quot; to &quot;automated assessment, remediation and validated migration with a licensing business case&quot; — narrower, and far more credible for a first accelerator." vertex="1">
+          <mxGeometry height="785" width="360" x="10" y="38" as="geometry" />
+        </mxCell>
+        <mxCell id="aws" parent="1" style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=13;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;" value="AWS Cloud — ap-south-1 (Mumbai)" vertex="1">
+          <mxGeometry height="1620" width="2090" x="460" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="s1" parent="aws" style="swimlane;startSize=28;html=1;fillColor=#FFE9D6;strokeColor=#ED7100;fontColor=#A34E00;fontStyle=1;fontSize=12;pointerEvents=0;" value="1 — Control Plane (deterministic execution)" vertex="1">
+          <mxGeometry height="255" width="1000" x="30" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="sfn" parent="s1" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#E7157B;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.step_functions;" value="Step Functions&#xa;state machine" vertex="1">
+          <mxGeometry height="70" width="70" x="30" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="lam" parent="s1" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#ED7100;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;" value="Lambda&#xa;tool functions" vertex="1">
+          <mxGeometry height="70" width="70" x="180" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="far" parent="s1" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#ED7100;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.fargate;" value="Fargate&#xa;long-running workers" vertex="1">
+          <mxGeometry height="70" width="70" x="330" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="apigw" parent="s1" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#E7157B;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.api_gateway;" value="API Gateway&#xa;collector ingest" vertex="1">
+          <mxGeometry height="70" width="70" x="480" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="sec" parent="s1" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.secrets_manager;" value="Secrets Manager&#xa;DB credentials" vertex="1">
+          <mxGeometry height="70" width="70" x="630" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="sns" parent="s1" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#E7157B;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.simple_notification_service;" value="SNS&#xa;approval gate" vertex="1">
+          <mxGeometry height="70" width="70" x="780" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="s1n" parent="s1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#ED7100;fontSize=10;align=left;spacingLeft=10;verticalAlign=middle;" value="Step Functions controls execution and owns the approval gates via waitForTaskToken. &lt;b&gt;The LLM never executes SQL directly.&lt;/b&gt; Approvals time out at 24 hours in production, 10 minutes in demo mode, so an unattended run terminates cleanly." vertex="1">
+          <mxGeometry height="70" width="940" x="30" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" edge="1" parent="s1" source="sfn" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#DD344C;strokeWidth=2;dashed=1;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="sns" value="approval token">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="65" y="15" />
+              <mxPoint x="815" y="15" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="s2" parent="aws" style="swimlane;startSize=28;html=1;fillColor=#DDF3EF;strokeColor=#01A88D;fontColor=#01705F;fontStyle=1;fontSize=12;pointerEvents=0;" value="2 — Reasoning Layer (Amazon Bedrock, tiered by cost)" vertex="1">
+          <mxGeometry height="255" width="1010" x="1050" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="bed" parent="s2" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#01A88D;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;" value="Amazon Bedrock" vertex="1">
+          <mxGeometry height="70" width="70" x="30" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="kb" parent="s2" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#01A88D;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;" value="Knowledge Base" vertex="1">
+          <mxGeometry height="70" width="70" x="160" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="pgv" parent="s2" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#C925D1;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.aurora;" value="pgvector on Aurora&#xa;vector store" vertex="1">
+          <mxGeometry height="70" width="70" x="290" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="tiers" parent="s2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#01A88D;fontSize=10;align=left;spacingLeft=10;verticalAlign=middle;" value="&lt;b&gt;Two tiers now, not three&lt;/b&gt; — the frontier tier existed for PL/SQL conversion, which no longer happens.&lt;br&gt;&lt;b&gt;Fast tier&lt;/b&gt; — narration of already-computed facts (discovery, provisioning, load status, report prose)&lt;br&gt;&lt;b&gt;Reasoning tier&lt;/b&gt; — judgement under ambiguity: code dependency analysis, root cause, remediation SQL, edition rationale, cutover brief&lt;br&gt;&lt;i&gt;Model bindings live in config, not in the architecture.&lt;/i&gt;" vertex="1">
+          <mxGeometry height="105" width="575" x="400" y="42" as="geometry" />
+        </mxCell>
+        <mxCell id="s2n" parent="s2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontSize=10;align=left;spacingLeft=10;verticalAlign=middle;" value="&lt;b&gt;Vector store is explicit.&lt;/b&gt; pgvector runs on the Aurora cluster the metadata repository already uses: zero incremental cost. Bedrock&#39;s Quick-create default provisions an OpenSearch Serverless collection with a 2-OCU floor (~$345/mo at zero traffic) that survives deletion of the Knowledge Base." vertex="1">
+          <mxGeometry height="70" width="945" x="30" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="s2" source="kb" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#01A88D;strokeWidth=2;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="pgv" value="retrieval">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="s3" parent="aws" style="swimlane;startSize=28;html=1;fillColor=#F5F5F5;strokeColor=#232F3E;fontColor=#232F3E;fontStyle=1;fontSize=12;pointerEvents=0;" value="3 — Agent Pipeline · ten phases · green = v1 build · grey = v2" vertex="1">
+          <mxGeometry height="380" width="2030" x="30" y="330" as="geometry" />
+        </mxCell>
+        <mxCell id="p1" parent="s3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontSize=10;" value="&lt;b&gt;1 Discover&lt;/b&gt;&lt;br&gt;Inventory every object plus feature usage and utilization percentiles" vertex="1">
+          <mxGeometry height="115" width="300" x="30" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="p2" parent="s3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontSize=10;" value="&lt;b&gt;2 Assess&lt;/b&gt;&lt;br&gt;~45 rules → findings. RDS compatibility, data quality, performance, security, operational risk. Five sub-scores" vertex="1">
+          <mxGeometry height="115" width="300" x="355" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="p3" parent="s3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontSize=10;" value="&lt;b&gt;3 Size &amp;amp; Edition Decision&lt;/b&gt;&lt;br&gt;&lt;i&gt;was Recommend Target&lt;/i&gt;&lt;br&gt;SE2 license-included vs EE BYOL, instance class, storage. Model proposes with rationale, rules engine validates and can override" vertex="1">
+          <mxGeometry height="115" width="300" x="680" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="p4" parent="s3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontSize=10;" value="&lt;b&gt;4 Detect + Remediate&lt;/b&gt;&lt;br&gt;Root-cause each finding. Four levels: safe-auto · auto+approval · human · never. Max 3 retries, then MANUAL_ACTION_REQUIRED" vertex="1">
+          <mxGeometry height="115" width="300" x="1005" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="gate" parent="s3" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FDECEE;strokeColor=#DD344C;fontSize=10;fontColor=#B0212F;" value="&lt;b&gt;BLOCKER GATE&lt;/b&gt;&lt;br&gt;has_critical_blockers&lt;br&gt;halts the run" vertex="1">
+          <mxGeometry height="115" width="300" x="1330" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="p5" parent="s3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontSize=10;" value="&lt;b&gt;5 Provision&lt;/b&gt;&lt;br&gt;CDK renders the RDS instance from the assessment record — class, storage, AL32UTF8, option and parameter groups" vertex="1">
+          <mxGeometry height="115" width="300" x="1655" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="p6" parent="s3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontSize=10;" value="&lt;b&gt;6 Migrate&lt;/b&gt;&lt;br&gt;Tables + PKs → DMS full load → CDC → then FKs, secondary indexes, code, triggers, jobs, grants. Checkpoint and resume" vertex="1">
+          <mxGeometry height="115" width="300" x="30" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="p7" parent="s3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontSize=10;" value="&lt;b&gt;7 Validate&lt;/b&gt;&lt;br&gt;Five levels: row count → checksum → column stats → full compare → business rules. Object-level reconciliation" vertex="1">
+          <mxGeometry height="115" width="300" x="355" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="p8" parent="s3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontSize=10;" value="&lt;b&gt;8 Cutover&lt;/b&gt;&lt;br&gt;CDC lag check → readiness certificate → &lt;b&gt;human approval&lt;/b&gt; → switch. Rollback runbook staged first" vertex="1">
+          <mxGeometry height="115" width="300" x="680" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="p9" parent="s3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontSize=10;" value="&lt;b&gt;9 Report&lt;/b&gt;&lt;br&gt;Object, table and column change log, scores, licensing business case, full audit trail" vertex="1">
+          <mxGeometry height="115" width="300" x="1005" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="p10" parent="s3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEEEEE;strokeColor=#999999;fontColor=#666666;fontSize=10;" value="&lt;b&gt;10 Optimize&lt;/b&gt;  v2&lt;br&gt;Post-cutover rightsizing from CloudWatch and Performance Insights" vertex="1">
+          <mxGeometry height="115" width="300" x="1330" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="p3n" parent="s3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#999999;fontSize=10;align=left;spacingLeft=8;verticalAlign=middle;" value="&lt;b&gt;Schema conversion is gone,&lt;/b&gt; not deferred — Oracle to Oracle converts nothing. It returns only if a heterogeneous target is ever added.&lt;br&gt;&lt;br&gt;&lt;b&gt;Discovery and assessment always precede migration.&lt;/b&gt; Nothing past the gate runs while a critical finding is open." vertex="1">
+          <mxGeometry height="115" width="300" x="1655" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="pe1" edge="1" parent="s3" source="p1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="p2">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="180" y="29" />
+              <mxPoint x="505" y="29" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="pe2" edge="1" parent="s3" source="p2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="p3">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="505" y="29" />
+              <mxPoint x="830" y="29" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="pe3" edge="1" parent="s3" source="p3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="p4">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="830" y="29" />
+              <mxPoint x="1155" y="29" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="pe4" edge="1" parent="s3" source="p4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="gate">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1155" y="29" />
+              <mxPoint x="1480" y="29" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="pe5" edge="1" parent="s3" source="gate" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#DD344C;strokeWidth=2;dashed=1;fontSize=9;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="p4" value="open blocker → re-assess">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1480" y="15" />
+              <mxPoint x="1155" y="15" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="pe6" edge="1" parent="s3" source="gate" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;fontSize=9;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="p5" value="clear">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1480" y="29" />
+              <mxPoint x="1805" y="29" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="pe7" edge="1" parent="s3" source="p5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="p6">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1805" y="178" />
+              <mxPoint x="180" y="178" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="pe8" edge="1" parent="s3" source="p6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="p7">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="180" y="179" />
+              <mxPoint x="505" y="179" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="pe9" edge="1" parent="s3" source="p7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="p8">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="505" y="179" />
+              <mxPoint x="830" y="179" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="pe10" edge="1" parent="s3" source="p8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="p9">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="830" y="179" />
+              <mxPoint x="1155" y="179" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="s4" parent="aws" style="swimlane;startSize=28;html=1;fillColor=#F8E1FA;strokeColor=#C925D1;fontColor=#8E1B95;fontStyle=1;fontSize=12;pointerEvents=0;" value="4 — Migration Services" vertex="1">
+          <mxGeometry height="245" width="900" x="30" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="dms" parent="s4" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#C925D1;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.database_migration_service;" value="AWS DMS&#xa;full load + CDC" vertex="1">
+          <mxGeometry height="70" width="70" x="40" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="dp" parent="s4" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#7AA116;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.simple_storage_service;" value="Oracle Data Pump&#xa;via RDS S3_INTEGRATION" vertex="1">
+          <mxGeometry height="70" width="70" x="250" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="cfn" parent="s4" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#E7157B;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudformation;" value="CloudFormation&#xa;/ CDK" vertex="1">
+          <mxGeometry height="70" width="70" x="460" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="s4n" parent="s4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#C925D1;fontSize=10;align=left;spacingLeft=10;verticalAlign=middle;" value="&lt;b&gt;DMS Schema Conversion removed.&lt;/b&gt; Same engine on both sides — there is nothing to convert, and leaving it on the diagram invites a question with no good answer.&lt;br&gt;&lt;b&gt;Build both movement paths:&lt;/b&gt; DMS full load + CDC for a near-zero-downtime cutover, Data Pump via S3 for a faster one-shot load. At 5 GB the full load runs 15–25 minutes either way; the difference is the cutover strategy, not the speed." vertex="1">
+          <mxGeometry height="80" width="840" x="30" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="s5" parent="aws" style="swimlane;startSize=28;html=1;fillColor=#F8E1FA;strokeColor=#C925D1;fontColor=#8E1B95;fontStyle=1;fontSize=12;pointerEvents=0;" value="5 — Migration Target" vertex="1">
+          <mxGeometry height="245" width="1110" x="950" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="t1" parent="s5" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#C925D1;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.rds_oracle_instance;" value="Amazon RDS for Oracle&#xa;the only target" vertex="1">
+          <mxGeometry height="80" width="80" x="60" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="edt" parent="s5" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9E6;strokeColor=#D6B656;fontSize=10;align=left;spacingLeft=10;verticalAlign=middle;" value="&lt;b&gt;The one decision that remains&lt;/b&gt;&lt;br&gt;&lt;b&gt;SE2, license-included&lt;/b&gt; — capped at 16 vCPU on RDS. No partitioning, no TDE, no Advanced Compression, no parallel query.&lt;br&gt;&lt;b&gt;EE, BYOL only&lt;/b&gt; — there is no license-included Enterprise Edition on RDS. You supply the licence.&lt;br&gt;&lt;br&gt;Discovered feature usage decides it. Two vCPUs count as one Oracle processor on AWS." vertex="1">
+          <mxGeometry height="115" width="480" x="200" y="42" as="geometry" />
+        </mxCell>
+        <mxCell id="notin" parent="s5" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEEEEE;strokeColor=#999999;fontColor=#666666;fontSize=10;align=left;spacingLeft=10;verticalAlign=middle;" value="&lt;b&gt;Explicitly out of scope&lt;/b&gt;&lt;br&gt;Aurora PostgreSQL&lt;br&gt;Amazon Redshift&lt;br&gt;Oracle Database@AWS&lt;br&gt;&lt;br&gt;&lt;i&gt;Not &quot;coming soon&quot; on the diagram. They return when there is a source estate that justifies them.&lt;/i&gt;" vertex="1">
+          <mxGeometry height="115" width="370" x="700" y="42" as="geometry" />
+        </mxCell>
+        <mxCell id="s5n" parent="s5" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#C925D1;fontSize=10;align=left;spacingLeft=10;verticalAlign=middle;" value="&lt;b&gt;Single target, single story.&lt;/b&gt; A homogeneous Oracle-to-RDS migration means no schema conversion, no data-type mapping and no PL/SQL rewriting — which is precisely why the accelerator&#39;s value sits in discovery, assessment, remediation, validation and the licensing case rather than in the pipe that moves the bytes." vertex="1">
+          <mxGeometry height="62" width="1040" x="30" y="168" as="geometry" />
+        </mxCell>
+        <mxCell id="s6" parent="aws" style="swimlane;startSize=28;html=1;fillColor=#EDE3FF;strokeColor=#8C4FFF;fontColor=#5C2FB8;fontStyle=1;fontSize=12;pointerEvents=0;" value="6 — Metadata, Licensing Intelligence, Audit &amp;amp; Reporting" vertex="1">
+          <mxGeometry height="300" width="1190" x="30" y="1010" as="geometry" />
+        </mxCell>
+        <mxCell id="aur" parent="s6" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#C925D1;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.aurora;" value="Aurora PostgreSQL&#xa;metadata repository" vertex="1">
+          <mxGeometry height="70" width="70" x="30" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="s3b" parent="s6" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#7AA116;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.simple_storage_service;" value="S3&#xa;reports + artifacts" vertex="1">
+          <mxGeometry height="70" width="70" x="160" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="aq" parent="s6" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#8C4FFF;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.quicksight;" value="Athena +&#xa;QuickSight" vertex="1">
+          <mxGeometry height="70" width="70" x="290" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="schemas" parent="s6" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8C4FFF;fontSize=10;align=left;spacingLeft=10;verticalAlign=middle;" value="&lt;b&gt;9 schemas&lt;/b&gt;  migration_control · source_inventory · target_inventory · assessment · remediation · migration · validation · reporting · audit&lt;br&gt;&lt;br&gt;&lt;b&gt;Append-only.&lt;/b&gt; Every fact carries a collector_run_id and is never updated in place. The latest run wins; history is preserved. &quot;What changed since last month&quot; becomes a SQL query rather than an argument.&lt;br&gt;&lt;i&gt;Keep assessment.object_mapping in the model even though nothing maps today — it is what makes a heterogeneous target possible later without a rewrite.&lt;/i&gt;" vertex="1">
+          <mxGeometry height="115" width="760" x="400" y="42" as="geometry" />
+        </mxCell>
+        <mxCell id="lic" parent="s6" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9E6;strokeColor=#D6B656;fontSize=10;align=left;spacingLeft=10;verticalAlign=middle;" value="&lt;b&gt;Licensing &amp;amp; TCO Engine&lt;/b&gt;  (deterministic, no model in the loop) — &lt;b&gt;now the primary commercial output&lt;/b&gt;&lt;br&gt;Reads DBA_FEATURE_USAGE_STATISTICS and the utilization percentiles, then outputs an edition verdict naming the specific features that forced it, a processor-licence count, an SE2 license-included vs EE BYOL comparison, and a three-year TCO against the on-prem baseline.&lt;br&gt;&lt;b&gt;This is the OLA-equivalent deliverable&lt;/b&gt; — AWS OLA / DB OLA is a funded partner-delivered programme with no API. The platform does not call it; it reproduces its outputs in hours instead of weeks. With target selection gone, this is what the accelerator sells on." vertex="1">
+          <mxGeometry height="105" width="1130" x="30" y="175" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="s6" source="aur" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8C4FFF;strokeWidth=2;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="lic" value="feeds">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="14" y="80" />
+              <mxPoint x="14" y="228" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="s7" parent="aws" style="swimlane;startSize=28;html=1;fillColor=#FDECEE;strokeColor=#DD344C;fontColor=#B0212F;fontStyle=1;fontSize=12;pointerEvents=0;" value="7 — Security, Guardrails &amp;amp; Observability" vertex="1">
+          <mxGeometry height="300" width="820" x="1240" y="1010" as="geometry" />
+        </mxCell>
+        <mxCell id="cw" parent="s7" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudtrail;" value="CloudWatch&#xa;+ CloudTrail" vertex="1">
+          <mxGeometry height="70" width="70" x="30" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="kms" parent="s7" style="sketch=0;outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.key_management_service;" value="IAM + KMS&#xa;least privilege" vertex="1">
+          <mxGeometry height="70" width="70" x="160" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="gsql" parent="s7" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DD344C;fontSize=10;align=left;spacingLeft=10;verticalAlign=middle;" value="&lt;b&gt;AI-generated SQL is untrusted until proven&lt;/b&gt;&lt;br&gt;static check → policy check → syntax check → dry run on the rehearsal sandbox → approval → production&lt;br&gt;&lt;br&gt;The AI never drops production objects, deletes data, alters business logic or privileges unattended, or bypasses an approval gate. Every fix carries rollback SQL or it is rejected at generation time." vertex="1">
+          <mxGeometry height="105" width="500" x="290" y="42" as="geometry" />
+        </mxCell>
+        <mxCell id="cert" parent="s7" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DD344C;fontSize=10;align=left;spacingLeft=10;verticalAlign=middle;" value="&lt;b&gt;Migration Readiness Certificate&lt;/b&gt; — overall score, schema compatibility, data quality, object deployment rate, performance and security risk, blocker count. Any critical finding caps the overall score at 60. Production cutover is blocked until this passes &lt;b&gt;and&lt;/b&gt; a named human approves." vertex="1">
+          <mxGeometry height="80" width="760" x="30" y="165" as="geometry" />
+        </mxCell>
+        <mxCell id="s8" parent="aws" style="swimlane;startSize=28;html=1;fillColor=#FFF9E6;strokeColor=#D6B656;fontColor=#7F6000;fontStyle=1;fontSize=12;pointerEvents=0;" value="8 — Regression harness: the number that sells the accelerator" vertex="1">
+          <mxGeometry height="235" width="1000" x="30" y="1340" as="geometry" />
+        </mxCell>
+        <mxCell id="harn" parent="s8" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D6B656;fontSize=10;align=left;spacingLeft=10;verticalAlign=middle;" value="&lt;b&gt;defects.md&lt;/b&gt; holds 80 deliberately seeded defects with the expected severity and expected verdict for each. After every assessment run, findings are scored against that answer key and the result is written to the audit schema.&lt;br&gt;&lt;br&gt;&lt;b&gt;Output format:&lt;/b&gt; &quot;detected N of 80 seeded defects · N false positives · N missed, by level&quot;.&lt;br&gt;&lt;br&gt;A measured recall figure is the most persuasive artifact you can put in front of a technical buyer, and it turns every rules-engine change into a regression test rather than a hope. &lt;b&gt;Do not show this section until you have a real number&lt;/b&gt; — an illustrative one is worse than none." vertex="1">
+          <mxGeometry height="170" width="940" x="30" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="s9" parent="aws" style="swimlane;startSize=28;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontColor=#1B6110;fontStyle=1;fontSize=12;pointerEvents=0;" value="9 — Cost model" vertex="1">
+          <mxGeometry height="235" width="1010" x="1050" y="1340" as="geometry" />
+        </mxCell>
+        <mxCell id="cm1" parent="s9" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDECEE;strokeColor=#DD344C;fontSize=10;align=left;spacingLeft=10;" value="&lt;b&gt;Running 24×7&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:20px&quot;&gt;&lt;b&gt;≈ $530/mo&lt;/b&gt;&lt;/span&gt;&lt;br&gt;RDS Oracle is $343 of it" vertex="1">
+          <mxGeometry height="90" width="300" x="30" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="cm2" parent="s9" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F3E6;strokeColor=#248814;fontSize=10;align=left;spacingLeft=10;" value="&lt;b&gt;Parked between demos&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:20px&quot;&gt;&lt;b&gt;≈ $45/mo&lt;/b&gt;&lt;/span&gt;&lt;br&gt;RDS stopped, Aurora paused, NAT and DMS deleted" vertex="1">
+          <mxGeometry height="90" width="300" x="350" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="cm3" parent="s9" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9E6;strokeColor=#D6B656;fontSize=10;align=left;spacingLeft=10;" value="&lt;b&gt;Per demo day&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:20px&quot;&gt;&lt;b&gt;≈ $15&lt;/b&gt;&lt;/span&gt;&lt;br&gt;8 active hours, mostly Bedrock tokens" vertex="1">
+          <mxGeometry height="90" width="300" x="670" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="cmn" parent="s9" style="text;html=1;align=left;fontSize=10;verticalAlign=top;spacingLeft=10;" value="A $45/month platform wrapped around a $343/month database. Stop the database between demos and re-stop it weekly — RDS auto-restarts a stopped instance after 7 days. Set AWS Budgets alerts at $75 and $150 before building anything. Rates are ap-south-1 planning approximations; re-derive in the Pricing Calculator before quoting." vertex="1">
+          <mxGeometry height="70" width="940" x="30" y="148" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="aws" source="sfn" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#01A88D;strokeWidth=2;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="bed" value="invokes for reasoning">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="95" y="51" />
+              <mxPoint x="1115" y="51" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="aws" source="sfn" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="p1" value="orchestrates all 10 phases">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="44" y="130" />
+              <mxPoint x="44" y="433" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="aws" source="p6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="dms" value="executes">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="210" y="815" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="aws" source="cfn" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="t1" value="deploys the target">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="785" y="815" />
+              <mxPoint x="785" y="820" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="aws" source="dms" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#C925D1;strokeWidth=3;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="t1" value="loads data">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="105" y="764" />
+              <mxPoint x="1050" y="764" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="aws" source="p9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#8C4FFF;strokeWidth=2;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="aur" value="writes every decision and approval">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1185" y="709" />
+              <mxPoint x="933" y="709" />
+              <mxPoint x="933" y="1009" />
+              <mxPoint x="95" y="1009" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="aws" source="lic" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#D6B656;strokeWidth=2;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="p3" value="decides SE2 vs EE">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="30" y="1238" />
+              <mxPoint x="30" y="506" />
+              <mxPoint x="860" y="506" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="aws" source="p8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#DD344C;strokeWidth=2;dashed=1;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="cert" value="gated by">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="860" y="750" />
+              <mxPoint x="947" y="750" />
+              <mxPoint x="947" y="1009" />
+              <mxPoint x="1230" y="1009" />
+              <mxPoint x="1230" y="1215" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="coll" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#232F3E;strokeWidth=2;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="apigw" value="collector push · HTTPS SigV4">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="460" y="620" />
+              <mxPoint x="460" y="298" />
+              <mxPoint x="1005" y="298" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="src" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#C925D1;strokeWidth=3;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="dms" value="full load + CDC · TLS 1521">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="115" y="253" />
+              <mxPoint x="476" y="253" />
+              <mxPoint x="476" y="925" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="lam" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#7F6000;strokeWidth=2;dashed=1;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="rehearse" value="dry run before any fix is applied">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="705" y="189" />
+              <mxPoint x="435" y="189" />
+              <mxPoint x="435" y="197" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="defects" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#7F6000;strokeWidth=2;dashed=1;fontSize=10;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="harn" value="scored against the answer key">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="462" y="790" />
+              <mxPoint x="462" y="1580" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

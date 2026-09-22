@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "tiny-text",
+        "value": "*",
+        "files": [
+          "web/static/index.html"
+        ],
+        "createdAt": "2026-09-12T06:20:58.670Z",
+        "reason": "existing console convention: monospace status captions (#rehearsalState, #remMeta, #pgState) are 11.5px throughout this file; the new Phase 4b panel matches its neighbour rather than restyling one panel"
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "web/static/index.html"
+        ],
+        "createdAt": "2026-09-12T06:36:06.666Z",
+        "reason": "false positive: the only match is .tblwrap, a horizontal-scroll wrapper whose th/td children carry 9px 12px padding; the table edge is meant to meet the wrapper border"
+      }
+    ]
+  }
+}

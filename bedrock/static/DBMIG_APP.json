@@ -1,0 +1,269 @@
+{
+  "estate": "DBMIG_APP",
+  "authored_on": "2026-09-11",
+  "what_this_is": "Hand-written stand-ins for reasoning-tier output, used while Bedrock InvokeModel is blocked on this account. NOT model output. Every entry was written against evidence checked on the source on the date above, recorded in 'evidence'. 'written_against' is the exact finding detail at authoring time; if the live finding differs, bedrock/static.py refuses the entry as stale and the finding goes to a human.",
+  "not_model_output": true,
+  "outputs": [
+    {
+      "rule_id": "DQ-001",
+      "owner": "DBMIG_APP",
+      "object_name": "AUDIT_SCRATCH",
+      "written_against": "No primary key; DMS CDC cannot reliably replicate updates or deletes",
+      "sql": "ALTER TABLE \"DBMIG_APP\".\"AUDIT_SCRATCH\" ADD CONSTRAINT \"PK_AUDIT_SCRATCH\" PRIMARY KEY (\"EVENT_ID\")",
+      "rollback_sql": "ALTER TABLE \"DBMIG_APP\".\"AUDIT_SCRATCH\" DROP CONSTRAINT \"PK_AUDIT_SCRATCH\"",
+      "explain": "EVENT_ID is unique and non-null in every row. A primary key on it gives DMS a way to identify each row, which change data capture needs to apply updates and deletes correctly.",
+      "caveat": "AUDIT_SCRATCH holds 2 rows and looks like scratch data. Excluding it from CDC is a legitimate alternative to adding a key; the key is proposed because it is cheaper than a scope decision.",
+      "evidence": "EVENT_ID: 2 distinct values in 2 rows, 0 nulls (DBA_TAB_COLUMNS and COUNT(*) on the source, 2026-09-11)"
+    },
+    {
+      "rule_id": "DQ-001",
+      "owner": "DBMIG_APP",
+      "object_name": "COLLATERAL_NOTE",
+      "written_against": "No primary key; DMS CDC cannot reliably replicate updates or deletes",
+      "sql": "ALTER TABLE \"DBMIG_APP\".\"COLLATERAL_NOTE\" ADD CONSTRAINT \"PK_COLLATERAL_NOTE\" PRIMARY KEY (\"NOTE_ID\")",
+      "rollback_sql": "ALTER TABLE \"DBMIG_APP\".\"COLLATERAL_NOTE\" DROP CONSTRAINT \"PK_COLLATERAL_NOTE\"",
+      "explain": "NOTE_ID is unique and non-null across all 20,000 rows, so it already behaves as a key; this declares it. DMS change data capture needs a primary key to apply updates and deletes to the right row.",
+      "caveat": "Adding a primary key validates every row and locks the table while it does. On 20,000 rows that is seconds, but it is a schema change on the source and needs the approval L2 carries. The key's index also resolves PERF-002 for this table.",
+      "evidence": "NOTE_ID: 20000 distinct values in 20000 rows, 0 nulls (DBA_TAB_COLUMNS and COUNT(*) on the source, 2026-09-11)"
+    },
+    {
+      "rule_id": "DQ-006",
+      "owner": "DBMIG_APP",
+      "object_name": "LOAN.LEGACY_SCORE",
+      "written_against": "NUMBER with no precision or scale; mapping risk to a fixed-width target type",
+      "advice": "No change. Source and target are both Oracle, so an unconstrained NUMBER migrates as an unconstrained NUMBER. The fixed-width mapping risk this rule describes applies only to a different target engine. Choosing a precision now would alter production to fix a risk this migration does not have, and the column is empty (DQ-008), so there is no data to size it from anyway.",
+      "artefact": {"type": "cross_reference", "see": ["DQ-008"]},
+      "evidence": "LEGACY_SCORE is NUMBER with no precision or scale; 0 of 120000 rows non-null (source, 2026-09-11)"
+    },
+    {
+      "rule_id": "DQ-008",
+      "owner": "DBMIG_APP",
+      "object_name": "LOAN.LEGACY_SCORE",
+      "written_against": "Every row is NULL across 120000 rows",
+      "advice": "Carry it across unchanged and raise it with the application owner as dead-column cleanup after cutover. An all-NULL column costs almost nothing to load, so excluding it saves no meaningful time while risking anything that still references it. Dropping it on the source is a production change an agent may never make.",
+      "artefact": {"type": "post_cutover_note", "note": "LOAN.LEGACY_SCORE held no values at migration time; candidate for removal by the application owner."},
+      "evidence": "COUNT(LEGACY_SCORE) = 0 of 120000 rows (source, 2026-09-11)"
+    },
+    {
+      "rule_id": "DQ-010",
+      "owner": "DBMIG_APP",
+      "object_name": "EXT_CUSTOMER_EXTRACT",
+      "written_against": "Not profiled: external_table",
+      "advice": "Not a table to profile: its rows live in a file on the source server, so profiling it would profile the file. The finding that matters is RDS-004. RDS has no server filesystem, so this table returns nothing on the target until the file moves to S3 and is read through S3_INTEGRATION. Resolve it there.",
+      "artefact": {"type": "cross_reference", "see": ["RDS-004", "RDS-003"]}
+    },
+    {
+      "rule_id": "DQ-010",
+      "owner": "DBMIG_APP",
+      "object_name": "MV_LOAN_SUMMARY",
+      "written_against": "Not profiled: materialized_view_container",
+      "advice": "This is the container table of a materialized view. Its contents are derived from LOAN and are rebuilt by a complete refresh on the target (RDS-011), so there is nothing here that the base table's profile does not already cover.",
+      "artefact": {"type": "cross_reference", "see": ["RDS-011"]}
+    },
+    {
+      "rule_id": "DQ-011",
+      "owner": "DBMIG_APP",
+      "object_name": "LOAN_TXN",
+      "written_against": "Profiled from a 33.3333% sample of an estimated 3000000 rows; a clean result here is not proof of absence",
+      "advice": "Sampling was the right call for discovery, since it keeps the cost bounded at 3 million rows. But a sample can miss a rare bad row, so a clean result is not evidence of absence. Completeness is proven later, when the validation phase reconciles every row after load. If a data-quality verdict on this table is needed before migration, raise the profiling limit and re-run discovery in a quiet window.",
+      "artefact": {"type": "collector_setting", "env": {"DBSHIFT_PROFILE_MAX_ROWS": "3100000"}, "when": "only if a full pre-migration profile of LOAN_TXN is required"}
+    },
+    {
+      "rule_id": "OPS-006",
+      "owner": null,
+      "object_name": "V$SYSMETRIC",
+      "written_against": "No rows in v$sysmetric; utilization percentiles are not available from this source",
+      "advice": "This database keeps no live metric history, so there is nothing to take a percentile of. Sizing therefore used a capacity floor and says so in its warnings. For a client estate this is answered by an AWS OLA / DB OLA export or monitoring data in the utilization CSV format. For this demo estate the floor stands.",
+      "artefact": {"type": "input_required", "phase": "size_edition", "format": "sizing/samples/utilization_example.csv"}
+    },
+    {
+      "rule_id": "OPS-008",
+      "owner": "DBMIG_APP",
+      "object_name": "TOTAL_SEGMENT_SIZE",
+      "written_against": "1.032 GB across 48 segments",
+      "advice": "At about 1 GB, the migration window will be dominated by fixed steps (creating the instance, importing metadata, building indexes and constraints), not by moving data. Plan for hours, not days. Measure the rehearsal load in Phase 7 before committing to a cutover window, and do not size DMS above its smallest class for this volume.",
+      "artefact": {"type": "dms_sizing", "applies_to_phase": "migrate", "replication_instance_class": "dms.t3.micro", "why": "docs/06-cost-model.md budgets dms.t3.micro; 1 GB does not justify more"}
+    },
+    {
+      "rule_id": "PERF-002",
+      "owner": "DBMIG_APP",
+      "object_name": "AUDIT_SCRATCH",
+      "written_against": "No indexes; every access is a full table scan",
+      "advice": "2 rows. A full scan of two rows reads one block, so an index would cost more to maintain than it saves. The primary key drafted for DQ-001 creates an index anyway, which resolves this finding as a side effect.",
+      "artefact": {"type": "cross_reference", "see": ["DQ-001"]}
+    },
+    {
+      "rule_id": "PERF-002",
+      "owner": "DBMIG_APP",
+      "object_name": "COLLATERAL_NOTE",
+      "written_against": "No indexes; every access is a full table scan",
+      "advice": "Two drafted fixes already cover this, so a third would duplicate one of them. The PERF-001 index on LOAN_ID (already proven on the rehearsal copy) serves lookups by loan, and the DQ-001 primary key on NOTE_ID serves access by id.",
+      "artefact": {"type": "cross_reference", "see": ["PERF-001", "DQ-001"]}
+    },
+    {
+      "rule_id": "PERF-006",
+      "owner": "DBMIG_APP",
+      "object_name": "COMM_LOG",
+      "written_against": "Segment is 528.0 MB and not partitioned; loads as a single serial task",
+      "advice": "Partitioning the source to speed up a one-time load is the wrong trade: it redesigns production for a migration convenience. DMS can split an unpartitioned table itself, loading ranges of the primary key COMM_ID in parallel. At 528 MB even a serial load takes minutes, so apply this only if the Phase 7 rehearsal load is actually slow.",
+      "artefact": {
+        "type": "dms_table_settings",
+        "applies_to_phase": "migrate",
+        "rule": {
+          "rule-type": "table-settings",
+          "rule-id": "10",
+          "rule-name": "comm-log-parallel-ranges",
+          "object-locator": {"schema-name": "DBMIG_APP", "table-name": "COMM_LOG"},
+          "parallel-load": {"type": "ranges", "columns": ["COMM_ID"], "boundaries": []}
+        },
+        "note": "Boundaries are computed in Phase 7 from the live MIN/MAX of COMM_ID, not fixed here."
+      }
+    },
+    {
+      "rule_id": "PERF-007",
+      "owner": "DBMIG_APP",
+      "object_name": "IX_COMM_CUSTOMER_DATE",
+      "written_against": "Clustering factor 399995 against 400000 rows; range scans approach one block per row",
+      "advice": "The table's rows are stored in a different order from this index, so a range scan reads nearly one block per row. Rebuilding the index will not help, because clustering factor is a property of the table's row order, not of the index. The only fix is reordering the table, a production change nobody has yet asked for. Measure on the target after load, and act only if a query plan gets worse.",
+      "artefact": {"type": "post_load_check", "applies_to_phase": "validate", "sql_on_target": "SELECT index_name, clustering_factor, num_rows FROM dba_indexes WHERE owner = 'DBMIG_APP' AND index_name = 'IX_COMM_CUSTOMER_DATE'"}
+    },
+    {
+      "rule_id": "PERF-007",
+      "owner": "DBMIG_APP",
+      "object_name": "IX_LOAN_CUSTOMER",
+      "written_against": "Clustering factor 119753 against 120000 rows; range scans approach one block per row",
+      "advice": "The table's rows are stored in a different order from this index, so a range scan reads nearly one block per row. Rebuilding the index will not help, because clustering factor is a property of the table's row order, not of the index. The only fix is reordering the table, a production change nobody has yet asked for. Measure on the target after load, and act only if a query plan gets worse.",
+      "artefact": {"type": "post_load_check", "applies_to_phase": "validate", "sql_on_target": "SELECT index_name, clustering_factor, num_rows FROM dba_indexes WHERE owner = 'DBMIG_APP' AND index_name = 'IX_LOAN_CUSTOMER'"}
+    },
+    {
+      "rule_id": "PERF-007",
+      "owner": "DBMIG_APP",
+      "object_name": "IX_PAYMENT_LOAN",
+      "written_against": "Clustering factor 1798495 against 1800000 rows; range scans approach one block per row",
+      "advice": "The table's rows are stored in a different order from this index, so a range scan reads nearly one block per row. Rebuilding the index will not help, because clustering factor is a property of the table's row order, not of the index. The only fix is reordering the table, a production change nobody has yet asked for. Measure on the target after load, and act only if a query plan gets worse.",
+      "artefact": {"type": "post_load_check", "applies_to_phase": "validate", "sql_on_target": "SELECT index_name, clustering_factor, num_rows FROM dba_indexes WHERE owner = 'DBMIG_APP' AND index_name = 'IX_PAYMENT_LOAN'"}
+    },
+    {
+      "rule_id": "PERF-007",
+      "owner": "DBMIG_APP",
+      "object_name": "IX_TXN_LOAN_DATE",
+      "written_against": "Clustering factor 2999214 against 3000000 rows; range scans approach one block per row",
+      "advice": "The table's rows are stored in a different order from this index, so a range scan reads nearly one block per row. Rebuilding the index will not help, because clustering factor is a property of the table's row order, not of the index. The only fix is reordering the table, a production change nobody has yet asked for. Measure on the target after load, and act only if a query plan gets worse.",
+      "artefact": {"type": "post_load_check", "applies_to_phase": "validate", "sql_on_target": "SELECT index_name, clustering_factor, num_rows FROM dba_indexes WHERE owner = 'DBMIG_APP' AND index_name = 'IX_TXN_LOAN_DATE'"}
+    },
+    {
+      "rule_id": "RDS-006",
+      "owner": "DBMIG_APP",
+      "object_name": "JOB_REFRESH_LOAN_SUMMARY",
+      "written_against": "Job is TRUE; confirm schedule and privileges on target",
+      "advice": "Data Pump carries the job across still enabled. On the target it would start running on its source schedule the moment the import finishes, refreshing MV_LOAN_SUMMARY against a half-loaded LOAN. Disable it immediately after import and re-enable it at cutover.",
+      "artefact": {
+        "type": "target_runbook",
+        "steps": [
+          {"applies_to_phase": "migrate", "when": "immediately after metadata import, before any data load", "sql_on_target": "BEGIN DBMS_SCHEDULER.DISABLE('DBMIG_APP.JOB_REFRESH_LOAN_SUMMARY'); END;"},
+          {"applies_to_phase": "cutover", "when": "after validation passes", "sql_on_target": "BEGIN DBMS_SCHEDULER.ENABLE('DBMIG_APP.JOB_REFRESH_LOAN_SUMMARY'); END;"}
+        ]
+      }
+    },
+    {
+      "rule_id": "RDS-011",
+      "owner": "DBMIG_APP",
+      "object_name": "MV_LOAN_SUMMARY",
+      "written_against": "Refresh mode DEMAND/FAST must be rebuilt on target",
+      "advice": "A fast refresh works from a materialized view log that has a consistent starting point, and that history does not survive migration. Once LOAN is loaded, run one complete refresh to set a new starting point; fast refresh works from then on.",
+      "artefact": {
+        "type": "target_runbook",
+        "steps": [
+          {"applies_to_phase": "migrate", "when": "after LOAN is loaded and its materialized view log exists", "sql_on_target": "BEGIN DBMS_MVIEW.REFRESH('DBMIG_APP.MV_LOAN_SUMMARY', method => 'C'); END;"}
+        ]
+      }
+    },
+    {
+      "rule_id": "RDS-012",
+      "owner": "DBMIG_APP",
+      "object_name": "COMM_LOG.NOTES",
+      "written_against": "LOB column; DMS LOB mode and max size must be set explicitly",
+      "advice": "Real application data, and small: the longest NOTES value is 510 characters. Limited LOB mode is much faster than full LOB mode, and safe as long as its size cap is above the longest value; a 4 KB cap leaves ample headroom. Anything longer than the cap is truncated silently, so re-measure the longest value immediately before the load.",
+      "artefact": {
+        "type": "dms_task_settings",
+        "applies_to_phase": "migrate",
+        "settings": {"TargetMetadata": {"SupportLobs": true, "FullLobMode": false, "LimitedSizeLobMode": true, "LobMaxSize": 4}},
+        "recheck_before_load": "SELECT MAX(DBMS_LOB.GETLENGTH(notes)) FROM dbmig_app.comm_log"
+      },
+      "evidence": "CLOB; MAX(DBMS_LOB.GETLENGTH(NOTES)) = 510 characters, average 510, across 400000 rows (source, 2026-09-11)"
+    },
+    {
+      "rule_id": "RDS-012",
+      "owner": "DBMIG_APP",
+      "object_name": "DR$IX_COMM_NOTES_TEXT$I.TOKEN_INFO",
+      "written_against": "LOB column; DMS LOB mode and max size must be set explicitly",
+      "advice": "Not application data. DR$...$I is the internal token table of the Oracle Text index IX_COMM_NOTES_TEXT. Creating that index on the target (RDS-008) rebuilds it, and it must not be migrated, because loading it would corrupt the new index. Exclude it.",
+      "artefact": {
+        "type": "dms_table_mapping_rule",
+        "applies_to_phase": "migrate",
+        "rule": {"rule-type": "selection", "rule-id": "20", "rule-name": "exclude-oracle-text-internals", "object-locator": {"schema-name": "DBMIG_APP", "table-name": "DR$%"}, "rule-action": "exclude"},
+        "see": ["RDS-008"]
+      }
+    },
+    {
+      "rule_id": "RDS-012",
+      "owner": "DBMIG_APP",
+      "object_name": "LOAN_EVENT_QTAB.\"USER_DATA\".\"HEADER\".\"PROPERTIES\"",
+      "written_against": "LOB column; DMS LOB mode and max size must be set explicitly",
+      "advice": "This is an Advanced Queuing queue table. Its LOBs are message payloads that AQ manages, not rows an application writes, so DMS must not load it. The queue is recreated on the target, and the source queue is drained before cutover (RDS-007).",
+      "artefact": {
+        "type": "dms_table_mapping_rule",
+        "applies_to_phase": "migrate",
+        "rule": {"rule-type": "selection", "rule-id": "21", "rule-name": "exclude-aq-queue-tables", "object-locator": {"schema-name": "DBMIG_APP", "table-name": "%LOAN_EVENT_QTAB%"}, "rule-action": "exclude"},
+        "see": ["RDS-007"]
+      }
+    },
+    {
+      "rule_id": "RDS-012",
+      "owner": "DBMIG_APP",
+      "object_name": "LOAN_EVENT_QTAB.\"USER_DATA\".\"TEXT_LOB\"",
+      "written_against": "LOB column; DMS LOB mode and max size must be set explicitly",
+      "advice": "This is an Advanced Queuing queue table. Its LOBs are message payloads that AQ manages, not rows an application writes, so DMS must not load it. The queue is recreated on the target, and the source queue is drained before cutover (RDS-007).",
+      "artefact": {
+        "type": "dms_table_mapping_rule",
+        "applies_to_phase": "migrate",
+        "rule": {"rule-type": "selection", "rule-id": "21", "rule-name": "exclude-aq-queue-tables", "object-locator": {"schema-name": "DBMIG_APP", "table-name": "%LOAN_EVENT_QTAB%"}, "rule-action": "exclude"},
+        "see": ["RDS-007"]
+      }
+    },
+    {
+      "rule_id": "RDS-012",
+      "owner": "DBMIG_APP",
+      "object_name": "LOAN_EVENT_QTAB.USER_PROP",
+      "written_against": "LOB column; DMS LOB mode and max size must be set explicitly",
+      "advice": "This is an Advanced Queuing queue table. Its LOBs are message payloads that AQ manages, not rows an application writes, so DMS must not load it. The queue is recreated on the target, and the source queue is drained before cutover (RDS-007).",
+      "artefact": {
+        "type": "dms_table_mapping_rule",
+        "applies_to_phase": "migrate",
+        "rule": {"rule-type": "selection", "rule-id": "21", "rule-name": "exclude-aq-queue-tables", "object-locator": {"schema-name": "DBMIG_APP", "table-name": "%LOAN_EVENT_QTAB%"}, "rule-action": "exclude"},
+        "see": ["RDS-007"]
+      }
+    },
+    {
+      "rule_id": "RDS-012",
+      "owner": "DBMIG_APP",
+      "object_name": "LOAN_NOTICE_XML.SYS_NC00003$",
+      "written_against": "LOB column; DMS LOB mode and max size must be set explicitly",
+      "advice": "This is the hidden storage column of an XMLType bound to a registered XML schema (RDS-009). DMS does not reliably migrate schema-bound XMLType, so this table moves by Data Pump after the XML schema is registered on the target. Exclude it from DMS.",
+      "artefact": {
+        "type": "dms_table_mapping_rule",
+        "applies_to_phase": "migrate",
+        "rule": {"rule-type": "selection", "rule-id": "22", "rule-name": "exclude-schema-bound-xml", "object-locator": {"schema-name": "DBMIG_APP", "table-name": "LOAN_NOTICE_XML"}, "rule-action": "exclude"},
+        "see": ["RDS-009", "RDS-010"]
+      }
+    },
+    {
+      "rule_id": "RDS-015",
+      "owner": null,
+      "object_name": "NLS_CHARACTERSET",
+      "written_against": "Source is AL32UTF8; RDS instance must be created with this character set",
+      "advice": "This is settled at provisioning, not here. An RDS for Oracle instance's character set cannot be changed after creation, so the target must be created with AL32UTF8. Phase 6 reads it from the sizing decision and sets it on the instance.",
+      "artefact": {"type": "provision_parameter", "applies_to_phase": "provision", "parameter": "CharacterSetName", "value": "AL32UTF8"}
+    }
+  ]
+}

@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  SEEDED APPLICATION SQL — not a real application.
+
+  Every statement here uses Oracle SQL that a PostgreSQL target will not accept,
+  or will accept and silently behave differently. Each is catalogued in
+  `appsql/constructs.json` and listed in `scripts/demo-app/answer_key.json`,
+  which is what Phase 4d is measured against.
+
+  The tables and columns are real: DBMIG_APP.CUSTOMER, LOAN, COMM_LOG and
+  PAYMENT_HIST as Phase 1 discovered them. SQL against tables that do not exist
+  would not survive the validate gate, and a phase that cannot be validated
+  proves nothing.
+
+  Written in MyBatis mapper form because that is the shape AWS's own
+  application-sql-transform-agent takes as input, and because it is the common
+  pattern in Java shops running Oracle.
+-->
+<mapper namespace="com.dbmig.app.dao.CustomerMapper">
+
+  <!-- APPSQL-001 DUAL, APPSQL-002 SEQ_NEXTVAL
+       `FROM DUAL` has no PostgreSQL equivalent (a bare SELECT suffices) and
+       `seq.NEXTVAL` is `nextval('seq')`. -->
+  <select id="nextCustomerId" resultType="long">
+    SELECT customer_seq.NEXTVAL FROM DUAL
+  </select>
+
+  <!-- APPSQL-003 OUTER_JOIN_PLUS
+       The `(+)` operator was removed from PostgreSQL entirely. This must become
+       an explicit LEFT JOIN, and which side takes the (+) decides which. -->
+  <select id="findCustomersWithLatestLoan" resultMap="customerLoan">
+    SELECT c.customer_id, c.full_name, l.loan_id, l.principal_amt
+      FROM customer c, loan l
+     WHERE c.customer_id = l.customer_id(+)
+       AND c.status = #{status}
+  </select>
+
+  <!-- APPSQL-004 ROWNUM_PAGINATION
+       The nested-subquery ROWNUM idiom is the commonest Oracle pagination
+       shape. PostgreSQL uses LIMIT/OFFSET, and the rewrite must preserve the
+       ORDER BY *inside* the subquery or the page contents change. -->
+  <select id="pageCustomers" resultMap="customer">
+    SELECT * FROM (
+      SELECT inner_q.*, ROWNUM AS rn FROM (
+        SELECT customer_id, full_name, email, created_at
+          FROM customer
+         ORDER BY created_at DESC
+      ) inner_q
+       WHERE ROWNUM &lt;= #{endRow}
+    )
+     WHERE rn &gt; #{startRow}
+  </select>
+
+  <!-- APPSQL-005 CONCAT_PIPE, APPSQL-006 NVL, APPSQL-007 EMPTY_STRING_NULL
+       `||` works in PostgreSQL but NULL-concatenation differs: Oracle treats
+       '' as NULL, so `full_name || ''` is a no-op in Oracle and returns the
+       name in PostgreSQL — but `NULL || 'x'` yields 'x' in Oracle and NULL in
+       PostgreSQL. This is the silent-behaviour-change case. -->
+  <select id="customerLabel" resultType="string">
+    SELECT NVL(c.full_name, '') || ' &lt;' || NVL(c.email, '') || '&gt;'
+      FROM customer c
+     WHERE c.customer_id = #{customerId}
+  </select>
+
+  <!-- APPSQL-008 DECODE, APPSQL-009 TO_CHAR_FORMAT
+       DECODE becomes CASE. Oracle's 'DD-MON-YYYY' format model is not
+       PostgreSQL's, and the month abbreviation is NLS-dependent. -->
+  <select id="customerStatusReport" resultMap="statusRow">
+    SELECT c.customer_id,
+           DECODE(c.status, 'A', 'Active', 'C', 'Closed', 'Unknown') AS status_label,
+           TO_CHAR(c.created_at, 'DD-MON-YYYY') AS created_display
+      FROM customer c
+     WHERE c.created_at &gt;= TO_DATE(#{fromDate}, 'YYYY-MM-DD')
+  </select>
+
+  <!-- APPSQL-010 MINUS
+       `MINUS` is `EXCEPT` in PostgreSQL. A pure keyword swap, which is exactly
+       why it belongs in the deterministic tier rather than the model's. -->
+  <select id="customersWithoutLoans" resultType="long">
+    SELECT customer_id FROM customer
+    MINUS
+    SELECT customer_id FROM loan
+  </select>
+
+  <!-- APPSQL-011 OPTIMIZER_HINT
+       An Oracle hint is a comment, so PostgreSQL ignores it silently rather
+       than failing. That makes it a performance regression that no gate
+       catches unless the hint is reported as dropped. -->
+  <select id="fullScanCustomers" resultMap="customer">
+    SELECT /*+ FULL(c) PARALLEL(c, 4) */ c.customer_id, c.full_name
+      FROM customer c
+     WHERE c.status = #{status}
+  </select>
+
+  <!-- APPSQL-012 MERGE
+       MERGE exists in PostgreSQL 15+, but the target version decides whether
+       this becomes MERGE or INSERT ... ON CONFLICT, and the ON CONFLICT form
+       needs a unique constraint to target. A judgement, not a substitution. -->
+  <update id="upsertCustomer">
+    MERGE INTO customer c
+    USING (SELECT #{customerId} AS customer_id,
+                  #{fullName}   AS full_name,
+                  #{email}      AS email FROM DUAL) src
+       ON (c.customer_id = src.customer_id)
+     WHEN MATCHED THEN
+          UPDATE SET c.full_name = src.full_name, c.email = src.email
+     WHEN NOT MATCHED THEN
+          INSERT (customer_id, full_name, email, status, created_at)
+          VALUES (src.customer_id, src.full_name, src.email, 'A', SYSDATE)
+  </update>
+
+  <!-- APPSQL-013 SYSDATE, APPSQL-014 FOR_UPDATE_NOWAIT
+       SYSDATE is second-precision; LOCALTIMESTAMP is microsecond, so a stored
+       equality comparison stops matching. NOWAIT is supported, but Oracle's
+       ORA-00054 becomes a different SQLSTATE the application must handle. -->
+  <select id="lockCustomerRow" resultMap="customer">
+    SELECT customer_id, full_name, status
+      FROM customer
+     WHERE customer_id = #{customerId}
+       AND created_at &lt; SYSDATE
+       FOR UPDATE NOWAIT
+  </select>
+
+  <resultMap id="customer" type="com.dbmig.app.model.Customer">
+    <id     property="customerId" column="CUSTOMER_ID"/>
+    <result property="fullName"   column="FULL_NAME"/>
+    <result property="email"      column="EMAIL"/>
+    <result property="status"     column="STATUS"/>
+    <result property="createdAt"  column="CREATED_AT"/>
+  </resultMap>
+
+  <resultMap id="customerLoan" type="com.dbmig.app.model.CustomerLoan">
+    <id     property="customerId"   column="CUSTOMER_ID"/>
+    <result property="fullName"     column="FULL_NAME"/>
+    <result property="loanId"       column="LOAN_ID"/>
+    <result property="principalAmt" column="PRINCIPAL_AMT"/>
+  </resultMap>
+
+  <!-- APPSQL-027 RESERVED_WORD_OBJECT
+       DBMIG_APP really has a table called ORDER with a column called ORDER —
+       both legal unquoted Oracle identifiers, both PostgreSQL keywords. Phase
+       4c renames them to order_col on the target and its own note says
+       "application SQL referencing this name must change". These two
+       statements are that application SQL. They parse on Oracle today, so
+       nothing catches them before cutover, and 4d cannot invent the new name
+       because the rename is 4c's decision. -->
+  <select id="listOrders" resultMap="orderRow">
+    SELECT o.description
+      FROM ORDER o
+     WHERE o.description = #{description}
+  </select>
+
+  <update id="renameOrder">
+    UPDATE ORDER
+       SET description = #{description}
+     WHERE description = #{oldDescription}
+  </update>
+
+  <resultMap id="statusRow" type="com.dbmig.app.model.StatusRow">
+    <id     property="customerId"      column="CUSTOMER_ID"/>
+    <result property="statusLabel"     column="STATUS_LABEL"/>
+    <result property="createdDisplay"  column="CREATED_DISPLAY"/>
+  </resultMap>
+
+  <resultMap id="orderRow" type="com.dbmig.app.model.OrderRow">
+    <id property="description" column="DESCRIPTION"/>
+  </resultMap>
+
+</mapper>

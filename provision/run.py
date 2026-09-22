@@ -1,0 +1,227 @@
+"""Phase 6 -- render the RDS target and check it can be deployed. Creates nothing.
+
+    python -m provision.run
+    python -m provision.run --price-file path/to/AmazonRDS-ap-south-1-index.json
+
+Writes provision/output/<stack>.template.json and provision_plan.json. The
+deploy is a separate step that needs an explicit, per-deploy yes; it is not in
+this module.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    __package__ = "provision"
+
+from . import prepared, policy, preflight, pricing, records, render
+
+OUTPUT = Path(__file__).resolve().parent / "output"
+DEFAULT_PROFILE = (os.environ.get("DBSHIFT_AWS_PROFILE")
+                   or os.environ.get("AWS_PROFILE")
+                   or "dbshift-bedrock")
+# AWS's public RDS price list for the region, downloaded by hand. It lives in the
+# gitignored output folder: prices change, and a committed copy would go stale.
+PRICE_FILE = OUTPUT / f"rds_{policy.REGION}_prices.json"
+
+
+def default_price_file() -> Path | None:
+    env = os.environ.get("DBSHIFT_PRICE_FILE")
+    if env:
+        return Path(env)
+    return PRICE_FILE if PRICE_FILE.exists() else None
+
+
+def execute(*, session=None, price_file: Path | None = None, operator_cidr: str | None = None,
+            now: datetime | None = None, on_event=None,
+            instance_override: dict | None = None,
+            config_override: dict | None = None) -> dict:
+    """Shared by the CLI and the console.
+
+    `instance_override` and `config_override` are the validated records from
+    `overrides.py` -- already checked and carrying their reason. This function
+    does not re-validate them; it routes them into the render, the preflight and
+    the price lookup so that all three describe the same instance. Passing an
+    unvalidated dict here would put an unchecked value in a template.
+    """
+    def emit(stage, detail):
+        if on_event:
+            on_event({"event": "stage", "stage": stage, "detail": detail})
+
+    now = now or datetime.now(timezone.utc)
+    recs = records.load()
+    checks = [records.consistency(recs)]
+    emit("records", checks[0]["detail"])
+    if checks[0]["status"] == preflight.FAIL:
+        return _finish({"ready": False, "checks": checks, "rendered": None}, None)
+
+    run_id = recs["sizing"]["collector_run_id"]
+    facts = records.source_facts(run_id)
+    estate = records.estate_of(recs["assessment"])
+    # stack name needs the engine, which is decided just below
+    d = recs["sizing"]["decision"]
+    # Phase 3 decides the path. On PostgreSQL there is no edition to map, so the
+    # engine and licence come from policy directly rather than from an edition.
+    if d.get("engine") == "POSTGRESQL":
+        engine, licence = policy.PG_ENGINE, policy.PG_LICENCE
+    else:
+        engine, licence = policy.ENGINE[d["edition"]]
+    stack = render.stack_name_for(estate, engine)
+
+    # One instance class from here down: the override if a person made one, the
+    # Phase 3 value otherwise. Preflight checks orderability and pricing quotes
+    # an hourly rate, and both must describe what will actually be created --
+    # quoting the derived class for an overridden instance would show a client a
+    # price for a machine they are not buying.
+    instance_class = (instance_override or {}).get("chosen") or d["instance_class"]
+
+    checks.append(preflight.gate_allows(recs["gate"]))
+    checks.append(preflight.version_direction(facts, engine))
+    emit("gate", checks[-2]["detail"])
+
+    resolved = {}
+    if session is not None:
+        emit("aws", "read-only checks against the account")
+        aws, resolved = preflight.aws_checks(session, engine=engine, licence=licence,
+                                             instance_class=instance_class,
+                                             storage_type=d["storage_type"], stack_name=stack)
+        checks += aws
+    else:
+        checks.append(preflight._c("aws_identity", preflight.BLOCKED, "no AWS session supplied"))
+
+    ip = ({"name": "operator_ip", "status": preflight.PASS, "detail": "supplied", "cidr": operator_cidr}
+          if operator_cidr else preflight.operator_cidr())
+    checks.append({k: v for k, v in ip.items() if k != "cidr"})
+
+    engine_version = resolved.get("engine_version")
+    rendered = None
+    if engine_version:
+        emit("render", f"{stack} on {engine} {engine_version}")
+        rendered = render.render(recs, facts, engine_version=engine_version, stack_name=stack,
+                                 estate=estate, now=now,
+                                 instance_override=instance_override,
+                                 config_override=config_override)
+        checks.append(preflight.validate_template(session, rendered["template"]))
+
+    cost = None
+    if price_file and rendered:
+        prices = pricing.lookup(price_file, region=policy.REGION, engine=engine, licence=licence,
+                                instance_class=instance_class, storage_type=d["storage_type"],
+                                multi_az=(rendered or {}).get("multi_az", policy.MULTI_AZ))
+        cost = {"prices": prices,
+                "estimate": pricing.estimate(prices, d["storage_gb"],
+                                             oracle=engine != policy.PG_ENGINE)}
+    elif rendered:
+        cost = {"prices": None, "estimate": None,
+                "unavailable": "No price file was supplied, so no estimate is shown. A deploy is "
+                               "never offered without a stated cost -- pass --price-file with the "
+                               "AWS offer file for this region."}
+
+    # What Phases 4b, 4c and 4d prepared for this target. Checked here rather
+    # than in `records.load` because it is optional: provisioning an empty
+    # instance is a legitimate choice, and a phase that has not run warns
+    # rather than failing.
+    artefacts = prepared.load()
+    prepared_check = prepared.check(artefacts, estate)
+    checks.append(prepared_check)
+    prepared_summary = prepared.summarise(artefacts, estate)
+
+    plan = {
+        "rendered_at_utc": now.isoformat(),
+        "stack_name": stack,
+        "estate": estate,
+        "collector_run_id": run_id,
+        "source": facts,
+        # The deploy step decides on HALT from this, not from a file it re-reads
+        # later -- the plan and the decision must describe the same moment.
+        "gate": {k: recs["gate"][k] for k in ("verdict", "by_phase", "blockers", "collector_run_id")},
+        "checks": checks,
+        "ready": bool(rendered) and not any(c["status"] in (preflight.FAIL, preflight.BLOCKED)
+                                            for c in checks),
+        "parameters": {"VpcId": resolved.get("vpc_id"), "SubnetIds": resolved.get("subnet_ids"),
+                       "OperatorCidr": ip.get("cidr")},
+        "rendered": rendered,
+        "cost": cost,
+        "deploy": "not performed -- Phase 6 renders and checks only; a deploy needs an explicit yes",
+        # The instance this phase creates is empty. This says what the earlier
+        # phases prepared for it, in the order it must be applied, and what a
+        # person still owes before any of it reaches the target. Nothing here
+        # is applied by this phase.
+        "prepared": prepared_summary,
+    }
+    return _finish(plan, rendered)
+
+
+def _finish(plan: dict, rendered: dict | None) -> dict:
+    OUTPUT.mkdir(parents=True, exist_ok=True)
+    if rendered:
+        (OUTPUT / f"{rendered['stack_name']}.template.json").write_text(
+            json.dumps(rendered["template"], indent=2), encoding="utf-8")
+    (OUTPUT / "provision_plan.json").write_text(json.dumps(plan, indent=2, default=str), encoding="utf-8")
+    return plan
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="DBShift Phase 6 -- render and preflight; creates nothing")
+    ap.add_argument("--profile", default=DEFAULT_PROFILE)
+    ap.add_argument("--no-aws", action="store_true", help="skip every AWS call")
+    ap.add_argument("--price-file", type=Path, default=default_price_file())
+    ap.add_argument("--operator-cidr", default=None)
+    args = ap.parse_args(argv)
+
+    session = None
+    if not args.no_aws:
+        import boto3
+        session = boto3.Session(profile_name=args.profile)
+    plan = execute(session=session, price_file=args.price_file, operator_cidr=args.operator_cidr)
+    _report(plan)
+    return 0 if plan["ready"] else 1
+
+
+def _report(p: dict) -> None:
+    print(f"\nstack            : {p.get('stack_name', '-')}")
+    print(f"estate           : {p.get('estate', '-')}   collector run {p.get('collector_run_id', '-')}")
+    print("\nCHECKS (read-only)")
+    for c in p["checks"]:
+        print(f"  [{c['status'].upper():<7}] {c['name']:<22} {c['detail']}")
+        if c.get("remedy") and c["status"] != "pass":
+            print(f"  {'':<33}-> {c['remedy']}")
+    r = p.get("rendered")
+    if r:
+        print("\nPROVENANCE -- where each value in the template came from")
+        for x in r["provenance"]:
+            print(f"  {x['property']:<28} {str(x['value'])[:34]:<35} {x['source']}")
+            print(f"  {'':<28} {x['why'][:120]}")
+        print(f"\nhanded to later phases: {len(r['handoffs'])} artefacts from Phase 4 "
+              f"({', '.join(sorted({h['phase'] for h in r['handoffs']}))})")
+    c = p.get("cost")
+    if c:
+        e = c["estimate"]
+        if e:
+            print(f"\nCOST ({c['prices']['source']}, {c['prices']['deployment']})")
+            print(f"  instance        ${e['instance_per_hour']}/hour")
+            print(f"  storage         ${e['storage_per_month']}/month")
+            print(f"  one 8-hour day  ${e['per_8h_day']}")
+            print(f"  left running    ${e['if_left_running_30_days']} for 30 days")
+            print(f"  excludes        {e['excludes']}")
+        elif c.get("unavailable"):
+            print("\nCOST: " + c["unavailable"])
+        else:
+            print(f"\nCOST: price list ambiguous -- {len(c['prices']['instance_matches'])} instance "
+                  f"and {len(c['prices']['storage_matches'])} storage matches; not guessing")
+    print(f"\nready to offer a deploy: {p['ready']}")
+    # `deploy` is only present once a plan is deployable; a refused plan has
+    # no command to print, and a KeyError hid the refusal behind a traceback.
+    if p.get("deploy"):
+        print(f"deploy: {p['deploy']}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
