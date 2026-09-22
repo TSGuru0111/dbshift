@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import secrets
 import string
 import sys
@@ -271,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"endpoint: {rec['outputs'].get('Endpoint')}:{rec['outputs'].get('Port')}")
     if rec["result"] in ("created", "still_creating"):
         print(f"\nbilling now: ${rec['cost']['instance_per_hour']}/hour plus storage.")
-        print(f"verify:     python -m provision.verify")
+        print("verify:     python -m provision.verify")
         print(f"tear down:  python -m killswitch --destroy --confirm {rec['account']}")
     return 0 if rec["result"] == "created" else 2
 

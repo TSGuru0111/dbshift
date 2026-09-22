@@ -245,7 +245,6 @@ def test_determinism():
 
 def test_estate_matching():
     print("estate matching in the CLI")
-    from . import sct_run
     src = (Path(__file__).resolve().parent / "sct_run.py").read_text(encoding="utf-8")
 
     # `manifest["schemas"]` is a dict, not a list. Iterating it yielded key

@@ -24,7 +24,6 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "blocker"
 
-from collector import mode as migration_mode
 from sct import parse as sct_parse
 from sct import route as sct_route
 from sct import runner as sct_runner

@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 
 from sct import route as sct_route
 
-from . import gates, pg_policy, policy
+from . import gates, pg_policy
 
 # Terminal states. The first four mirror `plan.py` so a reader moving between
 # them is not learning a second vocabulary; the last two are this path's own.
@@ -391,6 +391,10 @@ def build(
         "phase": "4-remediate-sct",
         "planned_at_utc": _now(),
         "source_of_findings": "aws-sct",
+        # The estate this plan is about. Every other record carries it, and
+        # Phase 6 refuses to provision from records that disagree -- so a plan
+        # without one read as a mismatch and blocked a consistent pipeline.
+        "collector_run_id": sct_assessment.get("collector_run_id"),
         "target": (sct_assessment.get("target") or {}).get("id"),
         "model_mode": model_mode,
         "entries": entries,

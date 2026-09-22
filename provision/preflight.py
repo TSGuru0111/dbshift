@@ -30,9 +30,16 @@ def gate_allows(gate: dict) -> dict:
                   f"provision is blocked by {', '.join(prov['blocked_by'])}",
                   "Resolve or waive those findings in Phase 5.")
     if gate["verdict"] == "HALT":
+        # The SCT gate counts `blockers`; the 50-rule gate counts
+        # `critical_findings`. Either is "what is open", and reading only the
+        # latter raised a KeyError on an SCT gate -- a crash where the whole
+        # point of this branch is to report a halt clearly.
+        open_count = gate.get("critical_findings")
+        if open_count is None:
+            open_count = len(gate.get("blockers") or [])
         return _c("gate_allows_provision", WARN,
                   "nothing blocks provision itself, but the gate's overall verdict is HALT "
-                  f"({gate['critical_findings']} critical findings open)",
+                  f"({open_count} open)",
                   "Rendering is free and proceeds. A DEPLOY under HALT needs either waivers in "
                   "Phase 5 or a named acknowledgement -- it is not taken silently.")
     return _c("gate_allows_provision", PASS, f"verdict {gate['verdict']}; provision clear")

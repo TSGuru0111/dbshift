@@ -84,8 +84,8 @@ def cdc_requirements(facts: dict | None, mode: str) -> dict:
             "applies": True,
             "status": "clear",
             "readiness": readiness,
-            "detail": (f"ARCHIVELOG and supplemental logging are both in place, so change "
-                       f"data capture can read redo."),
+            "detail": ("ARCHIVELOG and supplemental logging are both in place, so change "
+                       "data capture can read redo."),
         }
 
     return {

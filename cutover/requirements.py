@@ -17,7 +17,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from provision import policy as prov_policy
-from provision import records
 
 MET, UNMET, WAIVED, NOT_APPLICABLE = "met", "unmet", "waived", "not_applicable"
 
@@ -73,7 +72,13 @@ def target_run(session, plan: dict) -> dict:
 # --------------------------------------------------------------------------- the requirements
 
 def records_match_target(recs: dict, run_id: str | None) -> dict:
-    ids = {name: r.get("collector_run_id") for name, r in recs.items()}
+    # `_source` says which files were read, not which estate they describe, so
+    # it is metadata rather than a record. Comparing it reported "_source
+    # describes None" as an unmet requirement on a certificate whose four real
+    # records all agreed. Leading-underscore keys are excluded, the same rule
+    # provision/records.py's consistency check uses.
+    ids = {name: r.get("collector_run_id") for name, r in recs.items()
+           if not name.startswith("_")}
     wrong = {n: v for n, v in ids.items() if v != run_id}
     if not run_id:
         return requirement("records", "The records describe the estate on the target", UNMET,
@@ -219,13 +224,25 @@ def target_ready(run: dict) -> dict:
     return requirement("target", "The target is running", MET, "available")
 
 
+def _key(entry: dict) -> str:
+    """What identifies a remediation entry, whichever engine planned it.
+
+    The 50-rule path keys on `rule_id`; AWS SCT keys on `issue_code` (SCT's
+    `5984` where the rules engine had `RDS-004`). Reading only `rule_id` raised
+    a bare `KeyError: 'rule_id'` on every SCT-planned run -- which is the 400
+    that `/api/cutover` has been returning, and the reason the layout driver
+    reported 16/17 rather than a clean sweep.
+    """
+    return str(entry.get("rule_id") or entry.get("issue_code") or "")
+
+
 def outstanding_steps(rem: dict) -> dict:
     steps = []
-    for entry in sorted(rem.get("entries", []), key=lambda e: e["rule_id"]):
+    for entry in sorted(rem.get("entries", []), key=_key):
         artefact = entry.get("artefact") or {}
         for step in artefact.get("steps", []):
             if step.get("applies_to_phase") == "cutover":
-                steps.append({"rule_id": entry["rule_id"], "object": entry.get("object_name"),
+                steps.append({"rule_id": _key(entry), "object": entry.get("object_name"),
                               "when": step.get("when"), "sql_on_target": step.get("sql_on_target"),
                               "source": entry.get("source")})
     detail = (f"{len(steps)} step(s) run at cutover: "
@@ -243,10 +260,10 @@ def declared_gaps(recs: dict, run_id: str | None) -> dict:
     by_rule = {f["rule_id"] for f in recs["assessment"].get("findings", [])}
     # Whatever Phase 4 wrote down as a post-cutover note is exactly this list's
     # business; read them rather than restate them here, or the two drift.
-    for entry in sorted(recs["remediation"].get("entries", []), key=lambda e: e["rule_id"]):
+    for entry in sorted(recs["remediation"].get("entries", []), key=_key):
         artefact = entry.get("artefact") or {}
         if artefact.get("type") == "post_cutover_note":
-            gaps.append(f"{entry['rule_id']}: {artefact['note']}")
+            gaps.append(f"{_key(entry)}: {artefact['note']}")
     if "RDS-005" in by_rule:
         gaps.append("The database link still points at the source host and will fail when used "
                     "(RDS-005). It needs recreating with a network path.")

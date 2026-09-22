@@ -508,6 +508,18 @@ def test_provenance_direction():
            "verbatim" in src)
 
 
+def test_internal_prefixes_in_step():
+    print("internal prefixes")
+    # parse.py declares it keeps these in step with assess/loader.py by hand.
+    # Nothing enforced that, and drift is exactly the discrepancy the comment
+    # warns about: a finding the rules engine hides and SCT shows, which a
+    # client then asks about. Assert the promise instead of trusting it.
+    from assess import loader
+    check("SCT filters the same internals the rules engine does",
+          set(parse.INTERNAL_PREFIXES),
+          {p.rstrip("%") for p in loader.INTERNAL_PATTERNS})
+
+
 def main() -> int:
     print("sct selftest -- no SCT, no database, no AWS\n")
     test_targets()
@@ -517,6 +529,7 @@ def main() -> int:
     test_download_filenames()
     test_routing()
     test_provenance_direction()
+    test_internal_prefixes_in_step()
     total = PASS + FAIL
     print(f"\n{PASS}/{total} passed" + (f", {FAIL} FAILED" if FAIL else ""))
     return 1 if FAIL else 0

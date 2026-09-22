@@ -287,8 +287,8 @@ def test_model_call_contract():
         try:
             out = prompt.format(item="{}", route_why="w", clears_when="c")
             check(f"the {name} prompt formats without KeyError", True, True)
-            check(f"...and leaks no doubled braces", "{{" in out or "}}" in out, False)
-            truthy(f"...and still shows the JSON shape", '"rollback_sql"' in out)
+            check("...and leaks no doubled braces", "{{" in out or "}}" in out, False)
+            truthy("...and still shows the JSON shape", '"rollback_sql"' in out)
         except KeyError as exc:
             check(f"the {name} prompt formats without KeyError", f"KeyError {exc}", "no error")
 
