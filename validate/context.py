@@ -12,8 +12,8 @@ Nothing in Phase 8 writes to either database. Every statement is a SELECT.
 from __future__ import annotations
 
 import json
+import socket
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Callable
 
 from provision import policy as prov_policy
@@ -175,7 +175,28 @@ class Ctx:
                 host=out["Endpoint"], port=int(out["Port"]),
                 database=out.get("Database") or prov_policy.PG_DB_NAME,
                 user=self.opts.target_user or prov_policy.PG_MASTER_USERNAME,
-                password=pw)
+                password=pw,
+                # Level 4 checksums every row of every table. On 21M rows that
+                # is minutes of server work on one statement, and pg8000's
+                # default read timeout cut the socket mid-query -- reported as
+                # "network error" against twelve tables, which reads as a
+                # broken target rather than a client deadline. An hour is a
+                # ceiling, not an expectation.
+                timeout=3600)
+            # A level-4 checksum over 21M rows is ~60s of server work with no
+            # bytes on the wire, and something in the path between here and RDS
+            # closes an idle socket before that -- measured: the same statement
+            # succeeds on a fresh connection and dies on a reused one. Keepalive
+            # probes keep the socket demonstrably alive while the server works.
+            try:
+                sock = self._target._usock            # pg8000's socket
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                if hasattr(socket, "TCP_KEEPIDLE"):   # Linux
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+                elif hasattr(sock, "ioctl"):          # Windows: on, idle ms, interval ms
+                    sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 30000, 5000))
+            except Exception:  # noqa: BLE001 -- an optimisation, never a requirement
+                pass
             cur = self._target.cursor()
             # The same reason the Oracle side normalises: a session-level
             # format difference would make identical data hash differently.
@@ -244,7 +265,17 @@ class Ctx:
                     try:
                         opened.rollback()
                     except Exception:  # noqa: BLE001
-                        pass
+                        # The rollback itself failed, which means the socket is
+                        # gone rather than the transaction merely aborted. The
+                        # cached handle is now dead, and every later table
+                        # reusing it reports "network error" -- one dropped
+                        # connection became twelve unreadable tables, none of
+                        # which was ever actually asked. Drop it so the next
+                        # call reconnects.
+                        if opened is self._target:
+                            self._target = None
+                        elif opened is self._source:
+                            self._source = None
         return out[0], out[1]
 
     def close(self) -> None:

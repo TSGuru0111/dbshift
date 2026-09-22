@@ -20,7 +20,6 @@ import re
 import time
 from collections import Counter, defaultdict
 
-from provision import policy as prov_policy
 
 from . import crossengine as ce
 from .context import EXPECTED, MATCH, MISMATCH, NOT_COMPARABLE, Ctx, finding, is_internal
@@ -145,6 +144,29 @@ def _user_tables(ctx: Ctx) -> list[str]:
                    and t["table_name"] not in ext and IDENT.match(t["table_name"])})
 
 
+def _rows(result):
+    """The result as a list of rows, or None if the driver returned an error.
+
+    **Tuples count as rows.** These checks used to test `isinstance(x, list)`,
+    which is true of the Oracle side and false of pg8000's, so on 2026-09-21
+    every PostgreSQL count and checksum was filed as "unreadable on one side"
+    -- 12 tables reported not-comparable while the evidence string beside them
+    held the matching numbers. Levels 3 and 4 are the two that answer whether
+    the data is intact, so a validation that compared nothing reported itself
+    as merely not-comparable rather than as broken.
+    """
+    return list(result) if isinstance(result, (list, tuple)) else None
+
+
+def _scalar(result):
+    """The first column of the first row, or the raw value when unreadable."""
+    rows = _rows(result)
+    if not rows:
+        return result
+    first = rows[0]
+    return first[0] if isinstance(first, (list, tuple)) else first
+
+
 def structure(ctx: Ctx) -> list[dict]:
     if ctx.cross_engine:
         # Every query in this level reads dba_tab_columns, dba_constraints and
@@ -262,8 +284,7 @@ def row_counts(ctx: Ctx) -> list[dict]:
         target_sql = (f'SELECT COUNT(*) FROM "{owner.lower()}"."{ce.target_name(table)}"'
                       if ctx.cross_engine else None)
         src, tgt = ctx.both(f'SELECT COUNT(*) FROM "{owner}"."{table}"', target_sql=target_sql)
-        s = src[0][0] if isinstance(src, list) else src
-        t = tgt[0][0] if isinstance(tgt, list) else tgt
+        s, t = _scalar(src), _scalar(tgt)
         if isinstance(s, int) and isinstance(t, int):
             (matched if s == t else differ).append((table, s, t))
         else:
@@ -353,11 +374,12 @@ def content(ctx: Ctx) -> list[dict]:
         started = time.monotonic()
         src, tgt = ctx.both(sql, target_sql=target_sql)
         secs = time.monotonic() - started
-        if not isinstance(src, list) or not isinstance(tgt, list):
-            unreadable.append(f"{table}: source {src if not isinstance(src, list) else 'ok'}, "
-                              f"target {tgt if not isinstance(tgt, list) else 'ok'}")
+        s_all, t_all = _rows(src), _rows(tgt)
+        if s_all is None or t_all is None:
+            unreadable.append(f"{table}: source {src if s_all is None else 'ok'}, "
+                              f"target {tgt if t_all is None else 'ok'}")
             continue
-        (s_rows, s_hash), (t_rows, t_hash) = src[0], tgt[0]
+        (s_rows, s_hash), (t_rows, t_hash) = s_all[0], t_all[0]
         ok = (s_rows, s_hash) == (t_rows, t_hash)
         (same if ok else differ).append(f"{table}: {s_rows} rows, checksum {s_hash}"
                                         + ("" if ok else f" vs target {t_rows} rows, checksum {t_hash}"))
@@ -504,8 +526,7 @@ def behaviour(ctx: Ctx) -> list[dict]:
             continue
         name = ext["table_name"]
         src, tgt = ctx.both(f'SELECT COUNT(*) FROM "{owner}"."{name}"')
-        t = tgt[0][0] if isinstance(tgt, list) else tgt
-        s = src[0][0] if isinstance(src, list) else src
+        t, s = _scalar(tgt), _scalar(src)
         if not isinstance(t, int):
             out.append(finding(5, "external table", MISMATCH, f"{name} cannot be read on the target: {t}"))
         elif isinstance(s, int) and s != t:
@@ -544,8 +565,7 @@ def behaviour(ctx: Ctx) -> list[dict]:
             continue
         sql = f'SELECT COUNT(*) FROM "{owner}"."{table}" WHERE CONTAINS("{col}", :t) > 0'
         src, tgt = ctx.both(sql, {"t": token})
-        s = src[0][0] if isinstance(src, list) else src
-        t = tgt[0][0] if isinstance(tgt, list) else tgt
+        s, t = _scalar(src), _scalar(tgt)
         if not isinstance(s, int) or not isinstance(t, int):
             verdict, why = NOT_COMPARABLE, "one side could not run the search."
         elif s == 0:

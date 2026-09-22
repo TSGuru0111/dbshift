@@ -93,9 +93,17 @@ def oracle_expr(column_name: str, data_type: str) -> str:
         return f"TO_CHAR({q},'{fmt}')"
     if t in ("NUMBER", "FLOAT", "BINARY_DOUBLE", "BINARY_FLOAT"):
         # TM9 gives the shortest exact decimal: no trailing zeros, no leading
-        # space for sign, no exponent for ordinary magnitudes. It is the one
-        # Oracle format that matches PostgreSQL's default numeric text.
-        return f"TRIM(TO_CHAR({q},'TM9'))"
+        # space for sign, no exponent for ordinary magnitudes. It matches
+        # PostgreSQL's numeric text **except between -1 and 1**, where Oracle
+        # drops the leading zero: 0.023 renders as '.023', and PostgreSQL's
+        # '0.023' then hashes differently. Measured 2026-09-21 on
+        # USAGE_STAGING -- 250,000 rows with an identical SUM and an identical
+        # DISTINCT count, reported as a data mismatch purely on that character.
+        # The REPLACE puts the zero back, on the sign as well as the bare form.
+        tm9 = f"TRIM(TO_CHAR({q},'TM9'))"
+        return (f"CASE WHEN {tm9} LIKE '.%' THEN '0' || {tm9} "
+                f"WHEN {tm9} LIKE '-.%' THEN '-0' || SUBSTR({tm9},2) "
+                f"ELSE {tm9} END")
     if t in ("CHAR", "NCHAR"):
         # Blank padding is storage, not data.
         return f"RTRIM({q})"
