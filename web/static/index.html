@@ -257,6 +257,18 @@ main>.view.on{max-width:var(--shell);margin:0 auto}
 /* Provision's three regions, one at a time. [hidden] needs the !important
    because .provpane would otherwise win on specificity and show them all. */
 .provpane[hidden]{display:none!important}
+/* A chip's state, so the switcher says where the run stands without being
+   opened. Muted and lighter than the label: it is a subtitle, not a second
+   label competing with it. */
+.chipstate{opacity:.62;font-weight:400}
+.chip[aria-pressed="true"] .chipstate{opacity:.72}
+/* Deploy is the one chip behind which something bills. It is marked rather
+   than left identical to the two free panes -- a flat row of three equals hid
+   the phase's actual action behind the pane nobody opened. */
+.chip.act{border-color:var(--bad);color:var(--bad)}
+.chip.act:hover{border-color:var(--bad);color:var(--bad)}
+.chip.act .chipstate{opacity:.8}
+.chip.act[aria-pressed="true"]{background:var(--bad);border-color:var(--bad);color:var(--on-bad)}
 .provpane>.panel:first-child,.provpane>.tiles:first-child{margin-top:0}
 /* The report view hands its leftover height to the frame. The rule lives here
    rather than inline because the JS reveals the panel with display:'' , which
@@ -296,8 +308,16 @@ details:not([open])>*:not(summary){display:none!important}
 /* Everything that is NOT on the path to the list keeps its own height. Without
    this, flex-shrink squashes a tile row or a chart panel to a fraction of its
    content -- the box shrinks but the text does not, so it paints over the
-   heading underneath. That was the overlapping text on Discover and Assess. */
-.view.on:has(.scrollcap) > *:not(:has(.scrollcap)),
+   heading underneath. That was the overlapping text on Discover and Assess.
+
+   **Both halves need :not(.scrollcap).** A list does not contain itself, so
+   `*:not(:has(.scrollcap))` matches the .scrollcap too and pinned it to
+   flex:0 0 auto -- the cap never capped and the pane scrolled instead. The
+   second half was guarded and the first was not, which is why this only bit
+   Phase 8: it is the one view whose list is a direct child of the section
+   rather than of a result wrapper. Measured 2026-09-20 at 1440x900 --
+   #valLevels rendered 2089px tall and hung 1743px below the pane. */
+.view.on:has(.scrollcap) > *:not(:has(.scrollcap)):not(.scrollcap),
 .view.on:has(.scrollcap) *:has(.scrollcap) > *:not(:has(.scrollcap)):not(.scrollcap):not(details:not([open]) *){
   flex:0 0 auto;min-height:auto}
 /* flex-basis:0 is the point: 1 1 auto lets the list keep its content height
@@ -308,6 +328,16 @@ details:not([open])>*:not(summary){display:none!important}
    is the right trade at that height. */
 .scrollcap{overflow-y:auto;min-height:150px;flex:1 1 0;display:block!important;
   overscroll-behavior:contain;scrollbar-width:thin}
+/* ...but a result panel that is itself the scroll region must still be able
+   to hide. `display:block!important` outranks the inline `display:none` the
+   JS uses to hide a not-yet-run panel, so putting .scrollcap on #sctGateResult
+   made Phase 5 render three empty headings -- "Where the work belongs",
+   "Change data capture readiness", "Downstream phases", 286px of them -- over
+   the top of its own "Run the AWS SCT assessment first" empty state, on a
+   console where nothing had been run. Verified against a clean server on
+   2026-09-21. This is the same class of fault the chain rules below already
+   guard with :not([style*="display:none"]); the cap needs the guard too. */
+.scrollcap[style*="display:none"],.scrollcap[style*="display: none"]{display:none!important}
 /* One band of context across the top, then the table gets the rest of the
    screen. These three used to stack, which left a 36-row action-item table
    about one row tall.
@@ -547,6 +577,13 @@ details:not([open])>*:not(summary){display:none!important}
 .status.ok .led{background:var(--ok)}
 .status.bad{background:var(--bad-soft);border-color:var(--bad);color:var(--bad)}
 .status.bad .led{background:var(--bad)}
+/* A warn status was styled like no status at all -- the base grey LED on the
+   neutral surface, which is exactly how the dead "Checking the target..."
+   panels read before 4c and 4d were wired to the target. "The compile did not
+   run" and "5 shadow tables short" are findings, and a finding that looks
+   unset is the same defect wearing different text. */
+.status.warn{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
+.status.warn .led{background:var(--warn)}
 .status.busy .led{background:var(--warn);animation:pulse 1.2s var(--ease) infinite}
 
 .checks{display:flex;flex-direction:column;gap:1px;background:var(--rule);
@@ -615,6 +652,20 @@ details:not([open])>*:not(summary){display:none!important}
   font-variant-numeric:tabular-nums;margin-top:4px;line-height:1.15}
 .tile .v small{font-size:13px;font-weight:500;color:var(--ink-3);margin-left:2px}
 .tile .h{font-size:12.5px;color:var(--ink-3);margin-top:4px}
+
+/* Phase 7's source → DMS → target strip. Wraps to a column on a narrow
+   screen, where the arrows turn to point down rather than off the edge. */
+.dmsflow{display:flex;align-items:stretch;gap:10px}
+.dmsnode{flex:1;min-width:0;background:var(--surface);border:1px solid var(--rule);
+  border-radius:3px;padding:14px 16px}
+.dmsnode .ico{width:18px;height:18px;color:var(--ink-3)}
+.dmsnode .t{font-weight:600;margin-top:6px;font-size:14px}
+.dmsnode .s{font-size:12.5px;color:var(--ink-3);margin-top:2px;word-break:break-word}
+.dmsarrow{align-self:center;color:var(--ink-3);font-size:18px;flex:none}
+@media(max-width:700px){
+  .dmsflow{flex-direction:column}
+  .dmsarrow{transform:rotate(90deg)}
+}
 
 /* ---------- accordion ---------- */
 .acc{display:flex;flex-direction:column;gap:1px;background:var(--rule);
@@ -711,6 +762,38 @@ tr:last-child td{border-bottom:none}
    400px, which the Phases 1-5 drive caught. */
 .sctrow{display:grid;grid-template-columns:78px 50px minmax(0,1fr) 180px 160px;
   gap:10px;align-items:baseline}
+/* **Six tiles, one row.** The generic .tiles track is minmax(190px,1fr),
+   which fits five across this pane and wraps the sixth -- leaving the last
+   row's remainder painted in the rule colour, the exact grey hole the
+   auto-fit track was chosen to avoid. Phase 4b is the panel that actually
+   has six outcomes, so it gets a narrower floor: six 150px tiles need 900px
+   and the pane is wider than that, so the row stays whole. Below 1040px the
+   floor would start clipping the longer labels, and auto-fit takes over
+   again -- two rows of three, which is even, not a hole.
+
+   This also buys the table back ~120px. #convList is flex:1 1 0 and takes
+   whatever the band above leaves it, so a tile row that does not wrap and a
+   tile that is not padded for a second line are the same fix as making the
+   table taller. */
+/* The breakpoint is on the viewport but the tiles live in the pane, and the
+   rail takes ~292px of it: at a 1100px viewport the pane is 808px, so a
+   query written against the viewport picks the wrong branch. 1060px of
+   viewport is ~770px of pane, which is where six tiles stop holding their
+   labels on two lines. Below that auto-fit takes over: three and three. */
+@media(min-width:1060px){
+  #convTiles{grid-template-columns:repeat(6,minmax(0,1fr))}
+}
+#convTiles .tile{padding:11px 13px}
+#convTiles .tile .v{font-size:23px;margin-top:2px}
+#convTiles .tile .k{font-size:12.5px;line-height:1.25}
+#convTiles .tile .h{margin-top:3px;line-height:1.3}
+/* The notes sit between the tiles and the table and were the other thing
+   pushing it down: two stacked blocks of full-width prose. Tightened here
+   rather than globally -- Remediate's blockers are longer and need the room. */
+#convNotes .note{padding:8px 11px;line-height:1.4;margin-bottom:0}
+#convNotes .note+.note{margin-top:6px}
+#convNotes{margin-bottom:10px}
+
 /* Phase 4b's second column holds an object type, not a 4-digit SCT code, and
    "package body" wrapped to two lines in 50px. Widened for that panel only,
    so the SCT rows keep their tighter code column. */
@@ -732,6 +815,78 @@ tr:last-child td{border-bottom:none}
 }
 @media(min-width:1400px){
   .sctrow{grid-template-columns:78px 50px minmax(0,1fr) minmax(180px,.42fr) minmax(160px,.3fr)}
+}
+
+/* ---------- Phase 4c, schema DDL ----------
+   One band of context, one scrolling list. The band was a two-panel .split
+   whose right half held a status line nothing ever wrote to -- 310px of
+   "Checking the target..." in the best part of the screen -- beside six
+   stacked order rows, name over reason, another 284px. Both are one strip
+   and one sentence now, and the status is wired to the registered target. */
+.ddlband{padding:15px 18px;margin-bottom:14px}
+.ddlflow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.ddlflow .step{display:inline-flex;align-items:baseline;gap:7px;padding:5px 10px;
+  border:1px solid var(--rule-strong);border-radius:2px;background:var(--surface-2);
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--ink);cursor:help}
+.ddlflow .step .n{color:var(--ink-3);font-size:11.5px;font-variant-numeric:tabular-nums}
+.ddlflow .arrow{color:var(--ink-3);font-size:12px}
+/* The load is the claim this strip exists to make, so it is the one thing in
+   the row that is not a step: dashed, in the accent, sitting between the
+   tables and the constraints exactly where it happens. */
+.ddlflow .load{padding:5px 11px;border:1px dashed var(--accent);border-radius:2px;
+  background:var(--accent-soft);color:var(--accent-ink);
+  font-family:"IBM Plex Mono",monospace;font-size:11.5px;letter-spacing:.04em}
+.ddlwhy{font-size:12.5px;color:var(--ink-2);line-height:1.5;margin:9px 0 0;max-width:96ch;
+  text-wrap:pretty}
+/* The evidence line, shared with Phase 4d's "what proves a rewrite". .status
+   centres a one-line chip; these carry a sentence and, on a failure, the
+   errors under it. */
+.ddlband .status,#appsqlTargetStatus{align-items:flex-start;font-size:12.5px;line-height:1.5}
+.ddlband .status .led,#appsqlTargetStatus .led{margin-top:5px}
+/* Block, because these are engine errors sitting under the sentence that
+   introduces them. 4d's prose also names identifiers inline -- ROWNUM in the
+   middle of a clause -- so its block form is opt-in by class. Sharing the bare
+   .mono selector put `ROWNUM` on a line of its own and broke the sentence in
+   half. */
+.ddlband .status .mono,#appsqlTargetStatus .errline{display:block;margin-top:5px;
+  font-size:11.5px;opacity:.85}
+.ddlband .status{margin-top:11px}
+/* Parse and result are two questions, so 4d's status shows them as two
+   paragraphs rather than one run-on sentence. */
+#appsqlTargetStatus .second{display:block;margin-top:7px}
+#ddlTiles .tile{padding:12px 14px}
+#ddlTiles .tile .v{font-size:24px;margin-top:2px}
+#ddlTiles .tile .h{margin-top:3px;line-height:1.3}
+#ddlTabs{margin:12px 0 10px}
+/* Three panes, one scroll region. Stacking the statements and the notes was
+   the actual defect: the statements list is a .scrollcap and the notes list
+   below it was not, so the notes took the height, the capped list collapsed
+   to its 150px floor and painted over their heading. A view gets one list. */
+.ddlpane[hidden]{display:none!important}
+/* The statement rows had no padding, no pointer and the browser's own
+   disclosure triangle sitting in the first grid cell. */
+#ddlGroups summary.sctgrid{padding:9px 13px;cursor:pointer;list-style:none}
+#ddlGroups summary::-webkit-details-marker{display:none}
+#ddlGroups summary.sctgrid:hover{background:var(--surface-2)}
+#ddlGroups summary.sctgrid:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+/* A note is a severity, a subject and one sentence, so it is a flat row: an
+   accordion whose body repeats its own summary is a click that buys nothing.
+   No kind column either -- the group heading above the rows carries it, and
+   the 50px cell that used to repeat it held `kind.slice(0,8)`, eight
+   monospace characters in room for seven, which is how "virtual_" came to
+   sit on top of the subject beside it. */
+/* 210px is 28 monospace characters, which holds the longest subject either
+   estate produces ("TY_ADDRESS, TY_PHONE_LIST"); anything longer ellipsises
+   and keeps its full value in the title. */
+#ddlGroups .noterow{display:grid;grid-template-columns:62px minmax(0,210px) minmax(0,1fr);
+  gap:12px;align-items:baseline;background:var(--surface);padding:9px 13px}
+#ddlGroups .noterow>.mono{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  min-width:0;font-size:12.5px}
+#ddlGroups .noterow>.d{font-size:12px;color:var(--ink-2);min-width:0;line-height:1.45;
+  text-wrap:pretty}
+@media(max-width:860px){
+  #ddlGroups .noterow{grid-template-columns:62px minmax(0,1fr);row-gap:3px}
+  #ddlGroups .noterow>.d{grid-column:2}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
@@ -1178,7 +1333,7 @@ tr:last-child td{border-bottom:none}
       <p>Rewritten as PL/pgSQL, compiled for real, then rolled back.</p>
     </div>
 
-    <div class="split" style="margin-bottom:16px">
+    <div class="split" id="convSetup" style="margin-bottom:16px">
       <div class="panel pad">
         <div class="eyebrow">Where a conversion comes from<span class="hint" tabindex="0" role="note" title="A construct with exactly one correct translation is rewritten by a rule and the reason is recorded. Anything needing judgement goes to the model tier, and what it writes is labelled with the model that wrote it. Anything PostgreSQL cannot express goes to a person. Whatever produced the text, the same five gates decide whether it is ready — a model proposes, it never approves.">i</span></div>
         <!-- Deliberately says nothing until the server answers. Hardcoding a
@@ -1231,33 +1386,61 @@ tr:last-child td{border-bottom:none}
       <p>The tables, keys and indexes DMS will not create.</p>
     </div>
 
-    <div class="split" style="margin-bottom:16px">
-      <div class="panel pad">
-        <div class="eyebrow">The order, and why it is not alphabetical<span class="hint" tabindex="0" role="note" title="Constraints and indexes come after the load. Validating a foreign key row by row during a bulk insert is the slowest possible way to do it, and an index maintained during a load is rebuilt far faster afterwards. This is the same order Phase 7's Data Pump path uses for the homogeneous case.">i</span></div>
-        <div id="ddlOrder" class="mt-s"></div>
-      </div>
-      <div class="panel pad">
-        <div class="eyebrow">What proves this DDL<span class="hint" tabindex="0" role="note" title="Every statement runs on the registered PostgreSQL inside one transaction, which is then rolled back — so the database is left exactly as found and the DDL is still proven to execute. Register a target on Convert PL/SQL; without one this phase reports that the compile did not run, never that it passed.">i</span></div>
-        <div class="status" id="ddlTargetStatus"><span class="led"></span>
-          <span>Checking the target…</span></div>
-      </div>
+    <!-- The order, the reason and the proof, in one band. The strip is drawn
+         before anything is run, because the order is what this phase teaches;
+         the counts arrive with the plan. -->
+    <div class="panel ddlband">
+      <div class="eyebrow">The order, and why it is not alphabetical<span class="hint" tabindex="0" role="note" title="Constraints and indexes come after the load. Validating a foreign key row by row during a bulk insert is the slowest possible way to do it, and an index maintained during a load is rebuilt far faster afterwards. This is the same order Phase 7's Data Pump path uses for the homogeneous case.">i</span></div>
+      <div id="ddlOrder" class="ddlflow"></div>
+      <p class="ddlwhy">Constraints and indexes are built <b>after</b> the load: validating a
+        foreign key row by row during a bulk insert is the slowest possible way to do it, and an
+        index maintained during a load is rebuilt far faster afterwards.</p>
+      <div class="status" id="ddlTargetStatus"><span class="led"></span>
+        <span>Checking the target…</span></div>
     </div>
 
-    <div class="spread" style="margin-bottom:16px">
+    <div class="spread" style="margin-bottom:14px">
       <button class="btn" id="btnSchemaDdl">Generate schema DDL</button>
       <span class="mono" id="ddlMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
     </div>
 
     <div id="ddlResult" style="display:none">
-      <div class="tiles mt" id="ddlTiles"></div>
-      <div id="ddlNotesBox" class="mt-s"></div>
-      <div class="mt"><div class="eyebrow">Every statement, in the order PostgreSQL needs them</div>
-        <div id="ddlGroups" class="scrollcap"></div></div>
-      <div class="mt"><div class="eyebrow">What a reviewer must know</div>
-        <div id="ddlNoteList"></div></div>
+      <div class="tiles" id="ddlTiles"></div>
+
+      <!-- Compiling only proves the DDL is valid -- it runs inside a
+           transaction that is always rolled back, so it never puts a table on
+           any target. Phase 7 refuses with "run Schema DDL against the target
+           first" and, until this panel, there was nothing on screen that did
+           that: the only apply path was a Python function nothing called.
+           Shown once a clean compile makes applying meaningful. -->
+      <div class="panel pad" id="ddlApplyPanel" style="display:none;margin-bottom:16px">
+        <div class="eyebrow">Apply to the target<span class="hint" tabindex="0" role="note"
+          title="Creates the tables, keys and indexes for real, on the RDS instance Phase 6 built -- not the local compile target above. One transaction: every statement succeeds or none of them remain. Keys and indexes are deferred to a second, post-load pass so they are not validated row by row during Phase 7's bulk load.">i</span></div>
+        <p class="ddlwhy" id="ddlApplyWhy" style="margin:0 0 10px">Pre-load pass: tables and
+          types only. Run again with <b>post-load</b> after Phase 7 finishes to add the keys
+          and indexes.</p>
+        <div class="field"><label for="ddlApprover">Applying this, typed to confirm</label>
+          <input id="ddlApprover" autocomplete="off" placeholder="your name or email"></div>
+        <label class="chk"><input type="checkbox" id="ddlPostLoad">
+          <span>Post-load pass — keys and indexes, after Phase 7 has loaded the rows</span></label>
+        <div class="spread"><button class="btn danger" id="btnDdlApply">Apply pre-load schema</button>
+          <span class="mono" id="ddlApplyMeta" style="font-size:12.5px;color:var(--ink-3)"></span></div>
+        <div id="ddlApplyResult" class="mt-s"></div>
+      </div>
+
+      <div class="chips" id="ddlTabs" role="tablist">
+        <button class="chip" data-ddl="statements" aria-pressed="true">Statements</button>
+        <button class="chip" data-ddl="review" aria-pressed="false">Needs a person</button>
+        <button class="chip" data-ddl="mappings" aria-pressed="false">Type mappings</button>
+      </div>
+      <div class="scrollcap" id="ddlGroups">
+        <div class="ddlpane" data-ddl="statements" id="ddlStatements"></div>
+        <div class="ddlpane" data-ddl="review" id="ddlNoteList" hidden></div>
+        <div class="ddlpane" data-ddl="mappings" id="ddlMapList" hidden></div>
+      </div>
     </div>
-    <div id="ddlEmpty" class="panel"><div class="empty">Run discovery first, then generate the
-      DDL the target needs.</div></div>
+    <div id="ddlEmpty" class="panel"><div class="empty">Nothing generated yet. This phase
+      reads the discovery run and nothing else.</div></div>
   </section>
 
   <!-- ============ 5b. APPLICATION SQL (4d) ============
@@ -1315,12 +1498,20 @@ tr:last-child td{border-bottom:none}
       <span class="mono" id="sctGateMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
     </div>
 
-    <div id="sctGateResult" style="display:none">
+    <!-- One scroll region, not a capped list with three full-height siblings
+         under it. #sctGateGroups was a .scrollcap while the CDC panel (129px),
+         the downstream-phase list (383px) and the 50-rule <details> below it
+         were not, so they took the height the view had: the cap collapsed to
+         its floor and the phase list ran 27px past the bottom of the view,
+         painting over the <details> summary. Measured, not eyeballed -- the
+         identical fault Phase 4c's statements list had on 2026-09-20, and the
+         same fix: the region scrolls, the lists inside it do not. -->
+    <div id="sctGateResult" class="scrollcap" style="display:none">
       <div class="panel pad" id="sctGateVerdict"></div>
 
       <div class="mt">
         <div class="eyebrow">Where the work belongs</div>
-        <div id="sctGateGroups" class="scrollcap"></div>
+        <div id="sctGateGroups"></div>
       </div>
 
       <div class="mt"><div class="eyebrow">Change data capture readiness</div>
@@ -1398,7 +1589,7 @@ tr:last-child td{border-bottom:none}
     </details>
 
     <div class="spread" style="margin-bottom:16px">
-      <button class="btn" id="btnProvision">Render and check</button>
+      <button class="btn" id="btnProvision" title="Phase 5 has not cleared provisioning yet">Render and check</button>
       <span class="mono" id="provMeta" style="font-size:12.5px;color:var(--ink-3)"></span>
     </div>
     <div class="ticker" id="provLive"></div>
@@ -1409,14 +1600,28 @@ tr:last-child td{border-bottom:none}
          drivers click straight through to #btnStatus, #btnVerify, #btnDeploy
          and #btnKillScan without opening anything first. -->
     <div id="provResult" style="display:none">
+      <!-- Three equal-looking chips with Plan pre-selected gave no sign that the
+           phase's actual action lives in the third one. Each carries its state
+           now, written by provChipState(). -->
       <div class="chips" id="provTabs" role="tablist">
-        <button class="chip" data-prov="plan" aria-pressed="true">Plan</button>
-        <button class="chip" data-prov="live" aria-pressed="false">Live</button>
-        <button class="chip" data-prov="deploy" aria-pressed="false">Deploy</button>
+        <button class="chip" data-prov="plan" aria-pressed="true">Plan<span class="chipstate" id="provChipPlan"></span></button>
+        <button class="chip" data-prov="live" aria-pressed="false">Live<span class="chipstate" id="provChipLive"></span></button>
+        <button class="chip act" data-prov="deploy" aria-pressed="false">Deploy<span class="chipstate" id="provChipDeploy"></span></button>
       </div>
 
       <div class="provpane" data-prov="plan">
       <div class="tiles mt" id="provTiles"></div>
+
+      <!-- The template is the artefact of this phase, and until now it could
+           only be read inside a <details> on the Live pane -- which exists
+           only while a stack does. It downloads from the Plan pane, where it
+           is rendered, so it can be reviewed or handed on before any deploy
+           and after a destroy. -->
+      <div class="spread mt">
+        <div class="eyebrow" style="margin:0">CloudFormation template</div>
+        <button class="btn ghost sm" id="btnTemplateDl">Download .json</button>
+      </div>
+      <div class="mt-s" id="templateDlNote" style="font-size:12.5px;color:var(--ink-3)"></div>
 
       <div class="mt"><div class="eyebrow">Preflight — read-only</div>
         <div class="checks" id="provChecks"></div></div>
@@ -1473,7 +1678,16 @@ tr:last-child td{border-bottom:none}
       </div><!-- /deploy -->
     </div><!-- /#provResult -->
 
-    <div id="provEmpty" class="panel"><div class="empty">Evaluate the gate first, then render the target.</div></div>
+    <!-- The empty state used to read "Evaluate the gate first, then render the
+         target", which says what to do but not where, and never said that the
+         button above it was disabled *because of that*. It names the button and
+         offers the way back now. -->
+    <div id="provEmpty" class="panel"><div class="empty">
+      <b>Render and check</b> is disabled until Phase 5 clears provisioning.<br>
+      <span style="color:var(--ink-3)">Rendering is free and creates nothing — it writes the
+      CloudFormation template and runs read-only AWS checks.</span><br>
+      <button class="btn ghost sm mt-s" onclick="show('gate')">Go to Phase 5 · Blocker gate &rarr;</button>
+    </div></div>
   </section>
 
   <!-- ============ 8. MIGRATE ============ -->
@@ -1496,6 +1710,44 @@ tr:last-child td{border-bottom:none}
         <div class="tiles mt-s" id="dmsTiles" style="display:none"></div>
       </div>
 
+      <!-- Phase 7 in one picture. The screen had grown to six panels of detail
+           with nothing saying the plain thing first: what moves, from where, to
+           where, and whether it can start. Read before any of the detail. -->
+      <div class="panel pad" id="dmsStory" style="display:none;margin-bottom:16px">
+        <div class="eyebrow" style="margin:0">What happens in this phase</div>
+        <div class="dmsflow mt-s">
+          <div class="dmsnode">
+            <svg class="ico" aria-hidden="true"><use href="#ic-server"></use></svg>
+            <div class="t">Oracle</div>
+            <div class="s" id="dmsFromWhere">the source</div>
+          </div>
+          <div class="dmsarrow" aria-hidden="true">→</div>
+          <div class="dmsnode">
+            <svg class="ico" aria-hidden="true"><use href="#ic-dms"></use></svg>
+            <div class="t">DMS reads and writes</div>
+            <div class="s" id="dmsHowMuch">a rented machine, billed hourly</div>
+          </div>
+          <div class="dmsarrow" aria-hidden="true">→</div>
+          <div class="dmsnode">
+            <svg class="ico" aria-hidden="true"><use href="#ic-target"></use></svg>
+            <div class="t">RDS PostgreSQL</div>
+            <div class="s" id="dmsToWhere">the target</div>
+          </div>
+        </div>
+        <div class="mt-s" id="dmsVerdict"></div>
+      </div>
+
+      <!-- What the task is doing right now, read from AWS rather than from
+           this console's own record: a task started from the CLI left the
+           screen saying "no DMS task has been started" while 32.9M rows were
+           moving. Shown whenever a dbshift task exists, whoever started it. -->
+      <div class="panel pad" id="dmsLive" style="display:none;margin-bottom:16px">
+        <div class="spread"><div class="eyebrow" style="margin:0">The task, live from AWS</div>
+          <button class="btn ghost sm" id="btnDmsStatus">Refresh</button></div>
+        <div class="mt-s" id="dmsLiveBody"></div>
+        <div class="acc mt-s" id="dmsLiveTables"></div>
+      </div>
+
       <div id="dmsChecks" class="checks" style="margin-bottom:16px"></div>
 
       <div class="split" style="margin-bottom:16px">
@@ -1508,6 +1760,22 @@ tr:last-child td{border-bottom:none}
           <div id="dmsResidueNote"></div>
           <div class="acc" id="dmsResidue"></div>
         </div>
+      </div>
+
+      <!-- What AWS will actually be sent. The plan has carried these all
+           along and the screen never showed them, so "where do I see the
+           mapping?" had no answer: the tiles said 11 tables moved without
+           saying under what names, and nothing named the resources DMS would
+           create. Both documents are what a person would paste into the AWS
+           console by hand. -->
+      <div class="panel pad" id="dmsArtefacts" style="display:none;margin-bottom:16px">
+        <div class="eyebrow">What DMS will be given<span class="hint" tabindex="0" role="note"
+          title="These two JSON documents are the task. The table mapping says which tables move and under what names; the task settings say how DMS behaves while it runs. Both are generated from this run's records and are what would be pasted into the AWS console by hand.">i</span></div>
+        <div class="checks mt-s" id="dmsResources"></div>
+        <details class="steplog mt-s"><summary>Table mapping — which tables, under what names</summary>
+          <pre id="dmsMappingJson"></pre></details>
+        <details class="steplog"><summary>Task settings — how DMS behaves while it runs</summary>
+          <pre id="dmsSettingsJson"></pre></details>
       </div>
 
       <div class="panel pad" id="dmsRunPanel" style="display:none">
@@ -1545,9 +1813,14 @@ tr:last-child td{border-bottom:none}
     </div>
 
     <div class="checks mt" id="migSteps"></div>
+    </div>
+
+    <!-- Outside #dataPumpPanel on purpose. It lived inside it, so on the
+         PostgreSQL path -- where that whole panel is display:none -- the one
+         line explaining why the phase was locked could never be seen, and the
+         DMS path had no empty state of its own at all. This one serves both. -->
     <div id="migEmpty" class="panel mt"><div class="empty">Provision the target first. Migration opens when
       it is CREATE_COMPLETE.</div></div>
-    </div>
   </section>
 
   <!-- ============ 9. VALIDATE ============ -->
@@ -1557,16 +1830,15 @@ tr:last-child td{border-bottom:none}
       <p>Five levels, from <i>it exists</i> to <i>it behaves</i>.</p>
     </div>
 
+    <!-- Nine lines of prose, 202px, permanently above the fold and directly
+         off the levels list below it. The claim is one sentence; the working
+         is on the hint, where the rest of this console puts it. -->
     <div id="valCrossEngine" style="display:none">
-      <div class="note info"><b>Oracle and PostgreSQL do not store the same value the same way.</b>
-        Comparing raw bytes would report a failure on every numeric and every padded column of a
-        perfect migration. So each row is reduced to a <b>canonical text form</b> on both sides
-        first — trailing zeros stripped, CHAR padding trimmed, timestamps in UTC, and Oracle's
-        empty-string-is-NULL given the same marker as a PostgreSQL NULL — and the same MD5 is
-        computed over that. <b>Levels 2 and 5 do not run</b>: column types are deliberately
-        different, and invalid objects and grants are Oracle catalogue concepts. What survived is
-        measured by <b>levels 3 and 4</b>, which are the ones that answer whether the data is
-        intact.</div>
+      <div class="note info" style="padding:9px 13px;line-height:1.45;margin-bottom:12px">
+        <b>Oracle and PostgreSQL do not store the same value the same way</b>, so each row is
+        reduced to a canonical text form on both sides and the same MD5 is computed over that.
+        <b>Levels 3 and 4</b> answer whether the data is intact; <b>2 and 5 do not run</b>.<span
+          class="hint" tabindex="0" role="note" title="Comparing raw bytes would report a failure on every numeric and every padded column of a perfect migration. The canonical form strips trailing zeros, trims CHAR padding, puts timestamps in UTC, and gives Oracle's empty-string-is-NULL the same marker as a PostgreSQL NULL. Levels 2 and 5 do not run because column types are deliberately different, and invalid objects and grants are Oracle catalogue concepts.">i</span></div>
     </div>
 
     <div class="panel pad" id="valControls">
@@ -1578,6 +1850,13 @@ tr:last-child td{border-bottom:none}
       <div class="spread"><button class="btn" id="btnValidate">Run validation</button>
         <span class="mono" id="valMeta" style="font-size:12.5px;color:var(--ink-3)"></span></div>
     </div>
+
+    <!-- The verdict, in one line, above the levels. Phase 8's conclusion used
+         to live only in a 12px mono string beside the button, so a screen
+         showing five level cards said nothing about what the validation had
+         decided -- and "mismatch" on a heterogeneous target can mean real data
+         loss or a held-back table, which are not the same news. -->
+    <div class="panel pad mt" id="valVerdict" style="display:none"></div>
 
     <div id="valLevels" class="mt scrollcap"></div>
     <div id="valEmpty" class="panel mt"><div class="empty">Migrate first. Validation compares the target
@@ -1648,8 +1927,14 @@ tr:last-child td{border-bottom:none}
                 style="display:block;width:100%;flex:1;min-height:0;border:0;background:#fff"></iframe>
       </div>
     </div>
-    <div id="reportEmpty" class="panel"><div class="empty">Run the assessment first. The report is
-      built from its findings, and grows as each later phase leaves a record.</div></div>
+    <!-- Since 2026-09-21 the report builds from **either** assessment: SCT's
+         where SCT ran, the 50-rule one otherwise. It used to read only the
+         latter, so an SCT-only run was refused with "run the assessment first"
+         on a console whose rail said the assessment was done. -->
+    <div id="reportEmpty" class="panel"><div class="empty">Nothing built yet. The report is
+      assembled from this run's own records — the assessment, the target decision, the
+      conversion, the gate, the migration, the validation and the certificate — and
+      <b>grows as each phase leaves one</b>. It reads no database.</div></div>
   </section>
 
   <!-- ============ CONFIG — AWS ACCESS ============ -->
@@ -1876,6 +2161,28 @@ document.addEventListener('click', e => {
   const chip = e.target.closest('#provTabs .chip');
   if (chip) provTab(chip.dataset.prov);
 });
+// What each pane holds, on the chip itself. The deploy form is on the third
+// pane, so a switcher that said only "Plan / Live / Deploy" left the phase's
+// one billing action behind a chip that looked like the other two -- and
+// "Deploy" alone never said whether it had already happened.
+function provChipState(plan, status){
+  const est = ((plan || {}).cost || {}).estimate;
+  const s = status || {};
+  // The leading space is real, not decoration: the margin separates the words
+  // on screen but textContent runs them together, so a screen reader and the
+  // drivers both read "Plan· ready" as one token.
+  const set = (id, text) => { $(id).textContent = text ? ' · ' + text : ''; };
+  set('#provChipPlan', plan ? (plan.ready ? 'ready' : 'not ready') : '');
+  set('#provChipLive', !plan ? ''
+    : s.status === 'CREATE_COMPLETE' ? 'running'
+    : /_IN_PROGRESS$/.test(s.status || '') ? 'building'
+    : s.exists ? (s.status || '').replace(/_/g, ' ').toLowerCase()
+    : 'nothing yet');
+  // The rate is the fact a person needs before opening the pane, not after.
+  set('#provChipDeploy', !plan ? ''
+    : s.exists ? 'deployed'
+    : est ? `$${est.instance_per_hour}/h` : 'no price list');
+}
 
 function renderPageNav(){
   const nav = $('#pagenav');
@@ -1915,6 +2222,13 @@ function show(id){
   // only after a *clean* validation, so the one case where a person most needs
   // to see why cutover is blocked showed an empty box until they found Rebuild.
   if (id === 'cutover' && !cutoverRendered) { cutoverRendered = true; renderCutover(); }
+  // A validation that has already run is a record on disk, not a fact about
+  // this browser session. `renderValidatePlan` used to be called from exactly
+  // one place -- the Data Pump run's completion handler -- so on the DMS path,
+  // or after any reload, Phase 8 showed "Migrate first" while a finished
+  // report with 11 of 11 row counts matching sat in validate/output/. Load it
+  // whenever the phase is opened; it refuses harmlessly when there is none.
+  if (id === 'validate' && !validateRendered) { validateRendered = true; renderValidatePlan(); }
   // Load the instance picker and the configuration form from the server rather
   // than hardcoding either in the page: the classes on offer, the defaults and
   // the locked properties are all decided in provision/overrides.py, so the
@@ -1934,6 +2248,7 @@ function show(id){
 // Fetched once per visit rather than on every navigation: the certificate is a
 // real build on the backend, not a cached read.
 let cutoverRendered = false;
+let validateRendered = false;
 function setStage(id, state, sub){
   stageState[id] = state;
   if (sub !== undefined) stageSub[id] = sub;
@@ -1957,6 +2272,10 @@ async function loadState(){
     renderModes();
   }
   renderConvGenStatus(s.model_mode);
+  // Phases 4c and 4d both say what will prove their output. Both said
+  // "Checking the target…" on every load because nothing ever wrote to them.
+  renderDdlTarget(s.pg_dsn);
+  renderAppsqlTarget(s.pg_dsn);
   if (!s.connected) return;
   applyConnected(s.checks, s.facts);
 
@@ -2065,7 +2384,33 @@ async function loadState(){
     $('#pgState').textContent = 'registered: ' + s.pg_dsn;
   }
   if (s.has_gate) await renderGate();
-  if (s.has_provision) await renderProvision();
+  // The SCT gate is the one the console leads with, and the server has held
+  // its decision all along -- but nothing here read it back, so a reload after
+  // a PROCEED left Phase 6 locked with no way to reopen it except re-running
+  // the gate. Restored from the same record the gate itself returns.
+  if (s.has_sct_gate) {
+    try {
+      // GET /api/sct/gate re-evaluates rather than reading back, which is
+      // fine here: it is deterministic over records already on the server and
+      // creates nothing. The target is the one SCT assessed, so a restore
+      // cannot silently judge a different engine from the run being restored.
+      const t = (s.sct_targets_assessed || [])[0];
+      const r = await fetch('/api/sct/gate' + (t ? '?target=' + encodeURIComponent(t) : ''));
+      if (r.ok) {
+        SCTGATE = await r.json();
+        $('#sctGateEmpty').style.display = 'none';
+        renderSctGate();
+        if (SCTGATE.verdict !== 'HALT') openProvision();
+      }
+    } catch (e) { /* a restore that fails leaves the gate to be re-run by hand */ }
+  }
+  // Phase 10 builds from the assessment record, so it unlocks on either
+  // assessment being present -- SCT's or the 50-rule one. Restored here
+  // because a reload otherwise leaves the button enabled with nothing behind
+  // it, which was the Phase 6 fault in a different phase.
+  REPORT_READY = !!(s.has_assessment || s.has_sct_assessment);
+  if (s.has_provision) await renderProvision();   // calls refreshStatus -> refreshDownstreamGates
+  else refreshDownstreamGates({exists: false, status: 'NOT_DEPLOYED'});
   if (s.rehearsal_dsn) {
     $('#rehearsalDsn').value = s.rehearsal_dsn;
     $('#rehearsalState').textContent = 'registered: ' + s.rehearsal_dsn;
@@ -2162,6 +2507,7 @@ $('#btnDisconnect').onclick = async () => {
   stageState = {...IDLE_STAGES};
   stageSub = {connect:'', discover:'', assess:'', target:'', remediate:'', convert:'', gate:'', provision:'', migrate:'', validate:'', cutover:'', report:''};
   cutoverRendered = false;
+  validateRendered = false;
   renderRail();
 };
 
@@ -2717,6 +3063,9 @@ function renderSegregation(seg){
 
 function renderSct(){
   if (!SCT) return;
+  // Phase 10 reads the assessment record, so it opens the moment one exists.
+  REPORT_READY = true;
+  refreshDownstreamGates();
   $('#sctLive').style.display = 'none';
   $('#sctResult').style.display = '';
   // On a short window the summary and a usable table cannot both fit, so the
@@ -3302,6 +3651,10 @@ $('#btnPgTarget').onclick = async () => {
   if (!r.ok) { el.style.color = 'var(--bad)'; el.textContent = d.detail || 'registration failed'; return; }
   el.style.color = d.pg_dsn ? 'var(--ok)' : 'var(--ink-3)';
   el.textContent = d.pg_dsn ? (d.detail || 'registered') : 'not configured';
+  // Phases 4c and 4d both prove their output against this target, so their
+  // bands follow the change.
+  renderDdlTarget(d.pg_dsn);
+  renderAppsqlTarget(d.pg_dsn);
 };
 
 $('#btnConvert').onclick = () => {
@@ -3363,6 +3716,13 @@ $('#btnConvert').onclick = () => {
 // between the tables and the constraints, and that ordering is the phase's
 // main claim. `plan.order` carries it with a reason per step, so the screen
 // reads it rather than restating it.
+//
+// **One band, one list.** This was two panels over two stacked lists, and the
+// second list is what broke it: #ddlGroups is a .scrollcap and the notes list
+// below it was not, so the notes took the height, the capped list collapsed
+// to its 150px floor and painted 119px of statements over their heading. The
+// statements, the things needing a person and the type mappings are three
+// panes of one scroll region now.
 let DDL = null;
 
 const DDL_GROUP_TONE = {
@@ -3370,12 +3730,148 @@ const DDL_GROUP_TONE = {
   foreign:'MEDIUM', check:'MEDIUM', indexes:'INFO',
 };
 const NOTE_TONE = {error:'CRITICAL', warn:'HIGH', info:'INFO'};
+// Short enough for a strip. The plan's own key is what the counts are keyed
+// on, so only the label is the screen's business.
+const DDL_STEP = {schema:'schema', tables:'tables', primary_unique:'keys',
+                  foreign:'foreign keys', check:'checks', indexes:'indexes'};
+// Drawn before anything is run, so the phase teaches its order on an empty
+// screen; the plan then replaces it with the same steps carrying counts. The
+// band used to be blank until a run, which is the one moment the order is
+// worth reading.
+const DDL_ORDER_FALLBACK = [
+  ['schema', 'the schema itself'],
+  ['tables', 'tables, columns only -- so the load has somewhere to go'],
+  ['primary_unique', 'primary and unique keys, AFTER the load'],
+  ['foreign', 'foreign keys, after the keys they reference exist'],
+  ['check', 'check constraints'],
+  ['indexes', 'indexes last: building one during a bulk load is the slowest way'],
+];
+
+// Six rows of name-over-reason were 284px for a claim that is one sentence.
+// The sentence is under the strip; each step keeps its own reason on hover.
+function renderDdlOrder(order, counts){
+  $('#ddlOrder').innerHTML = (order && order.length ? order : DDL_ORDER_FALLBACK)
+    .map(([key, why], i) => {
+      const n = counts ? counts[key] : null;
+      // Where the load happens is the only reason this strip is not
+      // alphabetical, so it is drawn as a step in its own right.
+      const load = key === 'primary_unique'
+        ? '<span class="load">THE DATA LOAD</span><span class="arrow">&rarr;</span>' : '';
+      return `${i ? '<span class="arrow">&rarr;</span>' : ''}${load}
+        <span class="step" title="${esc(why)}"><span class="n">${i + 1}</span>${
+          esc(DDL_STEP[key] || key)}${n ? `<span class="n">${n}</span>` : ''}</span>`;
+    }).join('');
+}
+renderDdlOrder(null, null);
+
+// The compile is this phase's evidence and it is stated in exactly one place.
+// There were three: a panel that read "Checking the target..." forever because
+// no code ever wrote to it, a note box under the tiles, and the meta line
+// beside the button.
+function ddlStatus(cls, html){
+  const el = $('#ddlTargetStatus');
+  el.className = 'status' + (cls ? ' ' + cls : '');
+  el.innerHTML = `<span class="led"></span><span>${html}</span>`;
+}
+function renderDdlTarget(dsn){
+  if (DDL) return;                 // a real compile result outranks a promise
+  if (dsn) ddlStatus('ok', `Every statement will run on <b>${esc(dsn)}</b> inside one
+    transaction, which is then rolled back. Nothing is applied.`);
+  else ddlStatus('warn', `<b>No PostgreSQL target is registered</b>, so nothing will prove
+    this DDL runs. Register one on <b>Convert PL/SQL</b>; without it this phase reports that
+    the compile did not run, never that it passed.`);
+}
+function renderDdlCompile(cm){
+  if (cm.ok === true)
+    ddlStatus('ok', `<b>${cm.ran} statement(s) executed on PostgreSQL and rolled back.</b>
+      Nothing remains on the target &mdash; the DDL is proven to execute and the database is
+      exactly as it was.`);
+  else if (cm.ok === null || cm.not_run_because)
+    ddlStatus('warn', `<b>The compile did not run.</b> ${
+      esc(cm.not_run_because || 'no PostgreSQL target is registered')}, so this DDL is
+      generated but unproven. Register a target on <b>Convert PL/SQL</b> and run again.`);
+  else
+    ddlStatus('bad', `<b>${cm.failed} statement(s) failed on PostgreSQL.</b>` +
+      (cm.failures || []).slice(0, 3)
+        .map(f => `<span class="mono">${esc(f.error || '')}</span>`).join(''));
+  // Applying unproven DDL is how a target ends up half-built -- the backend
+  // refuses it too (ApplyRefused), this just keeps the button from inviting
+  // the attempt in the first place.
+  $('#ddlApplyPanel').style.display = cm.ok === true ? '' : 'none';
+}
+
+$('#ddlPostLoad').onchange = () => {
+  const post = $('#ddlPostLoad').checked;
+  $('#btnDdlApply').textContent = post ? 'Apply post-load keys and indexes' : 'Apply pre-load schema';
+  $('#ddlApplyWhy').innerHTML = post
+    ? 'Post-load pass: primary/unique/foreign keys and indexes, validated against the rows ' +
+      'Phase 7 already loaded. Run this <b>after</b> Migrate finishes, not before.'
+    : 'Pre-load pass: tables and types only. Run again with <b>post-load</b> after Phase 7 ' +
+      'finishes to add the keys and indexes.';
+};
+
+$('#btnDdlApply').onclick = async () => {
+  const approver = $('#ddlApprover').value.trim();
+  if (!approver) {
+    $('#ddlApplyResult').innerHTML =
+      '<div class="note bad">Type who is applying this before running it.</div>';
+    return;
+  }
+  const post_load = $('#ddlPostLoad').checked;
+  const btn = $('#btnDdlApply');
+  btn.disabled = true;
+  $('#ddlApplyMeta').textContent = 'applying...';
+  $('#ddlApplyResult').innerHTML = '';
+  try {
+    const r = await fetch('/api/schemaddl/apply', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({approved_by: approver, post_load})});
+    const d = await r.json();
+    $('#ddlApplyMeta').textContent = '';
+    if (!r.ok) {
+      $('#ddlApplyResult').innerHTML =
+        `<div class="note bad"><b>Refused.</b> ${esc(d.detail || 'the apply failed')}</div>`;
+      return;
+    }
+    if (d.ok) {
+      $('#ddlApplyResult').innerHTML =
+        `<div class="note ok"><b>${d.statements_applied} statement(s) applied to
+           ${esc((d.target || {}).host || 'the target')}.</b> ${esc(d.what_is_left)}</div>`;
+      // The tables Phase 7 was refusing to find now exist -- worth knowing
+      // without switching phases to find out.
+      setStage('schemaddl', 'done',
+        post_load ? 'keys and indexes applied' : `${d.statements_applied} statements applied`);
+    } else {
+      $('#ddlApplyResult').innerHTML =
+        `<div class="note bad"><b>Applied nothing; the transaction rolled back.</b>
+           ${esc(d.error || '')}
+           ${d.in_flight_when_it_failed
+             ? `<div class="mono mt-s" style="font-size:12px">${esc(d.in_flight_when_it_failed)}</div>`
+             : ''}</div>`;
+    }
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+// Three panes, one scroll region. Panes are hidden, never detached: a driver
+// reaches #ddlNoteList whichever pane is on screen.
+function ddlTab(which){
+  document.querySelectorAll('#ddlTabs .chip').forEach(c =>
+    c.setAttribute('aria-pressed', c.dataset.ddl === which));
+  document.querySelectorAll('.ddlpane').forEach(p => { p.hidden = p.dataset.ddl !== which; });
+  $('#ddlGroups').scrollTop = 0;
+}
+document.addEventListener('click', e => {
+  const chip = e.target.closest('#ddlTabs .chip');
+  if (chip) ddlTab(chip.dataset.ddl);
+});
 
 $('#btnSchemaDdl').onclick = async () => {
   const btn = $('#btnSchemaDdl');
   btn.disabled = true;
   $('#ddlEmpty').style.display = 'none';
-  $('#ddlMeta').textContent = 'generating…';
+  $('#ddlMeta').textContent = 'generating...';
   setStage('schemaddl', 'busy', 'generating');
   try {
     const r = await fetch('/api/schemaddl', {method:'POST'});
@@ -3399,11 +3895,30 @@ $('#btnSchemaDdl').onclick = async () => {
                                                : 'not compiled';
     setStage('schemaddl', 'done', `${c.tables || 0} tables`);
     $('#ddlMeta').textContent =
-      `${esc(d.estate)} · ${c.tables || 0} tables · ${compiled} · nothing applied`;
+      `${d.estate} · ${c.tables || 0} tables · ${compiled} · nothing applied`;
   } finally {
     btn.disabled = false;
   }
 };
+
+// A note is a severity, a subject and one sentence, and the sentence is the
+// whole of it -- so these are flat rows, not an accordion whose body repeats
+// its own summary. The kind is the group heading above them, which is why the
+// row no longer carries it: that cell was 50px holding `kind.slice(0, 8)`,
+// eight monospace characters in room for seven, and "virtual_" sat on top of
+// the subject beside it.
+function ddlNotes(list, empty){
+  if (!list.length) return `<div class="empty">${esc(empty)}</div>`;
+  const byKind = {};
+  for (const n of list) (byKind[n.kind] ||= []).push(n);
+  return Object.entries(byKind).map(([kind, rows]) => `
+    <div class="mt-s"><div class="eyebrow">${esc(kind.replace(/_/g, ' '))}
+      <span style="color:var(--ink-3);font-weight:400"> &mdash; ${rows.length}</span></div>
+      <div class="acc">${rows.map(n => `<div class="noterow">
+        <span class="sev ${NOTE_TONE[n.severity] || 'INFO'}">${esc(n.severity)}</span>
+        <span class="mono" title="${esc(n.subject)}">${esc(n.subject)}</span>
+        <span class="d">${esc(n.detail)}</span></div>`).join('')}</div></div>`).join('');
+}
 
 function renderSchemaDdl(d){
   DDL = d;
@@ -3411,54 +3926,26 @@ function renderSchemaDdl(d){
   $('#ddlEmpty').style.display = 'none';
 
   const c = d.counts || {};
+  renderDdlOrder(d.order, c);
+  renderDdlCompile(d.compile || {});
+
+  // Hints are one line each. They were sentences, which wrapped and made the
+  // tile row 133px tall -- height taken straight off the list below.
   $('#ddlTiles').innerHTML = [
-    ['Tables', c.tables ?? 0, 'columns only, so the load has somewhere to go'],
+    ['Tables', c.tables ?? 0, 'columns only'],
     ['Keys', (c.primary_unique ?? 0) + (c.foreign ?? 0),
      `${c.primary_unique ?? 0} primary/unique · ${c.foreign ?? 0} foreign`],
-    ['Indexes', c.indexes ?? 0, 'built after the load, never during it'],
-    ['Needs a reviewer', (c.notes_error ?? 0) + (c.notes_warn ?? 0),
+    ['Indexes', c.indexes ?? 0, 'after the load, never during'],
+    ['Needs a person', (c.notes_error ?? 0) + (c.notes_warn ?? 0),
      `${c.notes_error ?? 0} error · ${c.notes_warn ?? 0} warning`],
   ].map(([k, v, h]) => `<div class="tile"><div class="k">${esc(k)}</div>
       <div class="v">${fmt(v)}</div><div class="h">${esc(h)}</div></div>`).join('');
-
-  // The compile is the phase's evidence. Said before the statements, and it
-  // never reads as a pass when it did not run.
-  const cm = d.compile || {};
-  let box;
-  if (cm.ok === true) {
-    box = `<div class="note info" style="font-size:13px"><b>${cm.ran} statement(s) executed on
-      PostgreSQL and rolled back.</b> Nothing remains on the target — the DDL is proven to
-      execute and the database is exactly as it was.</div>`;
-  } else if (cm.ok === null || cm.not_run_because) {
-    box = `<div class="note warn" style="font-size:13px"><b>The compile did not run.</b>
-      ${esc(cm.not_run_because || 'no PostgreSQL target is registered')}, so this DDL is
-      generated but unproven. Register a target on <b>Convert PL/SQL</b> and run again.</div>`;
-  } else {
-    box = `<div class="note bad" style="font-size:13px"><b>${cm.failed} statement(s) failed on
-      PostgreSQL.</b> ${(cm.failures || []).slice(0, 3).map(f =>
-        `<div class="mono" style="margin-top:6px;font-size:12px">${esc(f.error || '')}</div>`)
-        .join('')}</div>`;
-  }
-  $('#ddlNotesBox').innerHTML = box;
-
-  // The execution order, with the reason for each step.
-  $('#ddlOrder').innerHTML = (d.order || []).map(([key, why], i) => {
-    const n = (d.counts || {})[key];
-    const load = key === 'primary_unique'
-      ? `<div class="mono" style="font-size:12px;color:var(--accent);margin:6px 0 6px 26px">
-           ↑ THE DATA LOAD happens here</div>` : '';
-    return `${load}<div style="display:flex;gap:10px;align-items:baseline;margin-top:4px">
-      <span class="mono" style="color:var(--ink-3);font-size:12px">${i + 1}</span>
-      <span style="font-size:13px"><b>${esc(key.replace(/_/g, '/'))}</b>${
-        n ? ` <span style="color:var(--ink-3)">· ${n}</span>` : ''}
-        <div style="color:var(--ink-2);font-size:12.5px">${esc(why)}</div></span></div>`;
-  }).join('');
 
   // Statements, grouped in execution order. Each group's rows are the SQL
   // itself -- there is no per-statement metadata to tabulate, so the row is
   // the object name and the body is the statement.
   const GROUPS = (d.order || []).map(([k]) => k).filter(k => k !== 'schema');
-  $('#ddlGroups').innerHTML = [
+  $('#ddlStatements').innerHTML = [
     `<div class="mt-s"><div class="eyebrow">schema</div>
       <pre class="mono" style="white-space:pre-wrap;margin:6px 0 0;font-size:12.5px">${
         esc(d.schema || '')}</pre></div>`,
@@ -3466,7 +3953,7 @@ function renderSchemaDdl(d){
       const items = d[k];
       const tone = DDL_GROUP_TONE[k] || 'INFO';
       return `<div class="mt-s"><div class="eyebrow">${esc(k.replace(/_/g, ' / '))}
-        <span style="color:var(--ink-3);font-weight:400"> — ${items.length}</span></div>
+        <span style="color:var(--ink-3);font-weight:400"> &mdash; ${items.length}</span></div>
         <div class="acc">${items.map(sql => {
           // First identifier after CREATE/ALTER, for the row label.
           const m = /(?:CREATE\s+(?:TABLE|INDEX|UNIQUE\s+INDEX)|ALTER\s+TABLE)\s+([\w.]+)/i
@@ -3487,31 +3974,92 @@ function renderSchemaDdl(d){
         }).join('')}</div></div>`;
     })].join('');
 
-  // Notes, worst first. These are the things that change on the target and
-  // that a person has to accept -- a renamed reserved word, an untranslated
-  // check, a type mapping.
-  const notes = [...(d.notes || [])].sort(
-    (a, b) => ({error:0, warn:1, info:2}[a.severity] ?? 3)
-            - ({error:0, warn:1, info:2}[b.severity] ?? 3));
-  const byKind = {};
-  for (const n of notes) (byKind[n.kind] ||= []).push(n);
-  $('#ddlNoteList').innerHTML = Object.entries(byKind).map(([kind, list]) => {
-    const worst = list[0].severity;
-    return `<div class="mt-s"><div class="eyebrow">${esc(kind.replace(/_/g, ' '))}
-      <span style="color:var(--ink-3);font-weight:400"> — ${list.length}</span></div>
-      <div class="acc">${list.map(n => `<details>
-        <summary class="sctgrid">
-          <span class="sev ${NOTE_TONE[n.severity] || 'INFO'}">${esc(n.severity)}</span>
-          <span class="mono">${esc(kind === 'type_mapping' ? 'type' : kind.slice(0, 8))}</span>
-          <span class="mono">${esc(n.subject)}</span>
-          <span></span>
-        </summary>
-        <div style="padding:10px 14px;font-size:12.5px;color:var(--ink-2)">${
-          esc(n.detail)}</div></details>`).join('')}</div></div>`;
-  }).join('');
+  // Notes split by whether anyone has to do anything. On DBMIG_APP 25 of the
+  // 31 are automatic type mappings; listed together with the six that need a
+  // decision they buried them, under a heading claiming all 31 were things a
+  // reviewer must know.
+  const rank = {error:0, warn:1, info:2};
+  const notes = [...(d.notes || [])]
+    .sort((a, b) => (rank[a.severity] ?? 3) - (rank[b.severity] ?? 3));
+  const review = notes.filter(n => n.severity !== 'info');
+  const auto = notes.filter(n => n.severity === 'info');
+  $('#ddlNoteList').innerHTML = ddlNotes(review, 'Nothing in this schema needs a person.');
+  $('#ddlMapList').innerHTML = ddlNotes(auto, 'No type mappings were recorded.');
+
+  const stmts = 1 + GROUPS.reduce((a, k) => a + (d[k] || []).length, 0);
+  const label = {statements:`Statements · ${stmts}`,
+                 review:`Needs a person · ${review.length}`,
+                 mappings:`Type mappings · ${auto.length}`};
+  document.querySelectorAll('#ddlTabs .chip').forEach(
+    ch => { ch.textContent = label[ch.dataset.ddl]; });
+  ddlTab('statements');
 }
 
 // ---------------------------------------------------------------- Phase 4d
+//
+// **What proves a rewrite is said in one place**, the same way Phase 4c's
+// compile is. It was said in four: this panel, which read "Checking the
+// target…" forever because no code ever wrote to it; the note box under the
+// tiles; the meta line beside the button; and `what_this_phase_did_not_do`,
+// which the plan computes and the screen never showed.
+//
+// Parse and result are **two questions and stay two clauses**. Merging them
+// is how a converter passes while being wrong: parse asks whether the target
+// accepts the statement, result asks whether it returns the same rows as the
+// Oracle original, and only the second catches a ROWNUM rewrite that parses
+// perfectly and returns a different page.
+function appsqlStatus(cls, html){
+  const el = $('#appsqlTargetStatus');
+  el.className = 'status' + (cls ? ' ' + cls : '');
+  el.innerHTML = `<span class="led"></span><span>${html}</span>`;
+}
+function renderAppsqlTarget(dsn){
+  if (APPSQL) return;              // a real run's result outranks a promise
+  if (dsn) appsqlStatus('ok', `Rewrites will be parsed on <b>${esc(dsn)}</b> against a shadow
+    schema that is built and rolled back. A result comparison is separate and needs the
+    migrated data.`);
+  else appsqlStatus('warn', `<b>No PostgreSQL target is registered.</b> Parse and result will
+    both report <b>blocked</b>, so no rewrite will be proven. Register one on
+    <b>Convert PL/SQL</b>.`);
+}
+// The parse gate builds a shadow schema on the target and rolls it back --
+// real work on a real database that nothing on this screen reported, right
+// down to the tables it failed to build.
+function renderAppsqlProof(d){
+  const sh = d.shadow || {};
+  const failed = (sh.build_failures || []).length;
+  let parse, tone;
+  if (!d.target_configured) {
+    parse = `<b>Parse reported blocked.</b> No PostgreSQL target is registered, so nothing
+             checked that these rewrites are even accepted.`;
+    tone = 'warn';
+  } else if (sh.error) {
+    parse = `<b>The shadow schema could not be built.</b>
+             <span class="mono errline">${esc(String(sh.error))}</span>`;
+    tone = 'bad';
+  } else if (failed) {
+    // Worth saying plainly: a rewrite parsed against a schema that is missing
+    // its table has not really been parsed.
+    parse = `<b>${sh.tables_built || 0} shadow table(s) built on PostgreSQL and rolled
+             back, ${failed} short.</b> A statement touching a table that failed to build is
+             not proven to parse. Apply Phase 4c's schema and its sequences first.`;
+    tone = 'warn';
+  } else {
+    parse = `<b>${sh.tables_built || 0} shadow table(s) built on PostgreSQL and rolled
+             back.</b> Every rewrite was parsed against them and nothing remains on the
+             target.`;
+    tone = 'ok';
+  }
+  const result = d.results_compared
+    ? `A result comparison ran: the rewrites were checked against the Oracle originals over
+       the same data.`
+    : `<b>No result comparison ran</b>, so no rewrite is proven to return the same rows as
+       its Oracle original — the only check that catches a
+       <span class="mono">ROWNUM</span> rewrite which parses and returns a different page.`;
+  appsqlStatus(d.results_compared ? tone : (tone === 'bad' ? 'bad' : 'warn'),
+               `${parse}<span class="second">${result}</span>`);
+}
+
 $('#btnAppsql').onclick = async () => {
   const btn = $('#btnAppsql');
   btn.disabled = true;
@@ -3557,6 +4105,7 @@ function renderAppsql(d){
   APPSQL = d;
   $('#appsqlResult').style.display = '';
   $('#appsqlEmpty').style.display = 'none';
+  renderAppsqlProof(d);
 
   const t = d.totals || {};
   const manual = t.MANUAL || 0;
@@ -3575,16 +4124,10 @@ function renderAppsql(d){
   ].map(([k, v, h]) => `<div class="tile"><div class="k">${esc(k)}</div>
       <div class="v">${fmt(v)}</div><div class="h">${esc(h)}</div></div>`).join('');
 
-  // What the run could not establish, said before the results rather than
-  // buried under them.
+  // What the run could not *cover*. What it could not *prove* is the band's
+  // job and is not repeated here -- the target and the result comparison used
+  // to be the first two entries in this box and are now the status above.
   const notes = [];
-  if (!d.target_configured) notes.push(
-    `<b>No PostgreSQL target.</b> The parse and result gates reported <b>blocked</b>, so no
-     rewrite here is proven. Register a target on <b>Convert PL/SQL</b> and run again.`);
-  if (!d.results_compared) notes.push(
-    `<b>No result comparison ran.</b> Nothing has confirmed that a rewritten statement returns
-     the same rows as the Oracle original — the only check that catches a
-     <span class="mono">ROWNUM</span> rewrite which parses and returns a different page.`);
   if (d.model_mode !== 'live' && (t.NEEDS_MODEL_TIER || 0))
     notes.push(`<b>${t.NEEDS_MODEL_TIER} statements need judgement</b> and the model tier is off,
                 so nothing was drafted for them.`);
@@ -3720,6 +4263,24 @@ async function renderConversion(){
       letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)">
       <span>state</span><span>type</span><span>object</span>
       <span class="obj">where it came from</span><span class="act">what to do</span></div>`;
+
+  // **The setup band is spent once there are results.** Those two cards --
+  // how a conversion is routed, and the compile target to register -- are
+  // what you read *before* running. They cost 213px, more than the table was
+  // getting, and the target they register is repeated verbatim in the note
+  // below ("Compile target: ..."), so after a run the screen said it twice
+  // and showed the answer three rows tall. Fold it away and hand the height
+  // to the list; it stays one click away rather than being removed.
+  const setup = $('#convSetup');
+  if (setup && !setup.dataset.folded) {
+    setup.dataset.folded = '1';
+    const d = document.createElement('details');
+    d.className = 'mb-s';
+    d.innerHTML = '<summary class="eyebrow" style="cursor:pointer">Routing and compile target</summary>';
+    setup.replaceWith(d);
+    d.appendChild(setup);
+    setup.style.marginBottom = '0';
+  }
 
   $('#convList').innerHTML = CONV_ORDER.filter(st => byStatus[st]).map(st => {
     const items = byStatus[st];
@@ -4229,9 +4790,13 @@ $('#btnSctGate').onclick = async () => {
         : SCTGATE.verdict.toLowerCase().replace(/_/g, ' '));
     // Phase 6 opens only when nothing in scope is blocked. A HALT leaves it
     // shut, which is the whole point of the gate.
-    if (SCTGATE.verdict !== 'HALT' && stageState['provision'] === 'idle') {
-      setStage('provision', 'active');
-    }
+    //
+    // The verdict is the whole condition. It used to also require
+    // stageState.provision === 'idle', so a second evaluation -- the ordinary
+    // case after fixing something, or after re-connecting AWS -- skipped the
+    // unlock entirely because the stage was no longer idle. openProvision()
+    // keeps the idle check where it belongs, on the rail state alone.
+    if (SCTGATE.verdict !== 'HALT') openProvision();
   } catch (e) {
     $('#sctGateEmpty').style.display = '';
     $('#sctGateEmpty').querySelector('.empty').textContent = String(e.message || e);
@@ -4352,10 +4917,7 @@ async function renderGate(){
     g.verdict === 'HALT' ? `${g.blockers.length} blocking` : style.word.toLowerCase());
   // Provision opens when nothing blocks it, even under an overall HALT: rendering
   // is free, and the deploy then asks for a provision-only acknowledgement.
-  if (g.by_phase.provision.status === 'clear') {
-    if (stageState.provision === 'idle') setStage('provision', 'active');
-    $('#btnProvision').disabled = false;
-  }
+  if (g.by_phase.provision.status === 'clear') openProvision();
   $('#gateMeta').textContent =
     `${g.critical_findings} critical findings · ${g.blockers.length} open · ${g.waived.length} waived`;
 
@@ -4435,7 +4997,26 @@ async function unwaive(ruleId){
 
 /* ---------------- provision (Phase 6) ---------------- */
 $('#btnProvision').disabled = true;
+// Unlocking Phase 6 is one function because two gates reach it: renderGate()
+// on the 50-rule findings and the SCT gate, which is the one the console has
+// led with since 2026-09-17. The SCT path used to call setStage('provision',
+// 'active') and nothing else, so the rail went green and lit the phase while
+// the button stayed disabled -- the gate said PROCEED and the screen said no.
+// Marking a stage active is not the same act as unlocking its control, and
+// anything that opens Phase 6 has to do both.
+function openProvision(){
+  if (stageState.provision === 'idle') setStage('provision', 'active');
+  $('#btnProvision').disabled = false;
+  // The title explains the disabled state; left on an enabled button it keeps
+  // claiming the gate has not cleared it.
+  $('#btnProvision').title = 'Writes the CloudFormation template and runs read-only AWS checks';
+  $('#provEmpty').querySelector('.empty').innerHTML =
+    `Nothing blocks provisioning. Press <b>Render and check</b> above — it creates nothing.`;
+}
 let statusTimer = null;
+// The rendered plan, kept so refreshStatus can label the chips with the rate
+// without re-fetching a plan it has already been given.
+let PROV_PLAN = null;
 
 const CHECK_MARK = {pass:'✓', warn:'!', fail:'×', blocked:'⏸', info:'i'};
 function checkRow(c){
@@ -4587,6 +5168,7 @@ async function renderProvision(){
   const r = await fetch('/api/provision/plan');
   if (!r.ok) return;
   const p = await r.json();
+  PROV_PLAN = p;
   const rd = p.rendered, est = (p.cost || {}).estimate;
   $('#provEmpty').style.display = 'none';
   $('#provResult').style.display = '';
@@ -4650,6 +5232,9 @@ async function refreshStatus(){
   $('#cfnTemplate').style.display = s.exists ? '' : 'none';
   $('#btnVerify').disabled = s.status !== 'CREATE_COMPLETE';
   $('#deployForm').style.display = s.exists ? 'none' : '';
+  // Both halves of the chip states are in hand here and nowhere else: the plan
+  // has the rate, this response has whether anything is deployed.
+  provChipState(PROV_PLAN, s);
   // Bring the pane that just gained something to say to the front. Without
   // this the status arrives behind a tab nobody opened -- and the deploy form
   // is on a third one, so "render, then deploy" would cross two hidden panes.
@@ -4657,12 +5242,47 @@ async function refreshStatus(){
   if (s.status === 'CREATE_COMPLETE') {
     setStage('provision', 'done', 'running · billing');
     // Migration opens once there is a target to migrate into.
-    if (stageState.migrate === 'idle') { setStage('migrate', 'active'); renderMigratePlan(); }
+    // Awaited, so the gate below is not overwritten by a plan that renders
+    // after it: renderMigratePlan hides #migEmpty, and the gate decides
+    // whether it should be hidden.
+    if (stageState.migrate === 'idle') { setStage('migrate', 'active'); await renderMigratePlan(); }
   }
   else if (moving) setStage('provision', 'busy', (s.status || '').replace(/_/g, ' ').toLowerCase());
+  // Phases 7-10 all hang off whether a target exists, so they are decided here
+  // -- the one place that has just read it from CloudFormation.
+  refreshDownstreamGates(s);
   if (moving || s.console_deploy_running) statusTimer = setTimeout(refreshStatus, 15000);
 }
 $('#btnStatus').onclick = refreshStatus;
+
+// Fetched rather than linked, so the button can say which template arrived:
+// the one CloudFormation ran, or the local render when no stack exists. A
+// plain <a download> could not read that header, and "template.json" with no
+// provenance is exactly the ambiguity the rest of this screen avoids.
+$('#btnTemplateDl').onclick = async () => {
+  const btn = $('#btnTemplateDl'), note = $('#templateDlNote');
+  btn.disabled = true;
+  note.textContent = 'reading the template…';
+  try {
+    const r = await fetch('/api/provision/template/download');
+    if (!r.ok) throw new Error(((await r.json().catch(() => ({}))).detail) || `HTTP ${r.status}`);
+    const origin = r.headers.get('X-Dbshift-Template-Origin');
+    const name = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name ? name[1] : 'template.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    note.innerHTML = origin === 'deployed'
+      ? `Downloaded <b>${esc(a.download)}</b> — the template CloudFormation actually ran.`
+      : `Downloaded <b>${esc(a.download)}</b> — the local render. No stack exists, so there is
+         nothing deployed to read it back from.`;
+  } catch (e) {
+    note.innerHTML = `<span style="color:var(--bad)">${esc(String(e.message || e))}</span>`;
+  }
+  btn.disabled = false;
+};
 
 // Fetched when opened, from the live stack: what actually ran, not a re-render.
 $('#cfnTemplate').addEventListener('toggle', async (ev) => {
@@ -4765,10 +5385,97 @@ function markStep(d){
   }
 }
 
+/* ---------------- phases 7-10: one unlock each ----------------
+   The same fault Phase 6 had, four more times: every one of these buttons
+   ships enabled and says nothing about what it needs. #btnMigrate offers to
+   run a migration with no target, #btnValidate to compare against a database
+   that does not exist, #btnReport to build a document from records that are
+   not there -- each failing with an API error where a disabled button and a
+   reason would have been the honest answer.
+
+   `gateFor` is the shared shape: a button, the condition, the sentence that
+   explains the lock, and the phase to send someone to. The empty state below
+   each one is rewritten in both directions so it never contradicts the
+   button's state. */
+function gateFor(btnSel, emptySel, ok, lockedHtml, readyHtml, lockedTitle, readyTitle){
+  // The early return used to sit above the empty-state block, so a call that
+  // passes no button -- Phase 7's, where two buttons are gated separately from
+  // the one shared empty state -- silently did nothing at all.
+  const btn = btnSel && $(btnSel);
+  if (btn) {
+    btn.disabled = !ok;
+    btn.title = ok ? readyTitle : lockedTitle;
+  }
+  const empty = emptySel && $(emptySel);
+  const body = empty && empty.querySelector('.empty');
+  if (body) {
+    body.innerHTML = ok ? readyHtml : lockedHtml;
+    // Show it as well as fill it. renderMigratePlan hides #migEmpty when a
+    // plan renders and nothing ever put it back, so a locked phase showed a
+    // disabled button with its reason nowhere on screen.
+    empty.style.display = '';
+  }
+}
+
+function jumpBtn(phase, label){
+  return `<button class="btn ghost sm mt-s" onclick="show('${phase}')">${label} &rarr;</button>`;
+}
+
+// What each of 7-10 actually needs, and what it says while it does not have it.
+// `s` is the /api/provision/status response. Declared before the function that
+// reads them: `let` is not hoisted, so a call before these lines would throw
+// rather than default to false.
+let LAST_TARGET = null, MIGRATED = false, REPORT_READY = false;
+function refreshDownstreamGates(s){
+  LAST_TARGET = s || LAST_TARGET;
+  const t = LAST_TARGET || {};
+  const live = t.status === 'CREATE_COMPLETE';
+  const targetWord = !t.exists ? 'no target is deployed yet'
+    : live ? 'the target is running'
+    : `the target is ${(t.status || '').replace(/_/g, ' ').toLowerCase()}`;
+
+  // --- Phase 7. A migration needs somewhere to migrate into. ---------------
+  const migReady = live;
+  ['#btnMigrate', '#btnDmsRun'].forEach(sel => gateFor(sel, null, migReady, '', '',
+    `Provision the target first — ${targetWord}`,
+    'Creates the AWS resources and moves the data. THIS BILLS.'));
+  // Planning is free and reads records, so it is never locked behind a target.
+  gateFor('#btnDmsPlan', null, true, '', '', '', 'Free. Reads records and creates nothing.');
+  gateFor(null, '#migEmpty', migReady,
+    `<b>Migration opens once the target is CREATE_COMPLETE</b> — ${esc(targetWord)}.<br>
+     <span style="color:var(--ink-3)">Planning above is free and creates nothing; only
+     <b>Create and run</b> bills.</span><br>${jumpBtn('provision', 'Go to Phase 6 · Provision')}`,
+    `The target is running. <b>Plan</b> is free; <b>Create and run</b> starts billing.`);
+
+  // --- Phase 8. Validation compares two databases; it needs both. ----------
+  const valReady = live && MIGRATED;
+  gateFor('#btnValidate', '#valEmpty', valReady,
+    MIGRATED
+      ? `<b>Validation needs the target running</b> — ${esc(targetWord)}.${jumpBtn('provision', 'Go to Phase 6 · Provision')}`
+      : `<b>Migrate first.</b> Validation compares the target against the estate it was built
+         from, so there must be something on it to compare.<br>
+         <span style="color:var(--ink-3)">Read-only on both databases — it changes
+         nothing.</span><br>${jumpBtn('migrate', 'Go to Phase 7 · Migrate')}`,
+    `Five levels, read-only on both databases.`,
+    MIGRATED ? `The target is ${(t.status || 'not deployed').toLowerCase()}` : 'Run Phase 7 first — there is nothing on the target to compare',
+    'Read-only. Compares objects, structure, row counts, content and behaviour.');
+
+  // --- Phase 10. The report is built from records, not from the database. --
+  // It needs the assessment, which is why it is the one that does not wait on
+  // a target: a report about a migration that has not run yet is still a real
+  // document, and says so itself.
+  const repReady = REPORT_READY;
+  gateFor('#btnReport', null, repReady, '', '',
+    'Run Phase 2 first — the report is built from the assessment record',
+    'Built from records on disk. Reads no database.');
+}
+
 async function renderMigratePlan(){
   const r = await fetch('/api/migrate/plan');
   if (!r.ok) return;
   const p = await r.json();
+  // The plan rendering and the lock state are different questions: a plan can
+  // exist while the target does not. refreshDownstreamGates has the last word.
   $('#migEmpty').style.display = 'none';
   $('#migSteps').innerHTML = p.steps.map(stepCard).join('');
   // Resuming skips finished work, never the checks, so the first three are not offered.
@@ -4822,9 +5529,13 @@ $('#btnMigrate').onclick = async () => {
       setStage('migrate', d.status.startsWith('completed') ? 'done' : 'active',
         d.status.startsWith('completed') ? d.status.replace(/_/g, ' ') : `stopped at ${d.stopped_at}`);
       // There is something to validate once data has moved.
-      if (d.status.startsWith('completed') && stageState.validate === 'idle') {
-        setStage('validate', 'active');
-        renderValidatePlan();
+      if (d.status.startsWith('completed')) {
+        MIGRATED = true;
+        refreshDownstreamGates();
+        if (stageState.validate === 'idle') {
+          setStage('validate', 'active');
+          renderValidatePlan();
+        }
       }
     } else if (d.event === 'error') {
       es.close(); btn.disabled = false;
@@ -4874,8 +5585,70 @@ async function renderValidatePlan(){
     $('#valEstate').textContent = `Last run compared collector run ${String(last.run_id || '').slice(0, 8)} `
       + `(${last.estate || ''}) — the run the target was built from, read from its own tag.`;
     for (const l of last.levels || []) applyLevel({...l, findings: (last.findings || []).filter(f => f.level === l.level)});
-    $('#valMeta').textContent = `${last.status}${last.mismatches ? ` · ${last.mismatches} mismatch(es)` : ''}`;
+    $('#valMeta').textContent = valStatusLine(last.status, last.mismatches);
+    renderValVerdict(last);
+    // A validation that has run is what Phase 9's certificate reads, so the
+    // cutover certificate is worth rebuilding against it rather than leaving
+    // whatever the screen last showed.
+    MIGRATED = true;
+    refreshDownstreamGates();
   }
+}
+
+/* The verdict panel. Three things a reader needs and the level cards do not
+   give them: what the run concluded, **what it actually compared** (a level
+   that ran and matched is not the same as one that could not run at all), and
+   what each unexplained difference was. */
+function renderValVerdict(rep){
+  const box = $('#valVerdict');
+  if (!box || !rep) return;
+  const levels = rep.levels || [], findings = rep.findings || [];
+  const sum = k => levels.reduce((a, l) => a + (l[k] || 0), 0);
+  const match = sum('match'), mismatch = sum('mismatch'),
+        expected = sum('expected_difference'), notComparable = sum('not_comparable');
+  const tone = mismatch ? 'bad' : notComparable ? 'warn' : 'ok';
+  const word = mismatch ? `${mismatch} unexplained difference${mismatch > 1 ? 's' : ''}`
+             : notComparable ? 'no unexplained differences' : 'everything compared matched';
+  // Levels 2 and 5 do not run across engines by design, so "5 could not be
+  // made" is not a shortfall -- naming which ones did run is the honest line.
+  const ran = levels.filter(l => (l.match || 0) + (l.mismatch || 0) > 0)
+                    .map(l => 'L' + l.level);
+  const bad = findings.filter(f => f.verdict === 'mismatch');
+  box.style.display = '';
+  box.innerHTML = `
+    <div class="status ${tone}" style="font-size:15px;font-weight:600">
+      <span class="led"></span><span>${esc(word)}</span></div>
+    <p style="font-size:13.5px;color:var(--ink-2);margin:10px 0 0;max-width:80ch;line-height:1.55">
+      Compared collector run <b class="mono">${esc(String(rep.run_id || '').slice(0, 8))}</b>
+      (${esc(rep.estate || '')}) — the run the target was built from, read from its own tag.
+      ${ran.length ? `Levels that compared for real: <b>${ran.join(', ')}</b>.` : ''}</p>
+    ${notComparable ? `<p style="font-size:13.5px;color:var(--ink-3);margin:6px 0 0;max-width:80ch;
+      line-height:1.55">${notComparable} check(s) could not be made — on a PostgreSQL target
+      levels 2 and 5 do not apply, and each says why.</p>` : ''}
+    <div class="tiles mt">
+      <div class="tile"><div class="k">Matched</div><div class="v">${match}</div>
+        <div class="h">identical where they must be</div></div>
+      <div class="tile"><div class="k">Unexplained</div><div class="v">${mismatch}</div>
+        <div class="h">only these fail the phase</div></div>
+      <div class="tile"><div class="k">Expected</div><div class="v">${expected}</div>
+        <div class="h">different, and correctly so</div></div>
+      <div class="tile"><div class="k">Not comparable</div><div class="v">${notComparable}</div>
+        <div class="h">one side could not be read</div></div>
+    </div>
+    ${bad.length ? `<div class="mt"><div class="eyebrow">What differs, and why it matters</div>
+      ${bad.map(f => `<div class="note bad mt-s" style="font-size:13px">
+        <b>L${f.level} ${esc(f.check)}</b> — ${esc(f.detail)}
+        ${f.why ? `<div style="margin-top:6px;color:var(--ink-2)">${esc(f.why)}</div>` : ''}</div>`).join('')}
+      </div>` : ''}`;
+}
+
+// "mismatch · 1 mismatch(es)" said it twice: the status word and the count are
+// the same fact when the status *is* mismatch.
+function valStatusLine(status, n, reason){
+  const head = n && status === 'mismatch' ? `${n} mismatch(es)`
+             : n                          ? `${status} · ${n} mismatch(es)`
+             : status;
+  return head + (reason ? ` — ${reason}` : '');
 }
 
 function applyLevel(d){
@@ -4911,16 +5684,18 @@ $('#btnValidate').onclick = () => {
     } else if (d.event === 'complete') {
       es.close();
       btn.disabled = false;
-      $('#valMeta').textContent = d.status + (d.reason ? ` — ${d.reason}` : '')
-        + (d.mismatches ? ` · ${d.mismatches} mismatch(es)` : '');
+      $('#valMeta').textContent = valStatusLine(d.status, d.mismatches, d.reason);
+      // The complete event carries counts, not the findings, so the verdict
+      // panel is filled from the saved report -- the same one Phase 9 and
+      // Phase 10 read, so the three cannot disagree about what was found.
+      fetch('/api/validate/plan').then(r => r.ok && r.json()).then(p => p && p.last && renderValVerdict(p.last));
       setStage('validate', d.status === 'validated' ? 'done' : 'active',
-        d.status === 'validated' ? 'validated' : (d.status || 'stopped'));
-      // Cutover opens on a clean validation and nothing less. The certificate
-      // re-checks this itself -- unlocking a screen is not an authorisation.
-      if (d.status === 'validated' && stageState.cutover === 'idle') {
-        setStage('cutover', 'active');
-        renderCutover();
-      }
+        d.status === 'validated' ? 'validated'
+          : d.mismatches ? `${d.mismatches} unexplained` : (d.status || 'stopped'));
+      // The certificate is worth rebuilding on any outcome: its refusal names
+      // the validation status, so a stale one contradicts the screen above it.
+      if (stageState.cutover === 'idle') setStage('cutover', 'active');
+      renderCutover();
     } else if (d.event === 'error') {
       es.close(); btn.disabled = false;
       $('#valMeta').textContent = 'error — ' + d.message;
@@ -4979,8 +5754,22 @@ async function renderCutover(){
       + (c.approval.accepting || []).join(', ');
     $('#cutReason').value = c.approval.reason || '';
   }
+  // The exec panel is hidden until the certificate issues, which is right --
+  // but hiding it silently left the screen with no statement of how far off it
+  // is. The count says that, and the requirement rows above already say what
+  // would clear each one.
   $('#cutExecPanel').style.display = c.ready ? '' : 'none';
-  setStage('cutover', c.ready ? 'active' : 'active', c.ready ? 'certificate ready' : 'not ready');
+  const unmet = (c.requirements || []).filter(x => x.status === 'unmet').length;
+  const waived = (c.requirements || []).filter(x => x.status === 'waived').length;
+  $('#cutEmpty').style.display = '';
+  $('#cutEmpty').querySelector('.empty').innerHTML = c.ready
+    ? `<b>The certificate has issued.</b> Running the steps below touches only the target;
+       no application is repointed and the source stays authoritative.`
+    : `<b>${unmet} requirement${unmet === 1 ? '' : 's'} unmet</b>${waived ? `, ${waived} waived` : ''}
+       — each row above says what would clear it.<br>
+       <span style="color:var(--ink-3)">The certificate is built on demand and is worth reading
+       when it refuses: that is the moment it is most useful.</span>`;
+  setStage('cutover', 'active', c.ready ? 'certificate ready' : `${unmet} unmet`);
 }
 
 $('#btnCutRefresh').onclick = () => renderCutover();
@@ -5086,6 +5875,81 @@ async function renderDmsPlan(){
   }
   const d = await r.json();
   DMSPLAN = d;
+  // A DMS plan exists, so this is the heterogeneous path -- show it whatever
+  // the engine toggle last did. The two panels are mutually exclusive and a
+  // reload could leave Data Pump showing while a PostgreSQL plan rendered
+  // invisibly beneath it.
+  $('#dmsPanel').style.display = '';
+  $('#dataPumpPanel').style.display = 'none';
+  refreshDmsStatus();   // a task may already exist, started here or elsewhere
+
+  // The four AWS resources this phase creates, named before anything is made.
+  // "Create and run" used to be the first time any of them appeared.
+  const inst = d.instance || {}, task = d.task || {};
+  $('#dmsArtefacts').style.display = '';
+  $('#dmsResources').innerHTML = [
+    ['replication instance', inst.name,
+     `${inst.class} · ${inst.storage_gb} GB · engine ${inst.engine_version} — bills hourly from creation`],
+    ['source endpoint', `dbshift-source-${(d.estate || '').toLowerCase().replace(/_/g, '-')}`,
+     'Oracle. DMS opens the connection; the source never dials out'],
+    ['target endpoint', `dbshift-target-${(d.estate || '').toLowerCase().replace(/_/g, '-')}`,
+     'PostgreSQL, SSL required — RDS refuses an unencrypted connection'],
+    ['replication task', task.name,
+     `${d.migration_type} · ${(d.tables || []).length} table(s)`],
+  ].map(([kind, name, why]) => `<div class="check warn"><span class="mark">+</span>
+      <div><div class="name">${esc(kind)} <span class="mono">${esc(name || '—')}</span></div>
+      <div class="detail">${esc(why)}</div></div></div>`).join('');
+  $('#dmsMappingJson').textContent = JSON.stringify(d.table_mappings, null, 2);
+  $('#dmsSettingsJson').textContent = JSON.stringify(d.task_settings, null, 2);
+
+  // The plain-language summary. Everything below this point is detail, and a
+  // person reading the screen for the first time should not have to assemble
+  // "what is this phase about to do" out of six panels and a check list.
+  const rows = (d.tables || []).length;
+  $('#dmsStory').style.display = '';
+  $('#dmsFromWhere').textContent = d.estate
+    ? `schema ${d.estate}` : 'the source estate';
+  $('#dmsHowMuch').textContent =
+    `${inst.class || 'replication instance'} · ${rows} table(s) in one pass`;
+  $('#dmsToWhere').textContent = d.provision_stack
+    ? `the instance Phase 6 built (${d.provision_stack})` : 'the provisioned target';
+
+  // Say the blocking reason as a sentence. The check list gives the precise
+  // wording underneath; this says what it means and what to do about it.
+  const SAY = {
+    target_empty: ['The target already holds data.',
+      'DMS never empties a table it did not create, so it would add a second copy alongside the rows already there. The load would report success and the counts would be wrong. Empty the target, or skip the load and go straight to Validate.'],
+    no_instance_running: ['No replication instance exists yet.',
+      'That is normal before the first run — "Create and run" makes it. It bills hourly from the moment it exists, so delete it when the load is done.'],
+    records_consistent: ['The records come from different runs.',
+      'Re-run the earlier phase so every record belongs to one collector run.'],
+    gate_allows: ['Phase 5 has not cleared this migration.', 'Settle the blockers in the gate first.'],
+    cdc_requirements: ['Change data capture is not available on this source.',
+      'ARCHIVELOG and supplemental logging are needed for it.'],
+    target_has_tables: ['The tables DMS expects are missing from the target.',
+      'DMS creates nothing, so each missing table fails partway through while the instance bills. ' +
+      'Apply Schema DDL to the target first — Phase 4c compiles it; the Apply panel there is ' +
+      'what actually creates the tables.'],
+  };
+  // target_has_tables is the one blocker with an actual fix inside this
+  // console rather than a wait-and-retry, so it alone gets a working link
+  // rather than plain, escaped text naming the phase.
+  const LINK = {
+    target_has_tables: `<a href="#" onclick="show('schemaddl');return false"
+      style="color:inherit;font-weight:600;text-decoration:underline">Apply Schema DDL</a>`,
+  };
+  const bad = (d.checks || []).filter(c => c.status === 'fail' || c.status === 'blocked');
+  $('#dmsVerdict').innerHTML = d.ready
+    ? `<div class="note ok"><b>Ready to run.</b> Everything DMS needs is in place —
+       starting it creates the four resources below and begins billing.</div>`
+    : `<div class="note ${(d.failures || 0) ? 'bad' : 'warn'}">
+       <b>Not ready to start${(d.failures || 0) ? '' : ' yet'}.</b>
+       ${bad.map(c => {
+         const s = SAY[c.name] || [c.name.replace(/_/g, ' ') + '.', ''];
+         let detail = esc(s[1]);
+         if (LINK[c.name]) detail = detail.replace('Apply Schema DDL', LINK[c.name]);
+         return `<div style="margin-top:6px"><b>${esc(s[0])}</b> ${detail}</div>`;
+       }).join('')}</div>`;
 
   const held = (d.tables_excluded || []).filter(e => !e.included);
   $('#dmsTiles').style.display = '';
@@ -5156,6 +6020,50 @@ async function renderDmsPlan(){
 }
 
 $('#btnDmsPlan').onclick = () => renderDmsPlan();
+
+/* Phase 7's live state. Three things the plan tiles cannot say: whether a task
+   exists at all, how far it has got, and which tables are still moving. A
+   409 means no task, which is a real answer and not an error. */
+let dmsLiveTimer = null;
+async function refreshDmsStatus(){
+  clearTimeout(dmsLiveTimer);
+  const r = await fetch('/api/dms/status');
+  const box = $('#dmsLive');
+  if (!r.ok) { if (box) box.style.display = 'none'; return; }
+  const s = await r.json();
+  box.style.display = '';
+  const st = String(s.status || '').toLowerCase();
+  const running = st === 'running' || st === 'starting';
+  // A completed load is what Phase 8 needs, whoever ran it. Without this,
+  // MIGRATED was only set by a migration started in *this browser session*, so
+  // a reload -- or a load run from the CLI -- left Validate locked with 32.9M
+  // rows sitting on the target.
+  if (st === 'stopped' && (s.tables || []).length) {
+    if (!MIGRATED) { MIGRATED = true; refreshDownstreamGates(); }
+  }
+  const cls = st === 'stopped' ? 'ok' : running ? 'busy' : st === 'failed' ? 'bad' : '';
+  const word = {stopped: 'full load complete', running: 'running', starting: 'starting',
+                failed: 'failed'}[st] || st || 'unknown';
+  const pct = s.full_load_progress_percent;
+  const tables = s.tables || [];
+  const rows = tables.reduce((a, t) => a + (t.rows || t.full_load_rows || 0), 0);
+  $('#dmsLiveBody').innerHTML = `
+    <div class="status ${cls}"><span class="led"></span><span>${esc(word)}${
+      pct != null ? ` · ${pct}%` : ''}</span></div>
+    <p class="mono mt-s" style="font-size:12.5px;color:var(--ink-3)">
+      ${tables.length} table(s) · ${rows.toLocaleString()} rows loaded${
+      s.errored ? ` · <b style="color:var(--bad)">${s.errored} errored</b>` : ' · 0 errored'}
+      ${s.started_elsewhere ? ' · started outside this console' : ''}</p>`;
+  $('#dmsLiveTables').innerHTML = tables.map(t => {
+    const n = t.rows ?? t.full_load_rows ?? 0;
+    const done = /complete/i.test(t.state || t.table_state || '');
+    return `<div class="check ${done ? 'pass' : 'warn'}"><span class="mark">${done ? '✓' : '·'}</span>
+      <div><div class="name">${esc(t.table || t.table_name || '')}</div>
+      <div class="detail">${n.toLocaleString()} rows — ${esc(t.state || t.table_state || '')}</div></div></div>`;
+  }).join('');
+  if (running) dmsLiveTimer = setTimeout(refreshDmsStatus, 15000);
+}
+$('#btnDmsStatus').onclick = refreshDmsStatus;
 
 $('#btnDmsRun').onclick = async () => {
   const btn = $('#btnDmsRun');
@@ -5416,8 +6324,28 @@ async function renderReport(){
   if (!r.ok) {
     const e = await r.json().catch(() => ({detail: 'could not build the report'}));
     btn.disabled = false;
-    $('#reportMeta').textContent = 'refused — ' + (e.detail || r.status);
     setStage('report', 'active', 'refused');
+    // **Say which assessment.** The server refuses without the 50-rule
+    // assessment, and the console's SCT path never sets one -- so the last
+    // screen of the demo read "Run the assessment first" while the rail two
+    // inches away said Assess ✓ with 14 action items. Two different
+    // artefacts, and the screen has to name the one it is missing. The
+    // server's own wording is the ambiguous sentence, so it is not echoed.
+    const s = await fetch('/api/state').then(x => x.json()).catch(() => ({}));
+    const sctOnly = !s.has_assessment && s.has_sct_assessment;
+    $('#reportMeta').textContent = sctOnly
+      ? 'refused — needs the 50-rule assessment' : 'refused — ' + (e.detail || r.status);
+    $('#reportEmpty').style.display = '';
+    $('#reportEmpty').innerHTML = sctOnly
+      ? `<div class="note warn" style="margin:0;max-width:none"><b>This report needs the
+           50-rule assessment, and this session ran the AWS SCT assessment instead.</b>
+           They are different artefacts: SCT reads the schema for conversion work, and the
+           50 rules add the OPS, SEC, DQ and PERF findings this report scores. Run it from
+           <b>Rules &amp; probes</b>, or on the command line:
+           <div class="mono" style="margin-top:8px">.\\.venv\\Scripts\\python.exe -m
+             assess.run</div></div>`
+      : `<div class="note warn" style="margin:0;max-width:none"><b>The report was
+           refused.</b> ${esc(e.detail || 'no reason given')}</div>`;
     return;
   }
   const d = await r.json();

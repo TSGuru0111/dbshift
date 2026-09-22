@@ -45,6 +45,7 @@ from convert import target as convert_target
 from appsql import plan as appsql_plan
 from convert import ddl as convert_ddl
 from convert import ddl_run as convert_ddl_run
+from convert import ddl_apply as convert_ddl_apply
 from cutover import run as cutover_run
 from blocker import gate as blocker_gate
 from blocker import sct_gate as blocker_sct_gate
@@ -129,6 +130,10 @@ class State:
     # Phase 4c. The target's table structure -- a third artefact
     # alongside 4b's stored code and 4d's application SQL.
     schema_ddl: dict | None = None
+    # The record that schema_ddl actually reached a target -- schema_ddl
+    # itself only ever proves it compiles. Keyed implicitly to whichever pass
+    # ran last; the UI reads "pass" in the result to know which.
+    schema_ddl_apply: dict | None = None
     pg_target: Any = None          # convert.target.PgTarget; password in memory only
     pg_dsn: str | None = None
     gate: dict | None = None
@@ -1211,7 +1216,11 @@ def sct_remediate(target: str = "", approve: str = ""):
                   "reason": (entry.get("reason") or "")[:120]})
 
         plan = remediate_sct_plan.build(
-            {"issues": issues, "target": {"id": target_id}},
+            # collector_run_id names the estate this plan is about. Phase 6
+            # refuses to provision from records that disagree, and a plan
+            # carrying none read as a mismatch against three records that did.
+            {"issues": issues, "target": {"id": target_id},
+             "collector_run_id": STATE.run_id},
             model_mode="off",   # entries are already planned; this only shapes totals
         )
         plan["entries"] = entries
@@ -1737,7 +1746,16 @@ def schema_ddl_run():
 
     # The compile is what makes this phase evidence rather than a guess. With
     # no target it reports that it did not run, never that it passed.
-    t = STATE.pg_target
+    #
+    # **Prefer the provisioned RDS instance, not STATE.pg_target.** pg_target
+    # is whatever Phase 4b registered on "Convert PL/SQL" -- its own
+    # compile-and-rollback scratchpad, defaulting to localhost:5432/dbshift.
+    # Compiling this phase's DDL there and calling it proven was the same
+    # class of error _provisioned_pg_target() exists to fix for Phase 7: a
+    # clean compile against the wrong database, reported as evidence for the
+    # right one. Falls back to pg_target so Phase 4b's local loop still works
+    # before anything is provisioned.
+    t = _provisioned_pg_target() or STATE.pg_target
     if t is not None:
         try:
             plan["compile"] = convert_ddl_run.compile_check(
@@ -1770,17 +1788,74 @@ def schema_ddl_get():
     return STATE.schema_ddl
 
 
+class SchemaDdlApply(BaseModel):
+    approved_by: str
+    post_load: bool = False
+    allow_existing: bool = False
+
+
+@app.post("/api/schemaddl/apply")
+def schema_ddl_apply(req: SchemaDdlApply):
+    """The step Phase 7 was asking for with no button to press.
+
+    `POST /api/schemaddl` above only ever compiles inside a rolled-back
+    transaction -- proof the DDL is valid, applied nowhere. DMS runs with
+    TargetTablePrepMode = DO_NOTHING, so without this the tables Phase 7
+    needs never exist on the provisioned RDS instance, and the plan's own
+    "run Schema DDL against the target first" had nothing behind it to run.
+
+    Targets the RDS instance Phase 6 built, the same resolution Phase 7's
+    preflight uses -- not STATE.pg_target, which is Phase 4b's local
+    compile-and-rollback container.
+    """
+    if not STATE.schema_ddl:
+        raise HTTPException(409, "no schema DDL plan yet -- render it first")
+    target = _provisioned_pg_target() or STATE.pg_target
+    if target is None:
+        raise HTTPException(409, "no PostgreSQL target is registered")
+    try:
+        result = convert_ddl_apply.apply(
+            STATE.schema_ddl, target, approved_by=req.approved_by,
+            post_load=req.post_load, allow_existing=req.allow_existing)
+    except convert_ddl_apply.ApplyRefused as exc:
+        raise HTTPException(409, str(exc)) from exc
+    STATE.schema_ddl_apply = result
+    out = Path(__file__).resolve().parent.parent / "convert" / "output"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"schema_ddl_apply_{result['pass']}.json").write_text(
+        json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    return result
+
+
+@app.get("/api/schemaddl/apply")
+def schema_ddl_apply_get():
+    if not STATE.schema_ddl_apply:
+        raise HTTPException(409, "nothing applied yet")
+    return STATE.schema_ddl_apply
+
+
 def _report_data() -> dict:
     """Phase 10. The migration assessment report -- SCT-style conversion
     assessment plus DMS pre-migration assessment -- built from the records this
     console holds, on every request, so it can never drift from them."""
-    if not STATE.assessment:
+    # SCT's records where SCT ran, the 50-rule ones otherwise -- the same rule
+    # provision/records.py follows. Without this the report refused every
+    # SCT-only run with "run the assessment first" on a console whose rail said
+    # the assessment was done, because STATE.assessment and STATE.gate are the
+    # 50-rule path's and that path had not been run.
+    assessment = STATE.assessment
+    gate = STATE.gate
+    if not assessment and STATE.sct_gate:
+        assessment = prov_records._assessment_from_gate(STATE.sct_gate)
+    if not gate:
+        gate = STATE.sct_gate
+    if not assessment:
         raise HTTPException(409, "run the assessment first; the report is built from its findings")
     objects = []
     if STATE.run_dir and (STATE.run_dir / "objects.json").exists():
         objects = json.loads((STATE.run_dir / "objects.json").read_text(encoding="utf-8"))["rows"]
     return report_build.build(
-        assessment=STATE.assessment, conversion=STATE.conversion, sizing=STATE.sizing, gate=STATE.gate,
+        assessment=assessment, conversion=STATE.conversion, sizing=STATE.sizing, gate=gate,
         objects=objects, provision=STATE.provision,
         validation=report_build._load("validate/output/validation_report.json"),
         certificate=report_build._load("cutover/output/certificate.json"),
@@ -2114,6 +2189,42 @@ def provision_template():
             "template": body if isinstance(body, dict) else json.loads(body)}
 
 
+@app.get("/api/provision/template/download")
+def provision_template_download():
+    """The rendered CloudFormation template, as a .json file.
+
+    Prefers what CloudFormation actually ran, and falls back to the local
+    render when no stack exists -- which is the ordinary case before a deploy
+    and after a destroy, and exactly when someone wants to read the template
+    or hand it to a reviewer. The response says which of the two it is, so a
+    downloaded file is never ambiguous about whether it was live.
+    """
+    plan = _provision_plan()
+    if not plan or not plan.get("stack_name"):
+        raise HTTPException(409, "not rendered yet -- press Render and check first")
+    stack = plan["stack_name"]
+    body, origin = None, "render"
+    try:
+        raw = _aws_session().client(
+            "cloudformation", region_name=provision_policy.REGION
+        ).get_template(StackName=stack, TemplateStage="Original")["TemplateBody"]
+        body = raw if isinstance(raw, dict) else json.loads(raw)
+        origin = "deployed"
+    except Exception:  # noqa: BLE001 -- no stack, or no credentials; the render still answers
+        path = provision_run.OUTPUT / f"{stack}.template.json"
+        if path.exists():
+            body = json.loads(path.read_text(encoding="utf-8"))
+    if body is None:
+        raise HTTPException(409, f"no template for {stack} -- render it first")
+    return Response(
+        content=json.dumps(body, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{stack}.template.json"',
+                 # Read by the console to label the button's own status line.
+                 "X-Dbshift-Template-Origin": origin},
+    )
+
+
 @app.post("/api/provision/verify")
 def provision_verify_route():
     """Log in to the created target and compare it with the render. Read-only."""
@@ -2187,6 +2298,33 @@ def migrate_plan():
 # DMS is not an alternative engine for the same job -- it is the only route, and
 # it is the one that makes change data capture (and so a short cutover) possible.
 
+def _provisioned_pg_target():
+    """The PostgreSQL target Phase 6 actually built, or None.
+
+    Endpoint from the live stack, password from SSM -- the same two places the
+    deploy put them. Phase 8's validator already reads the password this way
+    and ignores `STATE.pg_target` for exactly this reason: the compile target
+    and the migration target are different databases, and only one of them has
+    the data.
+    """
+    try:
+        plan = _provision_plan()
+        if not plan or not plan.get("stack_name"):
+            return None
+        session = _aws_session()
+        db = session.client("rds", region_name=provision_policy.REGION).describe_db_instances(
+            DBInstanceIdentifier=plan["stack_name"])["DBInstances"][0]
+        if db["Engine"] != "postgres":
+            return None
+        pw = session.client("ssm", region_name=provision_policy.REGION).get_parameter(
+            Name=plan["rendered"]["password_parameter"], WithDecryption=True)["Parameter"]["Value"]
+        return convert_target.PgTarget.parse(
+            f"{db['Endpoint']['Address']}:{db['Endpoint']['Port']}/{provision_policy.PG_DB_NAME}",
+            provision_policy.PG_MASTER_USERNAME, pw)
+    except Exception:  # noqa: BLE001 -- falls back to the registered target
+        return None
+
+
 @app.get("/api/dms/plan")
 def dms_plan(migration_type: str = dms_policy.FULL_LOAD):
     """Everything knowable without creating anything. Free, and creates nothing."""
@@ -2196,8 +2334,20 @@ def dms_plan(migration_type: str = dms_policy.FULL_LOAD):
         session = _aws_session()
     except Exception:  # noqa: BLE001 -- planning works offline; only the billing check needs AWS
         session = None
+    # The registered target, so `target_has_tables` and `target_empty` can
+    # actually answer. Without this they reported "blocked -- connect to the
+    # target so these can run" on a console where the target *was* connected,
+    # which is the one moment a person decides whether to migrate.
+    # **The provisioned target, not the compile target.** `STATE.pg_target` is
+    # whatever Phase 4b registered, and its form defaults to the local Docker
+    # container -- right for a compile-and-rollback, wrong here: on 2026-09-21
+    # this reported "0 target tables" and refused the migration while the real
+    # RDS instance held 11 tables and 21M rows. Phase 6's own record says where
+    # the target is, and its password is in SSM where the deploy put it.
+    counts, why = dms_run.target_counts_from(_provisioned_pg_target() or STATE.pg_target)
     try:
-        return dms_run.plan(session, migration_type=migration_type)
+        return dms_run.plan(session, migration_type=migration_type,
+                            target_counts=counts, target_unread_reason=why)
     except FileNotFoundError as exc:
         raise HTTPException(409, f"a record this phase needs is missing: {exc}") from exc
 
@@ -2216,9 +2366,17 @@ class DmsExecute(BaseModel):
     migration_type: str = dms_policy.FULL_LOAD
     source_password: str = ""
     target_password: str = ""
-    source_host: str = "localhost"
-    source_port: int = 1521
-    source_database: str = "XEPDB1"
+    # Empty means "use the connection this console already has" -- resolved
+    # from STATE.dsn below. The prior defaults (localhost:1521/XEPDB1) were
+    # never overridden by the Migrate screen, which sends none of these three
+    # fields at all, so every DMS run silently told the replication instance
+    # to dial itself rather than the real Oracle source. It failed with
+    # ORA-12541: TNS:no listener -- the endpoint's own drift-detection then
+    # "corrected" a previously-working source IP to this wrong default,
+    # because the request, not the log, is what it trusted.
+    source_host: str = ""
+    source_port: int = 0
+    source_database: str = ""
 
 
 @app.post("/api/dms/execute")
@@ -2236,28 +2394,104 @@ def dms_execute(req: DmsExecute):
         awscreds.guard_long_run("a DMS run")
     except awscreds.CredentialError as exc:
         raise HTTPException(409, str(exc)) from exc
-    plan = dms_run.plan(None, migration_type=req.migration_type)
+    # **Same target resolution as /api/dms/plan, not `plan(None, ...)`.**
+    # Passing no target_counts makes target_has_tables and target_empty
+    # BLOCKED unconditionally -- not "unknown", but always -- so this route
+    # refused with "preflight refused: target_has_tables, target_empty" on
+    # every single click regardless of the target's real state, including
+    # right after /api/dms/plan had just reported both PASS. The plan route
+    # was never wrong; this one just never looked.
+    counts, why = dms_run.target_counts_from(_provisioned_pg_target() or STATE.pg_target)
+    plan = dms_run.plan(None, migration_type=req.migration_type,
+                        target_counts=counts, target_unread_reason=why)
     estate = plan["estate"]
 
-    source = {"engine": "oracle", "host": req.source_host, "port": req.source_port,
-              "user": estate,
+    # Fall back to the connection this console already has, the same source
+    # Discover and Assess ran against. STATE.dsn is "host:port/service", the
+    # form oracledb.connect() takes whole -- split it rather than trust a
+    # hardcoded default no caller was overriding.
+    #
+    # **STATE.dsn's host is not always right for DMS.** This console runs
+    # wherever the operator's machine is, and a source on EC2 needs its
+    # *public* IP/security-group allow-list for that -- which is exactly
+    # what STATE.dsn correctly holds for the console's own queries. DMS runs
+    # *inside* the VPC, on the replication instance's own ENI, and reaching
+    # the source's public IP from there round-trips out through the IGW and
+    # back -- traffic AWS treats as external, so it never matches the
+    # security-group-to-security-group rule (sg-to-sg rules only apply
+    # intra-VPC), only a CIDR rule scoped to an operator's IP would, and DMS's
+    # IP is never on that list. The result is ORA-12170: TNS:Connect timeout,
+    # identical whether the box is unreachable or just reachable by the wrong
+    # path -- this cost real time to tell apart. DMS needs the *private* IP,
+    # since both it and the source are already in the same VPC (confirmed:
+    # vpc-05f9bf94bf057b67e) and that path never leaves it.
+    src_host = req.source_host or os.environ.get("DBSHIFT_SOURCE_PRIVATE_HOST", "")
+    src_port, src_db = req.source_port, req.source_database
+    if not src_host:
+        hostport, _, db = (STATE.dsn or "").partition("/")
+        host, _, port = hostport.partition(":")
+        if not host:
+            raise HTTPException(409, "no source connection to migrate from -- connect on "
+                                     "Phase 1 first, or pass source_host explicitly")
+        raise HTTPException(409,
+            f"DMS runs inside the VPC and cannot reliably reach {host} (the console's own "
+            "connection) if that is a public IP -- security-group rules only match traffic "
+            "that stays inside the VPC. Set DBSHIFT_SOURCE_PRIVATE_HOST to the source's "
+            "private IP, or pass source_host explicitly, and retry.")
+    if not src_port:
+        _, _, port = (STATE.dsn or "").partition(":")
+        src_port = int(port.split("/")[0]) if port else 1521
+    if not src_db:
+        _, _, src_db = (STATE.dsn or "").partition("/")
+        src_db = src_db or "XEPDB1"
+
+    # `estate` is the schema *name* DMS is migrating (DBMIG_TELCO) -- the
+    # owner of the tables, not a login DMS should connect as. That schema
+    # owner account may have no login of its own, or a different password
+    # than the one this form collects; DBMIG_COLLECTOR is the account this
+    # project actually built for read access across the estate (see
+    # scripts/oracle-source/05_grant_collector_read.sql: explicit per-table
+    # SELECT grants, the same shape of access DMS needs for a full load) and
+    # it is the account already proven reachable -- this console is connected
+    # as it right now. Sending `estate` here got ORA-01017 every time: no
+    # password could have been right for a username that was never the point.
+    source = {"engine": "oracle", "host": src_host, "port": src_port,
+              "user": STATE.user or "dbmig_collector",
               "password": req.source_password
               or os.environ.get("DBSHIFT_SOURCE_OWNER_PASSWORD", ""),
-              "database": req.source_database}
+              "database": src_db}
+    # Same bug as the source, one field over: this was hardcoded to "" and
+    # never resolved, so the run just seen live overwrote a working target
+    # endpoint's ServerName with a blank string ("target endpoint ... points
+    # elsewhere; updating host <real endpoint> -> " with nothing after the
+    # arrow). Resolve it the same way Phase 7's own preflight and Phase 4c's
+    # apply already do -- the RDS instance Phase 6 built.
+    pg_target = _provisioned_pg_target() or STATE.pg_target
+    target_host = pg_target.host if pg_target else ""
+    target_port = pg_target.port if pg_target else (5432 if plan["heterogeneous"] else 1521)
+    target_db = pg_target.database if pg_target else "dbshift"
+    if plan["heterogeneous"] and not target_host:
+        raise HTTPException(409, "no PostgreSQL target is reachable -- check Phase 6 "
+                                 "has deployed and AWS credentials are valid")
+
     target = {"engine": "postgres" if plan["heterogeneous"] else "oracle",
-              "host": "", "port": 5432 if plan["heterogeneous"] else 1521,
+              "host": target_host, "port": target_port,
               "user": "dbshiftadm",
               "password": req.target_password or os.environ.get("DBSHIFT_PG_PASSWORD", ""),
-              "database": "dbshift"}
+              "database": target_db}
     if not source["password"] or not target["password"]:
         raise HTTPException(400, "both the source owner and target passwords are needed; "
                                  "they are held in memory only and never written down")
 
     def work(emit):
         try:
+            # `execute()` re-checks its own preflight (a plan is not a
+            # promise -- seconds can pass before this callback runs), and
+            # that inner check needs target_counts too, for the same reason
+            # the outer one above does.
             rec = dms_run.execute(_aws_session(), confirm_account=req.confirm_account,
                                   migration_type=req.migration_type, source=source,
-                                  target=target, on_event=emit)
+                                  target=target, on_event=emit, target_counts=counts)
         except (PermissionError, ValueError) as exc:
             emit({"event": "refused", "message": str(exc)})
             return

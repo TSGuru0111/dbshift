@@ -13,9 +13,10 @@
 //      statement-level percentage (11%), never the construct-level one (8 of 27),
 //      because the construct figure flatters the tooling.
 //   4. **The unproven state is visible as unproven.** With no target the
-//      statements must read "Rewritten, not yet proven" and the caveat panel
-//      must say so -- a client shown "ready" about something no engine ran is
-//      being told something untrue.
+//      statements must read "Rewritten, not yet proven", and the band above
+//      the run must say what parse and result established either way -- a
+//      client shown "ready" about something no engine ran is being told
+//      something untrue.
 //
 // Run: node drive_appsql.js          (DBSHIFT_URL, default http://127.0.0.1:8765)
 const { chromium } = require('playwright-core');
@@ -90,11 +91,22 @@ function log(name, ok, detail = '') {
   log('six statements need a person', person && person.v === '6', person && person.v);
 
   // --------------------------------------------- unproven reads as unproven
-  const notes = await page.textContent('#appsqlNotes');
-  log('the caveat names the missing target', notes.includes('No PostgreSQL target'), notes.slice(0, 120));
-  log('the caveat names the missing result comparison',
-      notes.includes('No result comparison'));
-  log('the caveat explains the ROWNUM risk', notes.includes('ROWNUM'));
+  // The proof moved out of #appsqlNotes on 2026-09-20. The band above the run
+  // is now the single place parse and result are stated, and the note box
+  // keeps only what the run could not *cover*. These read the band, and they
+  // hold whether or not this machine happens to have a target registered --
+  // the claim under test is that nothing reads as proven, not that the target
+  // is missing.
+  const proof = await page.textContent('#appsqlTargetStatus');
+  const compared = await page.evaluate(() => !!(APPSQL && APPSQL.results_compared));
+  log('the band states what the parse gate did',
+      /shadow table|Parse reported blocked|parsed on/i.test(proof), proof.slice(0, 110));
+  log('the band names the missing result comparison',
+      compared || /No result comparison ran/i.test(proof), proof.slice(-140));
+  log('the band explains the ROWNUM risk', compared || proof.includes('ROWNUM'));
+  log('the caveat box does not repeat the proof',
+      !/No result comparison ran|No PostgreSQL target\./i
+        .test(await page.textContent('#appsqlNotes')));
 
   const groups = await page.$$eval('#appsqlGroups .eyebrow', els =>
     els.map(e => e.textContent.trim()));

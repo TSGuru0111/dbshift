@@ -141,10 +141,32 @@ async function geometry(page, selector) {
   log('4c shows the execution order', order.includes('tables') && order.includes('indexes'));
   log('4c marks where the data load happens', order.includes('THE DATA LOAD'));
 
-  const notesBox = await page.textContent('#ddlNotesBox');
-  log('4c says the compile did not run', notesBox.includes('did not run'), notesBox.slice(0, 90));
-  log('4c does not claim the DDL is proven', !notesBox.includes('proven to execute'),
-      notesBox.slice(0, 90));
+  // The compile is stated in one place. It used to be three -- a dead panel,
+  // a note box and the meta line -- and the dead panel said "Checking the
+  // target..." on every load because no code ever wrote to it.
+  const proof = await page.textContent('#ddlTargetStatus');
+  log('4c says the compile did not run', proof.includes('did not run'), proof.slice(0, 90));
+  log('4c does not claim the DDL is proven', !proof.includes('proven to execute'),
+      proof.slice(0, 90));
+  log('4c has no dead "checking the target" line', !/Checking the target/i.test(proof),
+      proof.slice(0, 60));
+  log('4c states its proof once',
+      await page.$$eval('#view-schemaddl .status', e => e.length) === 1);
+
+  // **One scroll region.** The statements list is a .scrollcap; the notes
+  // list below it was not, so the notes took the height, the capped list
+  // collapsed to its 150px floor and painted over their heading.
+  const caps = await page.$$eval('#view-schemaddl .scrollcap', els => els.length);
+  log('4c has exactly one capped list', caps === 1, String(caps));
+  const spill = await page.evaluate(() => {
+    const view = document.querySelector('#view-schemaddl').getBoundingClientRect();
+    const cap = document.querySelector('#ddlGroups').getBoundingClientRect();
+    return { over: Math.round(cap.bottom - view.bottom), h: Math.round(cap.height),
+             parent: Math.round(document.querySelector('#ddlGroups')
+               .parentElement.getBoundingClientRect().height) };
+  });
+  log('4c: the list stays inside its view', spill.over <= 1, JSON.stringify(spill));
+  log('4c: the list gets real height', spill.h > 200, JSON.stringify(spill));
 
   const g4c = await geometry(page, '#ddlGroups summary.sctgrid');
   log('4c has a row per statement', g4c.rows > 20, String(g4c.rows));
@@ -153,11 +175,37 @@ async function geometry(page, selector) {
   log('4c: no cell text is clipped', (g4c.clipped || []).length === 0,
       JSON.stringify((g4c.clipped || []).slice(0, 2)));
 
-  const gn = await geometry(page, '#ddlNoteList summary.sctgrid');
-  log('4c lists the reviewer notes', gn.rows > 0, String(gn.rows));
+  // Three panes of that one region. The notes split by whether anyone has to
+  // do anything: 25 of DBMIG_APP's 31 notes are automatic type mappings and
+  // listing them with the six that need a decision buried them.
+  const tabs = await page.$$eval('#ddlTabs .chip', els => els.map(e => e.textContent.trim()));
+  log('4c offers statements, review and mappings', tabs.length === 3, JSON.stringify(tabs));
+  log('4c counts each pane in its tab', tabs.every(t => /·\s*\d+$/.test(t)),
+      JSON.stringify(tabs));
+  log('4c starts on the statements', await page.isVisible('#ddlStatements') &&
+      !(await page.isVisible('#ddlNoteList')));
+
+  await page.click('#ddlTabs .chip[data-ddl="review"]');
+  await page.waitForTimeout(150);
+  log('4c: the review pane opens', await page.isVisible('#ddlNoteList') &&
+      !(await page.isVisible('#ddlStatements')));
+  const gn = await geometry(page, '#ddlNoteList .noterow');
+  log('4c lists what needs a person', gn.rows > 0, String(gn.rows));
   log('4c: notes do not overlap', (gn.overlap || []).length === 0,
       JSON.stringify((gn.overlap || []).slice(0, 2)));
+  const sev = await page.$$eval('#ddlNoteList .sev', els =>
+    [...new Set(els.map(e => e.textContent.trim()))]);
+  log('4c: the review pane holds no info notes', !sev.includes('info'), JSON.stringify(sev));
 
+  await page.click('#ddlTabs .chip[data-ddl="mappings"]');
+  await page.waitForTimeout(150);
+  const gm = await geometry(page, '#ddlMapList .noterow');
+  log('4c lists the type mappings', gm.rows > 0, String(gm.rows));
+  log('4c: mappings do not overlap', (gm.overlap || []).length === 0,
+      JSON.stringify((gm.overlap || []).slice(0, 2)));
+
+  await page.click('#ddlTabs .chip[data-ddl="statements"]');
+  await page.waitForTimeout(150);
   await page.click('#ddlGroups details summary');
   await page.waitForTimeout(150);
   const body4c = await page.$eval('#ddlGroups details[open]', d => d.textContent);
@@ -183,8 +231,24 @@ async function geometry(page, selector) {
       JSON.stringify((g4d.clipped || []).slice(0, 2)));
   log('4d: five columns', g4d.cols === 5, String(g4d.cols));
 
-  const notes4d = await page.textContent('#appsqlNotes');
-  log('4d says the statements are unproven', notes4d.includes('No PostgreSQL target'));
+  // 4d's proof, like 4c's, is stated once and is wired. The old check read
+  // #appsqlNotes for "No PostgreSQL target" and so failed whenever a target
+  // *was* registered -- it tested the demo's data condition, not the claim.
+  // This holds either way: parse and result are separate, and nothing may
+  // read as proven while no result comparison has run.
+  const proof4d = await page.textContent('#appsqlTargetStatus');
+  log('4d has no dead "checking the target" line', !/Checking the target/i.test(proof4d),
+      proof4d.slice(0, 60));
+  log('4d states its proof once',
+      await page.$$eval('#view-appsql .status', e => e.length) === 1);
+  log('4d reports the parse gate', /shadow table|Parse reported blocked|shadow schema/i
+      .test(proof4d), proof4d.slice(0, 110));
+  const compared4d = await page.evaluate(() => !!(APPSQL && APPSQL.results_compared));
+  log('4d does not claim a rewrite is proven without a result comparison',
+      compared4d || /No result comparison ran/i.test(proof4d), proof4d.slice(-120));
+  log('4d does not repeat the proof in its notes',
+      !/No result comparison ran|No PostgreSQL target\./i
+        .test(await page.textContent('#appsqlNotes')));
 
   // ------------------------------------------------------------ phone width
   await page.setViewportSize({ width: 400, height: 900 });
