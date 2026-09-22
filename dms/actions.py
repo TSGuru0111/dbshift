@@ -39,6 +39,44 @@ def expiry(now: datetime | None = None) -> str:
 
 # --- replication instance ----------------------------------------------------
 
+def ensure_security_group(ec2, *, estate: str, run_id: str, emit) -> str | None:
+    """The replication instance's own security group, created if absent.
+
+    Returned so `create_instance` can attach it. Egress is open by default,
+    which is all DMS needs -- it is the client to both databases. What matters
+    is that the *source* and *target* can name this group in their own ingress
+    rules, and that the group they name is the one the instance actually holds.
+
+    Returns None if the group cannot be resolved: a replication instance on the
+    VPC default group still works once the databases admit it, so this never
+    blocks the migration. It only stops the operator from writing rules that
+    point at nothing.
+    """
+    name = policy.security_group_name(estate)
+    try:
+        found = ec2.describe_security_groups(
+            Filters=[{"Name": "group-name", "Values": [name]}])["SecurityGroups"]
+        if found:
+            emit({"event": "step", "detail": f"security group {name} already exists; reusing it"})
+            return found[0]["GroupId"]
+        vpcs = ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])["Vpcs"]
+        if not vpcs:
+            return None
+        gid = ec2.create_security_group(
+            GroupName=name, VpcId=vpcs[0]["VpcId"],
+            Description="DBShift DMS replication instance -- egress only",
+            TagSpecifications=[{"ResourceType": "security-group",
+                                "Tags": _tags(estate, run_id, expiry())}])["GroupId"]
+        emit({"event": "step",
+              "detail": f"created security group {name} ({gid}) -- grant it on the source's "
+                        "1521 and the target's 5432"})
+        return gid
+    except Exception as exc:  # noqa: BLE001 -- reported, never fatal
+        emit({"event": "step", "detail": f"security group could not be prepared: "
+                                         f"{str(exc).splitlines()[0]}"})
+        return None
+
+
 def create_instance(dms, ec2, *, estate: str, run_id: str, emit) -> dict:
     """Create the replication instance. **This starts billing.**
 
@@ -55,6 +93,7 @@ def create_instance(dms, ec2, *, estate: str, run_id: str, emit) -> dict:
     emit({"event": "step",
           "detail": f"creating {name} ({policy.INSTANCE_CLASS}, {policy.STORAGE_GB} GB) -- "
                     "this starts billing by the hour"})
+    sg_id = ensure_security_group(ec2, estate=estate, run_id=run_id, emit=emit)
     resp = dms.create_replication_instance(
         ReplicationInstanceIdentifier=name,
         ReplicationInstanceClass=policy.INSTANCE_CLASS,
@@ -63,6 +102,7 @@ def create_instance(dms, ec2, *, estate: str, run_id: str, emit) -> dict:
         MultiAZ=policy.MULTI_AZ,
         PubliclyAccessible=policy.PUBLICLY_ACCESSIBLE,
         AutoMinorVersionUpgrade=policy.AUTO_MINOR_UPGRADE,
+        **({"VpcSecurityGroupIds": [sg_id]} if sg_id else {}),
         Tags=_tags(estate, run_id, expiry()),
     )
     arn = resp["ReplicationInstance"]["ReplicationInstanceArn"]
@@ -102,8 +142,35 @@ def create_endpoints(dms, *, estate: str, run_id: str, source: dict, target: dic
         existing = [e for e in dms.describe_endpoints()["Endpoints"]
                     if e["EndpointIdentifier"] == name]
         if existing:
-            emit({"event": "step", "detail": f"{role} endpoint {name} already exists; reusing it"})
-            out[role] = existing[0]
+            # **Reuse the name, not the address.** An endpoint left over from a
+            # previous estate keeps whatever host it was built with: on
+            # 2026-09-21 the source endpoint still pointed at a laptop's public
+            # IP from a week earlier, was "reused" without comment, and failed
+            # its test with ORA-12170 -- which reads as a network problem
+            # rather than as the wrong server. The plan is the authority on
+            # where an endpoint points, so a stale one is corrected and the
+            # change is said out loud.
+            e = existing[0]
+            drift = {k: (e.get(a), v) for k, a, v in (
+                ("host", "ServerName", spec["host"]),
+                ("port", "Port", int(spec["port"])),
+                ("database", "DatabaseName", spec["database"]),
+                ("user", "Username", spec["user"]),
+            ) if e.get(a) != v}
+            if drift:
+                emit({"event": "step",
+                      "detail": f"{role} endpoint {name} points elsewhere; updating "
+                                + ", ".join(f"{k} {was} -> {now}" for k, (was, now) in drift.items())})
+                e = dms.modify_endpoint(
+                    EndpointArn=e["EndpointArn"], ServerName=spec["host"], Port=int(spec["port"]),
+                    DatabaseName=spec["database"], Username=spec["user"],
+                    Password=spec["password"],
+                    **({"ExtraConnectionAttributes": spec["extra_settings"]}
+                       if spec.get("extra_settings") else {}))["Endpoint"]
+            else:
+                emit({"event": "step",
+                      "detail": f"{role} endpoint {name} already points at {spec['host']}; reusing it"})
+            out[role] = e
             continue
 
         emit({"event": "step", "detail": f"creating {role} endpoint {name} ({spec['engine']})"})
@@ -137,7 +204,29 @@ def test_endpoint(dms, *, endpoint_arn: str, instance_arn: str, emit,
     Worth the wait: a task that starts against an unreachable endpoint reports
     a generic failure minutes later, and the cause is much harder to see there.
     """
-    dms.test_connection(ReplicationInstanceArn=instance_arn, EndpointArn=endpoint_arn)
+    def existing_connection():
+        conns = dms.describe_connections(
+            Filters=[{"Name": "endpoint-arn", "Values": [endpoint_arn]}])["Connections"]
+        this = [c for c in conns if c.get("ReplicationInstanceArn") == instance_arn]
+        return this[0] if this else None
+
+    # A prior attempt against this same endpoint (a retry after an earlier
+    # step failed, or this console rerun after a fix) can leave AWS still
+    # mid-test. Calling test_connection again then raises
+    # InvalidResourceStateFault: "Connection is already being tested" -- not
+    # a real failure, just AWS refusing to start a second test on the same
+    # pair. Check what is already there first, and only start a fresh test
+    # when nothing is in flight.
+    prior = existing_connection()
+    if prior and prior.get("Status") == "testing":
+        emit({"event": "step", "detail": "a connection test is already in progress; waiting on it"})
+    else:
+        try:
+            dms.test_connection(ReplicationInstanceArn=instance_arn, EndpointArn=endpoint_arn)
+        except Exception as exc:                        # noqa: BLE001 -- botocore's ClientError
+            if "already being tested" not in str(exc):
+                raise
+            emit({"event": "step", "detail": "a connection test was already starting; waiting on it"})
     deadline = time.time() + timeout_minutes * 60
     while time.time() < deadline:
         conns = dms.describe_connections(
@@ -146,7 +235,7 @@ def test_endpoint(dms, *, endpoint_arn: str, instance_arn: str, emit,
         if this:
             status = this[0]["Status"]
             if status == "successful":
-                emit({"event": "step", "detail": f"endpoint connection successful"})
+                emit({"event": "step", "detail": "endpoint connection successful"})
                 return this[0]
             if status == "failed":
                 raise DmsError("endpoint connection failed: "
@@ -168,7 +257,7 @@ def create_task(dms, *, estate: str, run_id: str, migration_type: str, instance_
         return existing[0]
 
     emit({"event": "step", "detail": f"creating task {name} ({migration_type})"})
-    return dms.create_replication_task(
+    task = dms.create_replication_task(
         ReplicationTaskIdentifier=name,
         SourceEndpointArn=source_arn,
         TargetEndpointArn=target_arn,
@@ -178,6 +267,31 @@ def create_task(dms, *, estate: str, run_id: str, migration_type: str, instance_
         ReplicationTaskSettings=task_settings,
         Tags=_tags(estate, run_id, expiry()),
     )["ReplicationTask"]
+    # A freshly created task sits in "creating" for a few seconds before AWS
+    # settles it into "ready". start_task, called right after this returns,
+    # reads whatever status is there *right now* -- calling
+    # start_replication_task against "creating" gets InvalidResourceStateFault:
+    # "Replication Task cannot be started, invalid state", which reads like a
+    # real failure but is really just this function returning too early. Same
+    # shape of gap wait_for_instance already closes for the instance itself.
+    return wait_for_task_ready(dms, task["ReplicationTaskArn"], emit=emit)
+
+
+def wait_for_task_ready(dms, arn: str, *, emit, timeout_minutes: int = 5) -> dict:
+    deadline = time.time() + timeout_minutes * 60
+    last = None
+    while time.time() < deadline:
+        t = dms.describe_replication_tasks(
+            Filters=[{"Name": "replication-task-arn", "Values": [arn]}],
+            WithoutSettings=True)["ReplicationTasks"][0]
+        status = t["Status"]
+        if status != last:
+            emit({"event": "step", "detail": f"task {status}"})
+            last = status
+        if status in ("ready", "stopped", "failed"):
+            return t
+        time.sleep(5)
+    raise DmsError(f"task did not settle out of 'creating' within {timeout_minutes} minutes")
 
 
 def start_task(dms, *, task_arn: str, emit) -> None:

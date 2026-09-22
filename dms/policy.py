@@ -92,10 +92,18 @@ LOB_MAX_KB = 32768
 # why a table was suspended. DEFAULT keeps the volume sane.
 CLOUDWATCH_LOGS = True
 
-# How long to wait for a full load before treating the task as stuck. A 1 GB
-# estate loads in minutes; anything past this is a problem to look at, not to
-# keep waiting on.
-FULL_LOAD_TIMEOUT_MINUTES = 30
+# How long to wait for a full load before treating the task as stuck.
+#
+# Was 30, on the assumption that "a 1 GB estate loads in minutes". DBMIG_TELCO
+# is 5.7 GB and 32,971,741 rows across 11 tables, and on 2026-09-22 it took 47
+# minutes -- so the console gave up watching at 99%, recorded
+# `status: error, full load did not finish within 30 minutes`, and showed a
+# failed migration while DMS went on to finish all 11 tables with zero errors
+# and exact row-count matches. A watcher timing out is not the load failing,
+# and reporting it as one is worse than waiting: it invites someone to re-run
+# a migration that already succeeded, against a target that is no longer empty.
+# Four hours is a ceiling for a genuinely stuck task, not an expectation.
+FULL_LOAD_TIMEOUT_MINUTES = 240
 
 # CDC latency, in seconds, at or below which a cutover may be considered. This
 # is the number that makes a short outage window possible: the target is at most
@@ -107,6 +115,21 @@ def instance_name(estate: str) -> str:
     import re
     slug = re.sub(r"[^a-z0-9]+", "-", (estate or "").lower()).strip("-")
     return f"{PREFIX}dms-{slug}"
+
+
+def security_group_name(estate: str) -> str:
+    """The replication instance's own security group.
+
+    Without one AWS attaches the VPC **default** group, which is what happened
+    on 2026-09-21: every rule the operator had written named a purpose-built
+    `dbshift-dms-sg` that nothing was using, so the source endpoint test failed
+    with `ORA-12170` -- indistinguishable from the NAT problem the whole EC2
+    host was built to solve. A group the instance actually carries is what the
+    source and target grant to.
+    """
+    import re
+    slug = re.sub(r"[^a-z0-9]+", "-", (estate or "").lower()).strip("-")
+    return f"{PREFIX}dms-sg-{slug}"
 
 
 def task_name(estate: str, migration_type: str) -> str:

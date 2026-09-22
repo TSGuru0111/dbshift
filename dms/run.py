@@ -136,7 +136,7 @@ def declared_migration_type(recs: dict) -> str:
 
 
 
-def _read_target_counts(dsn: str, user: str, estate_hint: str | None = None):
+def _read_target_counts(dsn: str, user: str):
     """Every table on the target and how many rows it holds, or None and why.
 
     Returns None rather than raising: an unreachable target is what the two
@@ -177,8 +177,46 @@ def _read_target_counts(dsn: str, user: str, estate_hint: str | None = None):
         except Exception:                                      # noqa: BLE001
             pass
 
+def target_counts_from(target) -> tuple[dict | None, str | None]:
+    """The same two target facts, read through an already-registered target.
+
+    `_read_target_counts` takes a DSN and finds the password in the
+    environment, which suits the CLI. The console has neither: it holds a
+    `convert.target.PgTarget` with the password in memory. Without this the
+    console could never supply `target_counts`, so `target_has_tables` and
+    `target_empty` were **permanently blocked** on the Phase 7 screen -- the
+    two checks that decide whether DMS will load into a proper schema or an
+    unprepared one.
+    """
+    if target is None:
+        return None, "no PostgreSQL target is registered"
+    try:
+        # 60s, not the compile gate's 10: counting rows on a loaded target
+        # means a COUNT(*) per table, and on 21M rows that is not instant.
+        conn = target.connect(timeout=60)
+    except Exception as exc:  # noqa: BLE001
+        return None, str(exc).splitlines()[0][:200]
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT table_schema, table_name FROM information_schema.tables
+                       WHERE table_type = 'BASE TABLE'
+                         AND table_schema NOT IN ('pg_catalog', 'information_schema')""")
+        counts = {}
+        for schema, name in cur.fetchall():
+            cur.execute(f'SELECT count(*) FROM "{schema}"."{name}"')
+            counts[name] = cur.fetchone()[0]
+        return counts, None
+    except Exception as exc:  # noqa: BLE001
+        return None, str(exc).splitlines()[0][:200]
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def plan(session=None, *, migration_type: str | None = None,
-         target_counts: dict | None = None) -> dict:
+         target_counts: dict | None = None, target_unread_reason: str | None = None) -> dict:
     """Everything that can be known without creating anything. Free.
 
     Produces the two JSON documents DMS will be given, the preflight verdict,
@@ -220,7 +258,7 @@ def plan(session=None, *, migration_type: str | None = None,
         # blocked, with the reason, and carry on -- the alternative is a 500 that
         # looks like the planner is broken when only the login is.
         try:
-            dms = session.client("dms")
+            dms = session.client("dms", region_name=policy.REGION)
             checks.append(preflight.no_instance_running(
                 dms.describe_replication_instances()["ReplicationInstances"],
                 policy.instance_name(estate)))
@@ -272,9 +310,16 @@ def plan(session=None, *, migration_type: str | None = None,
         ):
             checks.append(preflight._c(
                 name, preflight.BLOCKED, why,
-                "Connect to the target so these can run: pass --pg-dsn, or run this from "
-                "the console where the target is registered. Until then the migration is "
-                "planned but the target is unverified."))
+                # `target_unread_reason` is why the target could not be read,
+                # when something tried. Saying "run this from the console"
+                # inside the console -- which this did until 2026-09-21 -- sends
+                # a reader to do the thing they are already doing.
+                (f"The target could not be read: {target_unread_reason}. "
+                 "Until then the migration is planned but the target is unverified."
+                 if target_unread_reason else
+                 "Register the PostgreSQL target on Phase 4b, or pass --pg-dsn on the "
+                 "command line. Until then the migration is planned but the target is "
+                 "unverified.")))
 
     tm = mappings.table_mappings(schema=estate, tables=tables, lowercase=heterogeneous)
     ts = mappings.task_settings(migration_type=migration_type)
@@ -343,9 +388,10 @@ def execute(session, *, confirm_account: str, migration_type: str | None = None,
               "events": events}
     _save(record)
 
-    dms = session.client("dms")
+    dms = session.client("dms", region_name=policy.REGION)
     try:
-        ri = actions.create_instance(dms, session.client("ec2"), estate=p["estate"],
+        ri = actions.create_instance(dms, session.client("ec2", region_name=policy.REGION),
+                                     estate=p["estate"],
                                      run_id=p["collector_run_id"], emit=emit)
         record["instance_arn"] = ri["ReplicationInstanceArn"]
         _save(record)
@@ -384,9 +430,24 @@ def execute(session, *, confirm_account: str, migration_type: str | None = None,
         emit({"event": "complete", "status": record["status"],
               "tables": len(record["tables"]), "errored": len(errored)})
     except Exception as exc:  # noqa: BLE001
+        # `str(exc)` alone is not enough: some exceptions stringify to "None"
+        # or to nothing at all, and on 2026-09-21 this reported a task-creation
+        # failure as the literal string "None" -- the one message that would
+        # have explained it. The type is always there, and the traceback's last
+        # frame says where, so both are kept.
+        import traceback
+        where = ""
+        tb = traceback.extract_tb(exc.__traceback__)
+        if tb:
+            last = tb[-1]
+            where = f" at {last.filename.rsplit(chr(92), 1)[-1]}:{last.lineno}"
+        text = str(exc).strip()
+        detail = f"{type(exc).__name__}: {text}" if text and text != "None" else \
+                 f"{type(exc).__name__}{where}"
         record["status"] = "error"
-        record["error"] = str(exc)
-        emit({"event": "error", "message": str(exc)})
+        record["error"] = detail
+        record["traceback"] = traceback.format_exc()[-2000:]
+        emit({"event": "error", "message": detail})
     finally:
         record["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
         _save(record)
@@ -394,11 +455,28 @@ def execute(session, *, confirm_account: str, migration_type: str | None = None,
 
 
 def status(session) -> dict | None:
-    """Where a previously started task stands now. Read-only."""
+    """Where a task stands now. Read-only.
+
+    Falls back to **asking AWS** when this console has no record of starting
+    one. A `dbshift-` task that exists is a fact about the account whoever
+    created it: on 2026-09-21 a task run from the CLI left the console showing
+    "no DMS task has been started", while 32.9M rows were moving. The screen
+    should report what is true, not only what it did itself.
+    """
     rec = last_run()
     if not rec or not rec.get("task_arn"):
-        return None
-    dms = session.client("dms")
+        dms = session.client("dms", region_name=policy.REGION)
+        found = [t for t in dms.describe_replication_tasks(WithoutSettings=True)["ReplicationTasks"]
+                 if t["ReplicationTaskIdentifier"].startswith(policy.PREFIX)]
+        if not found:
+            return None
+        t = found[0]
+        out = {"task_arn": t["ReplicationTaskArn"], "estate": None,
+               "migration_type": t.get("MigrationType"), "started_elsewhere": True,
+               **actions.task_progress(dms, t["ReplicationTaskArn"])}
+        out["tables"] = actions.table_statistics(dms, t["ReplicationTaskArn"])
+        return out
+    dms = session.client("dms", region_name=policy.REGION)
     out = {"task_arn": rec["task_arn"], "estate": rec["plan"]["estate"],
            "migration_type": rec["plan"]["migration_type"],
            **actions.task_progress(dms, rec["task_arn"])}
@@ -454,7 +532,7 @@ def main(argv: list[str] | None = None) -> int:
         if not rec or not rec.get("task_arn"):
             print("no task to stop")
             return 1
-        actions.stop_task(session.client("dms"), task_arn=rec["task_arn"],
+        actions.stop_task(session.client("dms", region_name=policy.REGION), task_arn=rec["task_arn"],
                           emit=lambda e: print(e.get("detail", "")))
         print("stopped. The replication instance is still billing -- "
               "delete it with `python -m killswitch --destroy --confirm <account>`.")
@@ -465,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
     # down: an unreachable target is exactly what they report.
     target_counts = None
     if args.pg_dsn:
-        target_counts, why = _read_target_counts(args.pg_dsn, args.pg_user, estate_hint=None)
+        target_counts, why = _read_target_counts(args.pg_dsn, args.pg_user)
         if target_counts is None:
             print(f"\ncould not read the target at {args.pg_dsn}: {why}\n"
                   "the target checks will report blocked.\n")
