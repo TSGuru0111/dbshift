@@ -37,7 +37,10 @@ def load(run_dir: Path) -> dict:
     for row in src["rows"]:
         text = row.get("source_text") or ""
         if row.get("source_text_truncated") and row.get("source_text_file"):
-            text = (run_dir / row["source_text_file"]).read_text(encoding="utf-8")
+            p = run_dir / row["source_text_file"]
+            if os.name == "nt" and not str(p.resolve()).startswith("\\\\?\\"):
+                p = Path(f"\\\\?\\{p.resolve()}")
+            text = p.read_text(encoding="utf-8")
         objects.append(
             {
                 "owner": row["owner"],

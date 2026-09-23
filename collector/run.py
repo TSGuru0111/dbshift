@@ -92,6 +92,14 @@ def _dataset_columns(
     return []
 
 
+def _win_safe_path(p: Path) -> Path:
+    if os.name == "nt":
+        abs_str = str(p.resolve())
+        if not abs_str.startswith("\\\\?\\"):
+            return Path(f"\\\\?\\{abs_str}")
+    return p
+
+
 def _externalize(probe, produced: dict[str, list[dict]], run_dir: Path) -> None:
     """Move unbounded text fields out of the dataset file.
 
@@ -104,15 +112,16 @@ def _externalize(probe, produced: dict[str, list[dict]], run_dir: Path) -> None:
         if not rows:
             continue
         target = run_dir / dataset.split(".")[-1]
-        target.mkdir(parents=True, exist_ok=True)
+        _win_safe_path(target).mkdir(parents=True, exist_ok=True)
         for row in rows:
             text = row.get(field)
             if text is None:
                 continue
             key = row.get(key_field) or ""
             path = target / f"{key}.txt"
-            if not path.exists():
-                path.write_text(text, encoding="utf-8")
+            win_path = _win_safe_path(path)
+            if not win_path.exists():
+                win_path.write_text(text, encoding="utf-8")
             row[field] = text[:excerpt_chars]
             row[f"{field}_truncated"] = max(0, len(text) - excerpt_chars)
             row[f"{field}_file"] = f"{target.name}/{path.name}"
