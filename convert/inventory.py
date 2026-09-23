@@ -8,6 +8,7 @@ need. Nothing is recomputed; the SHA-256 on each object is the collector's."""
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter
 from pathlib import Path
 
