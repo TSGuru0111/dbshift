@@ -148,8 +148,21 @@ def select_tables(table_rows: list[dict], objects: list[dict], schema: str,
             "exclude": sorted(exclude, key=lambda x: x["table"] or "")}
 
 
+def generate_range_boundaries(min_val: int | float, max_val: int | float, batch_count: int) -> list[list[str]]:
+    """Generate equal-sized boundary ranges for DMS parallel load."""
+    if batch_count <= 1 or min_val >= max_val:
+        return []
+    step = (max_val - min_val) / batch_count
+    boundaries = []
+    for i in range(1, batch_count):
+        val = int(round(min_val + i * step))
+        boundaries.append([str(val)])
+    return boundaries
+
+
 def table_mappings(*, schema: str, tables: list[str] | None = None,
-                   lowercase: bool, exclude: list[str] | None = None) -> dict:
+                   lowercase: bool, exclude: list[str] | None = None,
+                   parallel_loads: list[dict] | None = None) -> dict:
     """Which tables move, and under what names.
 
     `tables` None means every table in the schema -- a % wildcard, which is what
@@ -179,6 +192,30 @@ def table_mappings(*, schema: str, tables: list[str] | None = None,
         add({"rule-type": "selection",
              "object-locator": {"schema-name": schema, "table-name": t},
              "rule-action": "exclude", "filters": []})
+
+    if parallel_loads:
+        for item in parallel_loads:
+            table_name = item.get("table_name") or item.get("table")
+            if not table_name:
+                continue
+            sch = item.get("schema_name") or item.get("schema") or schema
+            cols = item.get("columns") or ([item["column"]] if "column" in item else ["ID"])
+            bnds = item.get("boundaries") or []
+            if not bnds and "min_value" in item and "max_value" in item and "batch_count" in item:
+                try:
+                    bnds = generate_range_boundaries(float(item["min_value"]), float(item["max_value"]), int(item["batch_count"]))
+                except (ValueError, TypeError):
+                    bnds = []
+            if bnds:
+                add({
+                    "rule-type": "table-settings",
+                    "object-locator": {"schema-name": sch, "table-name": table_name},
+                    "parallel-load": {
+                        "type": "ranges",
+                        "columns": cols,
+                        "boundaries": bnds,
+                    }
+                })
 
     if lowercase:
         # Schema, then table, then column. DMS applies all three; without the

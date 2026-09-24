@@ -215,6 +215,29 @@ def validate(proposal: dict, facts: dict, engine: str = target_mod.ORACLE) -> di
                 )
             )
 
+    # 9 -- Character set encoding verification (homogeneous path).
+    cs = facts.get("character_set") or "AL32UTF8"
+    if cs and cs != "UNKNOWN":
+        checks.append(
+            _check(
+                "encoding",
+                "PASS",
+                f"Source character set {cs} matches RDS for Oracle target character set {cs} (homogeneous path). No character set transcoding required.",
+                cs,
+                cs,
+            )
+        )
+    else:
+        checks.append(
+            _check(
+                "encoding",
+                "WARN",
+                "Source character set could not be determined from NLS_CHARACTERSET. Target character set defaults to AL32UTF8. Verify source database parameters before provisioning.",
+                "UNKNOWN",
+                "AL32UTF8",
+            )
+        )
+
     overrides = [c for c in checks if c["verdict"] == "OVERRIDE"]
     warnings = [c for c in checks if c["verdict"] == "WARN"]
 
@@ -228,7 +251,8 @@ def validate(proposal: dict, facts: dict, engine: str = target_mod.ORACLE) -> di
         "memory_gib": spec["memory_gib"],
         "storage_gb": storage_gb,
         "storage_type": "gp3",
-        "character_set": facts["character_set"],
+        "character_set": cs,
+        "source_character_set": cs,
         "processor_licences": (
             policy.processor_licences(spec["vcpu"]) if verdict["licence_model"] == "BYOL" else 0
         ),

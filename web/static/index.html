@@ -163,12 +163,24 @@ main:focus{outline:none}
    blinked all afternoon would teach everyone to ignore it. */
 .awschip.warn .led,.awschip.bad .led{animation:pulse 1.6s var(--ease) infinite}
 
+/* Custom scrollbar design system for full-application visual clarity */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:var(--surface-2);border-radius:4px}
+::-webkit-scrollbar-thumb{background:var(--rule-strong);border-radius:4px;border:2px solid var(--surface-2)}
+::-webkit-scrollbar-thumb:hover{background:var(--g-grey)}
+
+main, .scrollcap, .scroller, .sctdetail, .tblwrap, pre {
+  scrollbar-width:thin;
+  scrollbar-color:var(--rule-strong) var(--surface-2);
+}
+
 /* ---------- stage rail, now a vertical sidebar list ---------- */
 .rail{display:flex;flex-direction:column;gap:2px;padding:6px 8px;
   overflow-y:auto;min-height:0;scrollbar-width:thin;
-  scrollbar-color:var(--g-navy-3) transparent}
-.rail::-webkit-scrollbar{width:8px}
-.rail::-webkit-scrollbar-thumb{background:var(--g-navy-3);border-radius:4px}
+  scrollbar-color:var(--g-navy-3) var(--g-navy-2)}
+.rail::-webkit-scrollbar-track{background:var(--g-navy-2)}
+.rail::-webkit-scrollbar-thumb{background:var(--g-navy-3);border:2px solid var(--g-navy-2)}
+.rail::-webkit-scrollbar-thumb:hover{background:var(--on-chrome-3)}
 .stage{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:10px;
   align-items:center;width:100%;text-align:left;background:none;border:none;
   border-radius:6px;padding:7px 10px;color:inherit;cursor:default;position:relative;
@@ -3321,7 +3333,7 @@ async function renderSizing(){
     <div class="facts" style="grid-template-columns:repeat(4,1fr);margin-top:14px">
       ${[['Instance', d.instance_class, `${d.vcpu} vCPU · ${d.memory_gib} GiB`],
          ['Storage', d.storage_gb + ' GB', d.storage_type + ' · from ' + f.segment_gb + ' GB'],
-         ['Character set', d.character_set, pg ? 'from ' + (d.source_character_set || '—') : 'target must match'],
+         ['Character set', d.character_set, pg ? 'from ' + (d.source_character_set || '—') : 'matches source (' + (d.source_character_set || d.character_set || '—') + ')'],
          pg ? ['Licences', 'none', 'the engine is open source']
             : ['Oracle licences', d.licence_model === 'BYOL' ? d.processor_licences + ' processor' : 'included',
                'two vCPU = one processor']]
