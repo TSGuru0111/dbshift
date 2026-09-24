@@ -1786,6 +1786,18 @@ tr:last-child td{border-bottom:none}
           <div class="field"><label for="dmsTargetPw">Target master password</label>
             <input id="dmsTargetPw" type="password" autocomplete="off" placeholder="held in memory only"></div>
         </div>
+        <!-- Sizing. The class and the subtask count are the two levers that
+             decide how long a load takes, and both were hardcoded: 33M rows
+             across 11 tables took 47 minutes on dms.t3.small at 8 subtasks.
+             Shown before the button because the choice bills. -->
+        <div class="row2">
+          <div class="field"><label for="dmsClass">Replication instance</label>
+            <select id="dmsClass"></select></div>
+          <div class="field"><label for="dmsSubtasks">Tables loaded at once</label>
+            <select id="dmsSubtasks"></select></div>
+        </div>
+        <div class="note info" id="dmsSizingNote" style="margin:0 0 12px"></div>
+
         <div class="field"><label for="dmsConfirm">Type the AWS account id to confirm</label>
           <input id="dmsConfirm" class="mono" placeholder="000000000000"></div>
         <div class="spread"><button class="btn" id="btnDmsRun">Create and run</button>
@@ -1945,6 +1957,18 @@ tr:last-child td{border-bottom:none}
       <h2>AWS access</h2>
       <p>Paste the block from the AWS access portal. It lasts about four hours.</p>
     </div>
+
+    <!-- Both databases admit exactly one operator address. On a laptop that
+         address changes, and when it does the console loses the target:
+         Phase 4c cannot connect and Phase 7's target checks go BLOCKED rather
+         than failing, with nothing on screen naming the cause. One click
+         re-points every rule DBShift owns. -->
+    <div class="panel pad" id="ipPanel">
+      <div class="spread"><div class="eyebrow" style="margin:0">Operator access<span class="hint" tabindex="0" role="note" title="Both security groups admit one /32 -- this machine. If your public address changes, the console can no longer reach the target and the screens say only that it is unreachable. This re-points those rules at your current address and removes the stale one. It never touches a rule it did not create.">i</span></div>
+        <button class="btn ghost sm" id="btnIpRefresh">Re-point at my current IP</button></div>
+      <div class="mt-s" id="ipResult"></div>
+    </div>
+
 
     <div class="split">
       <div class="panel pad">
@@ -3810,7 +3834,9 @@ $('#ddlPostLoad').onchange = () => {
       'finishes to add the keys and indexes.';
 };
 
-$('#btnDdlApply').onclick = async () => {
+// Takes the skip list as an argument so the failure branch below can offer
+// "apply without <constraint>" and re-enter with it.
+async function applyDdl(skip_constraints = []) {
   const approver = $('#ddlApprover').value.trim();
   if (!approver) {
     $('#ddlApplyResult').innerHTML =
@@ -3825,7 +3851,7 @@ $('#btnDdlApply').onclick = async () => {
   try {
     const r = await fetch('/api/schemaddl/apply', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({approved_by: approver, post_load})});
+      body: JSON.stringify({approved_by: approver, post_load, skip_constraints})});
     const d = await r.json();
     $('#ddlApplyMeta').textContent = '';
     if (!r.ok) {
@@ -3839,20 +3865,46 @@ $('#btnDdlApply').onclick = async () => {
            ${esc((d.target || {}).host || 'the target')}.</b> ${esc(d.what_is_left)}</div>`;
       // The tables Phase 7 was refusing to find now exist -- worth knowing
       // without switching phases to find out.
+      // The rail says when something was left off. "keys and indexes applied"
+      // over a target missing a foreign key reads as a clean run, and the
+      // whole point of skipping one deliberately is that it stays visible.
+      const nskip = (d.skipped_constraints || []).length;
       setStage('schemaddl', 'done',
-        post_load ? 'keys and indexes applied' : `${d.statements_applied} statements applied`);
+        post_load ? (nskip ? `applied · ${nskip} constraint(s) left off`
+                           : 'keys and indexes applied')
+                  : `${d.statements_applied} statements applied`);
     } else {
+      // A constraint the *data* violates is not a generator bug: Oracle's
+      // ENABLE NOVALIDATE lets a source carry rows that break its own foreign
+      // key, they migrate faithfully, and PostgreSQL then refuses. Offer the
+      // third option -- leave it off, on the record -- rather than only "fix
+      // the data" or "give up", which is where this used to stop.
+      const failed = (d.error || '').match(/violates foreign key constraint "([^"]+)"/i)
+                  || (d.error || '').match(/constraint "([^"]+)"/i);
+      const name = failed && failed[1];
       $('#ddlApplyResult').innerHTML =
         `<div class="note bad"><b>Applied nothing; the transaction rolled back.</b>
            ${esc(d.error || '')}
            ${d.in_flight_when_it_failed
              ? `<div class="mono mt-s" style="font-size:12px">${esc(d.in_flight_when_it_failed)}</div>`
-             : ''}</div>`;
+             : ''}
+           ${name ? `<div class="mt-s">
+             <b>The rows break this constraint, not the DDL.</b> The source carries them too —
+             Oracle allows that with <span class="mono">ENABLE NOVALIDATE</span>; PostgreSQL does
+             not. Applying without <span class="mono">${esc(name)}</span> keeps the target an exact
+             copy of the source and records the constraint as deliberately left off.
+             <div class="mt-s"><button class="btn ghost sm" id="btnDdlSkip"
+               data-skip="${esc(name)}">Apply without ${esc(name)}</button></div></div>` : ''}
+         </div>`;
+      const skipBtn = $('#btnDdlSkip');
+      if (skipBtn) skipBtn.onclick = () => applyDdl([skipBtn.dataset.skip]);
     }
   } finally {
     btn.disabled = false;
   }
-};
+}
+
+$('#btnDdlApply').onclick = () => applyDdl();
 
 // Three panes, one scroll region. Panes are hidden, never detached: a driver
 // reaches #ddlNoteList whichever pane is on screen.
@@ -5338,6 +5390,30 @@ function renderKill(rep){
     ? `<div class="note info mt-s">${rep.results.map(x => esc(`${x.action} ${x.id}: ${x.outcome}`)).join('<br>')}
        <br>Deletes take minutes. Check again to confirm nothing is left.</div>` : '';
 }
+$('#btnIpRefresh').onclick = async () => {
+  const btn = $('#btnIpRefresh'), box = $('#ipResult');
+  btn.disabled = true;
+  box.innerHTML = '<div class="note info">resolving this machine\'s public address…</div>';
+  try {
+    const r = await fetch('/api/operator-ip/refresh', {method: 'POST'});
+    const d = await r.json();
+    if (!r.ok) { box.innerHTML = `<div class="note bad">${esc(d.detail || 'could not refresh')}</div>`; return; }
+    const rows = (d.groups || []).map(g => {
+      if (g.error) return `<div class="check fail"><span class="mark">×</span><div>
+        <div class="name">${esc(g.label)}</div><div class="detail">${esc(g.error)}</div></div></div>`;
+      const what = g.already_current && !g.revoked.length ? 'already current; nothing to do'
+        : [g.added ? `added ${esc(d.cidr)}` : '',
+           g.revoked.length ? `removed ${g.revoked.map(esc).join(', ')}` : ''].filter(Boolean).join(' · ');
+      return `<div class="check pass"><span class="mark">✓</span><div>
+        <div class="name">${esc(g.label)} <span class="mono" style="font-size:12px;color:var(--ink-3)">${esc(g.group_id || '')}</span></div>
+        <div class="detail">${what}</div></div></div>`;
+    }).join('');
+    box.innerHTML = `<div class="note ${d.changed ? 'ok' : 'info'}">
+        <b>${esc(d.cidr)}</b> — ${d.changed ? `${d.changed} group(s) updated` : 'everything was already current'}
+      </div><div class="checks mt-s">${rows}</div>`;
+  } finally { btn.disabled = false; }
+};
+
 $('#btnKillScan').onclick = async () => {
   $('#killMsg').innerHTML = '';
   const r = await fetch('/api/killswitch');
@@ -5953,6 +6029,8 @@ async function renderDmsPlan(){
 
   const held = (d.tables_excluded || []).filter(e => !e.included);
   $('#dmsTiles').style.display = '';
+  renderDmsSizing(d);
+
   $('#dmsTiles').innerHTML = `
     <div class="tile"><div class="k">Tables moved</div><div class="v">${d.tables.length}</div>
       <div class="h">${held.length} held back, each with a reason</div></div>
@@ -6019,6 +6097,48 @@ async function renderDmsPlan(){
   }
 }
 
+/* The two sizing dropdowns, filled from the plan's own policy values so the
+   classes and their rates cannot drift away from what the backend would use.
+   The estimate is explicitly rough: it scales the one real measurement this
+   project has -- 33M rows in 47 minutes on t3.small at 8 subtasks -- by vCPU
+   and subtask count. A load depends on row width, indexes and network too, so
+   the figure is labelled as an estimate rather than dressed up as a promise. */
+const DMS_MEASURED = {rows: 32971741, minutes: 47, vcpu: 2, subtasks: 8};
+
+function renderDmsSizing(d){
+  const opts = d.sizing_options;
+  if (!opts) return;
+  const cls = $('#dmsClass'), sub = $('#dmsSubtasks');
+  if (!cls.options.length) {
+    cls.innerHTML = opts.classes.map(c =>
+      `<option value="${esc(c.class)}">${esc(c.class)} — $${c.usd_per_hour.toFixed(3)}/h · ${esc(c.note)}</option>`).join('');
+    cls.value = d.instance.class || opts.default_class;
+    sub.innerHTML = opts.subtasks.map(n =>
+      `<option value="${n}">${n} tables at once</option>`).join('');
+    sub.value = String(d.parallel_subtasks || opts.default_subtasks);
+    cls.onchange = sub.onchange = () => renderDmsSizing(DMSPLAN);
+  }
+  const chosen = opts.classes.find(c => c.class === cls.value) || opts.classes[0];
+  const rows = (d.tables || []).reduce((a, t) => a + (DMSPLAN.row_counts?.[t] || 0), 0)
+               || DMS_MEASURED.rows;
+  // Scale the measurement by compute and parallelism, then floor it: past a
+  // point the source and network bound the load, not the instance.
+  const speedup = (chosen.vcpu / DMS_MEASURED.vcpu) * (Number(sub.value) / DMS_MEASURED.subtasks);
+  const mins = Math.max(8, Math.round(DMS_MEASURED.minutes * (rows / DMS_MEASURED.rows) / speedup));
+  const cost = (chosen.usd_per_hour * (mins / 60)).toFixed(2);
+  // en-US grouping explicitly: the browser's own locale renders 32971741 as
+  // "3,29,71,741" here, which is correct for India but does not match the
+  // "33M" in the same sentence or any other number in this console.
+  $('#dmsSizingNote').innerHTML =
+    `<b>Roughly ${mins} minutes</b> for ${rows.toLocaleString('en-US')} rows across
+     ${(d.tables || []).length} table(s) — about <b>$${cost}</b> for the replication
+     instance alone.
+     <span style="color:var(--ink-3)">The target keeps billing throughout, so this is
+     not the cost of the migration. An estimate scaled from one measured run
+     (33M rows, 47 min on dms.t3.small at 8) — row width, indexes and network
+     all move it.</span>`;
+}
+
 $('#btnDmsPlan').onclick = () => renderDmsPlan();
 
 /* Phase 7's live state. Three things the plan tiles cannot say: whether a task
@@ -6076,7 +6196,9 @@ $('#btnDmsRun').onclick = async () => {
       confirm_account: $('#dmsConfirm').value.trim(),
       migration_type: (DMSPLAN && DMSPLAN.migration_type) || 'full-load',
       source_password: $('#dmsSourcePw').value,
-      target_password: $('#dmsTargetPw').value})});
+      target_password: $('#dmsTargetPw').value,
+      instance_class: ($('#dmsClass') || {}).value || '',
+      parallel_subtasks: Number(($('#dmsSubtasks') || {}).value || 0)})});
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));
     btn.disabled = false;

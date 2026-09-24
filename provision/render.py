@@ -225,6 +225,46 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
                              "Description": "The single /32 allowed to reach the listener"},
         },
         "Resources": {
+            # The replication instance's own group, created here rather than in
+            # Phase 7, so the target can trust it declaratively in the same
+            # template. Phase 7 attaches the instance to this group instead of
+            # making its own.
+            #
+            # This exists because of the ordering problem it solves. Phase 7
+            # used to create this group and then print "grant it on the
+            # source's 1521 and the target's 5432" -- a to-do nobody
+            # automated, so every rebuild needed two rules added by hand and
+            # Phase 7 failed twice first: ORA-12170 on the source, an ODBC
+            # timeout on the target, both reading as "unreachable" rather than
+            # "nobody opened the door". The target half can be declarative
+            # because both groups are ours; the source half cannot, because
+            # the source EC2 box is not in this stack.
+            #
+            # Egress is open by default, which is all DMS needs -- it is the
+            # client to both databases, never a server.
+            "DmsSecurityGroup": {
+                "Type": "AWS::EC2::SecurityGroup",
+                "Properties": {
+                    "GroupDescription": f"{stack_name}: DMS replication instance -- egress only",
+                    "VpcId": {"Ref": "VpcId"},
+                    "Tags": tags,
+                },
+            },
+            # Separate from DbSecurityGroup's inline ingress on purpose: an
+            # inline rule referencing a sibling group is a circular dependency
+            # in CloudFormation. A standalone Ingress resource is the
+            # documented way out.
+            "DbIngressFromDms": {
+                "Type": "AWS::EC2::SecurityGroupIngress",
+                "Properties": {
+                    "GroupId": {"Fn::GetAtt": ["DbSecurityGroup", "GroupId"]},
+                    "IpProtocol": "tcp",
+                    "FromPort": listener_port,
+                    "ToPort": listener_port,
+                    "SourceSecurityGroupId": {"Fn::GetAtt": ["DmsSecurityGroup", "GroupId"]},
+                    "Description": "DBShift DMS replication instance",
+                },
+            },
             "DbSecurityGroup": {
                 "Type": "AWS::EC2::SecurityGroup",
                 "Properties": {
@@ -235,8 +275,16 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
                     # with a security group opening a port nothing listens on --
                     # the instance was unreachable and the verify step timed out
                     # with no indication why.
+                    # The description is load-bearing, not decoration:
+                    # provision/operator_ip.py revokes only rules carrying
+                    # this marker, so a rule somebody else added for their own
+                    # access is never removed when the operator's address
+                    # changes. Without it the refresh could not tell ours from
+                    # theirs, and would have to leave every stale rule behind.
                     "SecurityGroupIngress": [{"IpProtocol": "tcp", "FromPort": listener_port,
-                                              "ToPort": listener_port, "CidrIp": {"Ref": "OperatorCidr"}}],
+                                              "ToPort": listener_port,
+                                              "CidrIp": {"Ref": "OperatorCidr"},
+                                              "Description": "DBShift operator -- target listener"}],
                     "Tags": tags,
                 },
             },
@@ -329,6 +377,10 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
             "Port": {"Value": {"Fn::GetAtt": ["DbInstance", "Endpoint.Port"]}},
             "ExchangeBucket": {"Value": {"Ref": "ExchangeBucket"}},
             "S3IntegrationRoleArn": {"Value": {"Fn::GetAtt": ["S3IntegrationRole", "Arn"]}},
+            # Phase 7 reads this to attach the replication instance to the
+            # group the target already trusts, rather than creating its own
+            # and then needing a rule added by hand.
+            "DmsSecurityGroupId": {"Value": {"Fn::GetAtt": ["DmsSecurityGroup", "GroupId"]}},
         },
     }
 

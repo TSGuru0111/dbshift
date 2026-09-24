@@ -346,3 +346,66 @@ along without ever showing:
 `convert/selftest_ddl_apply.py` also had a stub `_Target.connect()` that was
 never updated when `connect(timeout=)` was added, so the module had been
 failing on a `TypeError` unrelated to what it tests. Signature parity restored.
+
+**2026-09-23 — the network prerequisites now configure themselves.**
+
+Phase 7 created its own security group and then *printed* "grant it on the
+source's 1521 and the target's 5432". That sentence was the whole problem: a
+to-do nobody automated, so every rebuild needed two rules added by hand in the
+AWS console, and Phase 7 failed twice before anyone thought to add them --
+ORA-12170 on the source, an ODBC timeout on the target, both of which read as
+"the database is unreachable" rather than "nobody opened the door". On
+2026-09-22 that cost most of a working day, and it recurred on every teardown
+because a new stack means a new security group.
+
+The fix splits by who owns the firewall, which is also why it could not be done
+in one place:
+
+- **The target is declarative now.** `provision/render.py` creates
+  `DmsSecurityGroup` in Phase 6's own stack and grants it on `DbSecurityGroup`
+  through a standalone `AWS::EC2::SecurityGroupIngress` -- standalone because
+  an inline rule referencing a sibling group is a circular dependency in
+  CloudFormation. The group id is exported as `DmsSecurityGroupId`, and
+  `actions.ensure_security_group(from_stack=...)` attaches the replication
+  instance to it rather than making its own. The target therefore admits the
+  instance before the instance exists, and the rule dies with the stack
+  instead of becoming an orphan. This is the ordering that made the old
+  approach impossible: the DMS group could not be in the template while Phase
+  7 was the thing that created it.
+- **The source cannot be.** The Oracle box is an EC2 instance outside this
+  stack, so CloudFormation has no claim on its security group.
+  `actions.source_security_group()` finds it by private then public address --
+  the console connects to one and DMS to the other -- and
+  `actions.grant_ingress()` opens the listener port to the replication
+  instance's group before any endpoint test runs. Both are idempotent:
+  `InvalidPermission.Duplicate` is the normal case on a re-run and counts as
+  success. A source that is not an EC2 instance in this account reports that
+  plainly rather than failing; its firewall is not ours to open.
+
+Every rule is security-group-to-security-group, never a CIDR: it admits that
+one replication instance and nothing else. `create_instance` also takes an
+`instance_class` override now, so the class is no longer pinned to
+`dms.t3.small` at the point of creation.
+
+**2026-09-23 — LogMiner on a pluggable database.**
+
+The source endpoint was created with no `ExtraConnectionAttributes`, so DMS
+used its default redo reader, LogMiner. LogMiner is not supported when the
+source is a PDB, and the endpoint test fails with "Log Miner is not supported
+in Oracle PDB environment" before any data moves. Oracle XE is a CDB with
+XEPDB1 plugged into it, so this is the ordinary case for this estate.
+
+`policy.ORACLE_SOURCE_ATTRIBUTES` now sets `useLogMinerReader=N;useBfile=Y`,
+selecting Binary Reader, which reads the redo files directly and works against
+a PDB. A full load reads nothing from redo, so for `full-load` this only has to
+be a setting the endpoint accepts; for CDC it is what makes replication
+possible at all.
+
+This had been found and fixed by hand on an earlier run and never written
+down, which is why it recurred. It is in policy now, and in this file.
+
+`ExtraConnectionAttributes` was also added to `create_endpoints`' drift
+tuple. An endpoint created before this change has the right host, port, user
+and database, so without that row `drift` is empty, the endpoint is reused
+unchanged, and the run fails again with the identical message -- a fix that
+silently does not apply is worse than no fix.

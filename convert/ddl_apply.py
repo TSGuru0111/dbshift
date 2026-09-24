@@ -63,12 +63,28 @@ class ApplyRefused(RuntimeError):
     """The apply will not be attempted, with why."""
 
 
-def statements_for(plan: dict, *, post_load: bool) -> list[str]:
+def constraint_name(statement: str) -> str | None:
+    """The constraint a statement adds, if it adds one."""
+    m = re.search(r"ADD\s+CONSTRAINT\s+([A-Za-z_][\w$]*)", statement or "", re.IGNORECASE)
+    return m.group(1).lower() if m else None
+
+
+def statements_for(plan: dict, *, post_load: bool, skip: tuple[str, ...] = ()) -> list[str]:
     """The statements this pass applies, in 4c's order.
 
     Pre-load is the schema, its sequences and types, then the tables. Post-load
     is everything 4c deliberately defers until the rows are in.
+
+    `skip` names constraints to leave off deliberately. A constraint that
+    cannot be created because the *data* violates it is not a generator bug --
+    Oracle's ENABLE NOVALIDATE lets a source carry rows that break its own
+    foreign key, and those rows migrate faithfully. PostgreSQL has no
+    equivalent: ADD CONSTRAINT always validates, so the choice is to fix the
+    data, invent a parent row, or leave the constraint off and say so. Naming
+    it here keeps the target an exact copy of the source and keeps the defect
+    visible, rather than hiding it behind a half-applied schema.
     """
+    skip = tuple(s.lower() for s in skip)
     out: list[str] = []
     if not post_load:
         out.append(plan["schema"])
@@ -84,7 +100,10 @@ def statements_for(plan: dict, *, post_load: bool) -> list[str]:
     else:
         for key in POST_LOAD:
             out += plan.get(key) or []
-    return [s for s in out if (s or "").strip()]
+    kept = [s for s in out if (s or "").strip()]
+    if skip:
+        kept = [s for s in kept if (constraint_name(s) or "") not in skip]
+    return kept
 
 
 def check_statements(statements: list[str]) -> list[str]:
@@ -116,7 +135,7 @@ def existing_tables(target, schema: str) -> set[str]:
 
 
 def apply(plan: dict, target, *, approved_by: str, post_load: bool = False,
-          allow_existing: bool = False) -> dict:
+          allow_existing: bool = False, skip_constraints: tuple[str, ...] = ()) -> dict:
     """Create 4c's schema on the target. One transaction, all or nothing.
 
     `approved_by` is required: this writes to a database, and a schema reaching
@@ -134,7 +153,10 @@ def apply(plan: dict, target, *, approved_by: str, post_load: bool = False,
             "but unproven. Run `ddl_run --compile` against a target first: applying "
             "unproven DDL is how a target ends up half-built.")
 
-    statements = statements_for(plan, post_load=post_load)
+    statements = statements_for(plan, post_load=post_load, skip=skip_constraints)
+    skipped = [c for c in (skip_constraints or ())
+               if any(constraint_name(x) == c.lower()
+                      for x in statements_for(plan, post_load=post_load))]
     if not statements:
         raise ApplyRefused(
             f"nothing to apply for the {'post' if post_load else 'pre'}-load pass")
@@ -210,10 +232,17 @@ def apply(plan: dict, target, *, approved_by: str, post_load: bool = False,
         # False here and almost nowhere else in convert/. The console and the
         # Phase 10 report read this to decide whether to say nothing was applied.
         "nothing_applied": not ok,
+        # Named, not silent. A constraint left off is a decision someone made
+        # about this estate's data, and the Phase 10 report and Phase 8's
+        # verdict both need to say so -- a target missing a foreign key it was
+        # supposed to have looks identical to one where the apply half-failed.
+        "skipped_constraints": skipped,
         "what_is_left": (
             "The keys, checks and indexes are deferred until after the data load -- run "
             "this again with post_load once Phase 7 has finished."
             if ok and not post_load else
-            "Nothing: the schema is complete." if ok else
+            (f"Nothing, except {len(skipped)} constraint(s) left off deliberately: "
+             + ", ".join(skipped) + ". The target matches the source, including the rows "
+             "that break them." if skipped else "Nothing: the schema is complete.") if ok else
             "Nothing was applied; the transaction rolled back."),
     }

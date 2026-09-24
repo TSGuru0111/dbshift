@@ -146,6 +146,12 @@ def main() -> int:
                                        "SkipFinalSnapshot": True, "DeleteAutomatedBackups": True}),
         ("rds", "delete_db_instance", {"DBInstanceIdentifier": "tagged-db",
                                        "SkipFinalSnapshot": True, "DeleteAutomatedBackups": True}),
+        # The instance cannot be deleted while a task is attached, so the
+        # kill switch looks for its tasks first. No tasks here, so the
+        # delete follows immediately.
+        ("dms", "describe_replication_tasks",
+         {"Filters": [{"Name": "replication-instance-arn", "Values": [REPL_ARN]}],
+          "WithoutSettings": True}, {"ReplicationTasks": []}),
         ("dms", "delete_replication_instance", {"ReplicationInstanceArn": REPL_ARN}),
     ])
     by = {p["id"]: p for p in plan}
@@ -176,6 +182,12 @@ def main() -> int:
         ("rds", "delete_db_instance", {"DBInstanceIdentifier": "tagged-db",
                                        "SkipFinalSnapshot": True, "DeleteAutomatedBackups": True}),
         ("rds", "delete_db_snapshot", {"DBSnapshotIdentifier": "dbshift-final-snap"}),
+        # The instance cannot be deleted while a task is attached, so the
+        # kill switch looks for its tasks first. No tasks here, so the
+        # delete follows immediately.
+        ("dms", "describe_replication_tasks",
+         {"Filters": [{"Name": "replication-instance-arn", "Values": [REPL_ARN]}],
+          "WithoutSettings": True}, {"ReplicationTasks": []}),
         ("dms", "delete_replication_instance", {"ReplicationInstanceArn": REPL_ARN}),
     ], include_snapshots=True, force_deletion_protection=True)
     check("with both overrides, foreign still left",

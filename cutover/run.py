@@ -75,7 +75,11 @@ def certificate(session, *, on_event=None) -> dict:
     cert = {
         "built_at_utc": datetime.now(timezone.utc).isoformat(),
         "stack_name": plan.get("stack_name"),
-        "estate": run.get("estate") or R.records.estate_of(recs["assessment"]),
+        # `records` is imported here directly; `R` is cutover.requirements,
+        # which has never exposed it. R.records.estate_of() therefore raised
+        # AttributeError whenever run["estate"] was falsy -- that is, whenever
+        # no target is deployed -- and the Report screen showed a bare 400.
+        "estate": run.get("estate") or records.estate_of(recs["assessment"]),
         "collector_run_id": run.get("run_id"),
         "run_id_source": run.get("source"),
         "target_status": run.get("status"),

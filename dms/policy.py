@@ -22,6 +22,36 @@ REGION = "ap-south-1"
 # the work is trivial; a larger class would only cost more per hour.
 INSTANCE_CLASS = "dms.t3.small"
 
+# How many tables DMS loads at once, and the classes worth offering. AWS
+# allows up to 49 subtasks; past the instance's vCPU count they queue rather
+# than run, so the useful range is small. The hourly rates are ap-south-1
+# on-demand and are shown to a person before they start billing -- stale
+# pricing in a demo is worse than none, so they are labelled as indicative.
+# Oracle source endpoint attributes.
+#
+# DMS defaults to LogMiner for reading Oracle redo, and LogMiner is not
+# supported when the source is a pluggable database -- the endpoint test fails
+# with "Log Miner is not supported in Oracle PDB environment" before any data
+# moves. Oracle XE is a CDB with XEPDB1 plugged into it, so this is the normal
+# case for this estate, not an edge case.
+#
+# useBfile=Y selects Binary Reader instead, which reads the redo files
+# directly and works against a PDB. For a full load nothing is read from redo
+# at all, so this only has to be a setting the endpoint will accept; for CDC
+# it is the setting that makes replication possible.
+ORACLE_SOURCE_ATTRIBUTES = "useLogMinerReader=N;useBfile=Y"
+
+PARALLEL_SUBTASKS = 8
+INSTANCE_CLASSES = [
+    {"class": "dms.t3.small",  "vcpu": 2, "memory_gb": 2,  "usd_per_hour": 0.036,
+     "note": "cheapest; fine for a rehearsal"},
+    {"class": "dms.t3.medium", "vcpu": 2, "memory_gb": 4,  "usd_per_hour": 0.073,
+     "note": "more memory for wide rows and LOBs"},
+    {"class": "dms.c5.large",  "vcpu": 2, "memory_gb": 4,  "usd_per_hour": 0.154,
+     "note": "compute-optimised; fastest of these on a full load"},
+]
+SUBTASK_CHOICES = [4, 8, 16]
+
 # 5 GB is the documented minimum. Replication storage holds cached changes and
 # task logs, not the data itself -- the rows stream through memory to the
 # target. Nothing here needs to hold a 1 GB estate.

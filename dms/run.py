@@ -216,7 +216,8 @@ def target_counts_from(target) -> tuple[dict | None, str | None]:
 
 
 def plan(session=None, *, migration_type: str | None = None,
-         target_counts: dict | None = None, target_unread_reason: str | None = None) -> dict:
+         target_counts: dict | None = None, target_unread_reason: str | None = None,
+         parallel_subtasks: int | None = None, instance_class: str | None = None) -> dict:
     """Everything that can be known without creating anything. Free.
 
     Produces the two JSON documents DMS will be given, the preflight verdict,
@@ -322,7 +323,8 @@ def plan(session=None, *, migration_type: str | None = None,
                  "unverified.")))
 
     tm = mappings.table_mappings(schema=estate, tables=tables, lowercase=heterogeneous)
-    ts = mappings.task_settings(migration_type=migration_type)
+    ts = mappings.task_settings(migration_type=migration_type,
+                                parallel_subtasks=parallel_subtasks)
 
     return {
         "planned_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -336,9 +338,17 @@ def plan(session=None, *, migration_type: str | None = None,
         "migration_type_overridden": overridden,
         "heterogeneous": heterogeneous,
         "target_engine": d.get("engine") or "ORACLE",
-        "instance": {"name": policy.instance_name(estate), "class": policy.INSTANCE_CLASS,
+        "instance": {"name": policy.instance_name(estate),
+                     "class": instance_class or policy.INSTANCE_CLASS,
                      "storage_gb": policy.STORAGE_GB, "engine_version": policy.ENGINE_VERSION,
                      "multi_az": policy.MULTI_AZ},
+        # What the screen offers, from policy rather than duplicated in the
+        # page, so the classes and their rates cannot drift apart.
+        "sizing_options": {"classes": policy.INSTANCE_CLASSES,
+                           "subtasks": policy.SUBTASK_CHOICES,
+                           "default_class": policy.INSTANCE_CLASS,
+                           "default_subtasks": policy.PARALLEL_SUBTASKS},
+        "parallel_subtasks": parallel_subtasks or policy.PARALLEL_SUBTASKS,
         "task": {"name": policy.task_name(estate, migration_type)},
         "tables": tables,
         "tables_excluded": selection["exclude"],
@@ -364,7 +374,9 @@ def plan(session=None, *, migration_type: str | None = None,
 
 
 def execute(session, *, confirm_account: str, migration_type: str | None = None,
-            source: dict, target: dict, on_event=None, target_counts: dict | None = None) -> dict:
+            source: dict, target: dict, on_event=None, target_counts: dict | None = None,
+            instance_class: str | None = None, dms_group_id: str | None = None,
+            parallel_subtasks: int | None = None) -> dict:
     """Create the instance, endpoints and task, then run it. **This bills.**"""
     events: list[dict] = []
 
@@ -379,7 +391,8 @@ def execute(session, *, confirm_account: str, migration_type: str | None = None,
             f"refusing to create DMS resources: --confirm must be the account these credentials "
             f"resolve to ({account}), and it was {confirm_account!r}")
 
-    p = plan(session, migration_type=migration_type, target_counts=target_counts)
+    p = plan(session, migration_type=migration_type, target_counts=target_counts,
+             parallel_subtasks=parallel_subtasks, instance_class=instance_class)
     if not p["ready"]:
         raise ValueError("preflight refused: " + ", ".join(p["refused_because"]))
 
@@ -389,12 +402,27 @@ def execute(session, *, confirm_account: str, migration_type: str | None = None,
     _save(record)
 
     dms = session.client("dms", region_name=policy.REGION)
+    ec2 = session.client("ec2", region_name=policy.REGION)
     try:
-        ri = actions.create_instance(dms, session.client("ec2", region_name=policy.REGION),
+        ri = actions.create_instance(dms, ec2,
                                      estate=p["estate"],
-                                     run_id=p["collector_run_id"], emit=emit)
+                                     run_id=p["collector_run_id"], emit=emit,
+                                     instance_class=instance_class,
+                                     dms_group_id=dms_group_id)
         record["instance_arn"] = ri["ReplicationInstanceArn"]
         _save(record)
+
+        # Open the source's firewall to this instance before anything tries to
+        # connect through it. The target is already handled -- Phase 6's stack
+        # grants this group on the RDS security group declaratively -- but the
+        # source EC2 box is not in that stack, so it is granted here.
+        sg_ids = [g["VpcSecurityGroupId"] for g in ri.get("VpcSecurityGroups", [])
+                  if g.get("Status") == "active"]
+        if sg_ids and source.get("host"):
+            src_group = actions.source_security_group(ec2, source["host"], emit)
+            if src_group:
+                actions.grant_ingress(ec2, dms_group_id=sg_ids[0], target_group_id=src_group,
+                                      port=int(source["port"]), what="source listener", emit=emit)
 
         eps = actions.create_endpoints(dms, estate=p["estate"], run_id=p["collector_run_id"],
                                        source=source, target=target, emit=emit)

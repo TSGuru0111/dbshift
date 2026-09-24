@@ -39,7 +39,8 @@ def expiry(now: datetime | None = None) -> str:
 
 # --- replication instance ----------------------------------------------------
 
-def ensure_security_group(ec2, *, estate: str, run_id: str, emit) -> str | None:
+def ensure_security_group(ec2, *, estate: str, run_id: str, emit,
+                          from_stack: str | None = None) -> str | None:
     """The replication instance's own security group, created if absent.
 
     Returned so `create_instance` can attach it. Egress is open by default,
@@ -52,6 +53,16 @@ def ensure_security_group(ec2, *, estate: str, run_id: str, emit) -> str | None:
     blocks the migration. It only stops the operator from writing rules that
     point at nothing.
     """
+    # Phase 6's stack now creates this group and grants it on the target in
+    # the same template, so prefer that one: attaching the instance to a group
+    # the target already trusts removes the "grant it afterwards" step that
+    # used to fail the target endpoint test on every rebuild.
+    if from_stack:
+        emit({"event": "step",
+              "detail": f"using the replication security group Phase 6 created ({from_stack}); "
+                        "the target already admits it"})
+        return from_stack
+
     name = policy.security_group_name(estate)
     try:
         found = ec2.describe_security_groups(
@@ -77,13 +88,93 @@ def ensure_security_group(ec2, *, estate: str, run_id: str, emit) -> str | None:
         return None
 
 
-def create_instance(dms, ec2, *, estate: str, run_id: str, emit) -> dict:
+def grant_ingress(ec2, *, dms_group_id: str, target_group_id: str, port: int,
+                  what: str, emit) -> bool:
+    """Let the DMS replication instance reach one database. Idempotent.
+
+    `ensure_security_group` created the group and then printed "grant it on the
+    source's 1521 and the target's 5432" -- a to-do, not an action. Nothing
+    automated it, so every rebuild needed two rules added by hand in the AWS
+    console, and Phase 7 failed twice before anyone thought to add them: once
+    on the source with ORA-12170, once on the target with an ODBC timeout,
+    both of which read as "the database is unreachable" rather than "nobody
+    opened the door". On 2026-09-22 that cost most of a day.
+
+    It cannot be done in Phase 6's CloudFormation either, because the DMS
+    group does not exist until Phase 7 -- the template can only pin the
+    operator's own /32. So it belongs here, at the one moment both group ids
+    are known.
+
+    Security-group-to-security-group, never a CIDR: the rule admits *this*
+    replication instance and nothing else, and it dies with the group.
+    """
+    if not dms_group_id or not target_group_id:
+        emit({"event": "step",
+              "detail": f"cannot grant {what} -- security group not resolved "
+                        f"(dms={dms_group_id or 'unknown'}, db={target_group_id or 'unknown'})"})
+        return False
+    try:
+        ec2.authorize_security_group_ingress(
+            GroupId=target_group_id,
+            IpPermissions=[{
+                "IpProtocol": "tcp", "FromPort": port, "ToPort": port,
+                "UserIdGroupPairs": [{
+                    "GroupId": dms_group_id,
+                    "Description": "DBShift DMS replication instance",
+                }],
+            }])
+        emit({"event": "step",
+              "detail": f"granted {what}: {target_group_id} now admits {dms_group_id} on {port}"})
+        return True
+    except Exception as exc:  # noqa: BLE001 -- botocore's ClientError
+        # Already there is the normal case on a re-run, and is success.
+        if "InvalidPermission.Duplicate" in str(exc):
+            emit({"event": "step",
+                  "detail": f"{what} already granted on {target_group_id}:{port}; nothing to do"})
+            return True
+        emit({"event": "step",
+              "detail": f"could not grant {what} on {target_group_id}:{port} -- "
+                        f"{str(exc).splitlines()[0]}"})
+        return False
+
+
+def source_security_group(ec2, host: str, emit) -> str | None:
+    """The security group of the EC2 instance serving the source, by its IP.
+
+    Matches on private then public address, because the console connects to
+    one and DMS to the other. Returns None for a source that is not an EC2
+    instance in this account -- an on-premises source has no security group
+    to grant, and saying so is better than failing.
+    """
+    if not host:
+        return None
+    for key in ("private-ip-address", "ip-address"):
+        try:
+            res = ec2.describe_instances(
+                Filters=[{"Name": key, "Values": [host]}])["Reservations"]
+        except Exception:  # noqa: BLE001 -- permissions vary; fall through to None
+            return None
+        for r in res:
+            for inst in r.get("Instances", []):
+                groups = inst.get("SecurityGroups") or []
+                if groups:
+                    return groups[0]["GroupId"]
+    emit({"event": "step",
+          "detail": f"no EC2 instance in this account has address {host}; "
+                    "its firewall is not ours to open"})
+    return None
+
+
+def create_instance(dms, ec2, *, estate: str, run_id: str, emit,
+                    instance_class: str | None = None,
+                    dms_group_id: str | None = None) -> dict:
     """Create the replication instance. **This starts billing.**
 
     Returns when the instance is `available`, because an endpoint test against a
     creating instance fails in a way that looks like a connectivity problem.
     """
     name = policy.instance_name(estate)
+    klass = instance_class or policy.INSTANCE_CLASS
     existing = [i for i in dms.describe_replication_instances()["ReplicationInstances"]
                 if i["ReplicationInstanceIdentifier"] == name]
     if existing:
@@ -91,12 +182,13 @@ def create_instance(dms, ec2, *, estate: str, run_id: str, emit) -> dict:
         return existing[0]
 
     emit({"event": "step",
-          "detail": f"creating {name} ({policy.INSTANCE_CLASS}, {policy.STORAGE_GB} GB) -- "
+          "detail": f"creating {name} ({klass}, {policy.STORAGE_GB} GB) -- "
                     "this starts billing by the hour"})
-    sg_id = ensure_security_group(ec2, estate=estate, run_id=run_id, emit=emit)
+    sg_id = ensure_security_group(ec2, estate=estate, run_id=run_id, emit=emit,
+                                  from_stack=dms_group_id)
     resp = dms.create_replication_instance(
         ReplicationInstanceIdentifier=name,
-        ReplicationInstanceClass=policy.INSTANCE_CLASS,
+        ReplicationInstanceClass=klass,
         AllocatedStorage=policy.STORAGE_GB,
         EngineVersion=policy.ENGINE_VERSION,
         MultiAZ=policy.MULTI_AZ,
@@ -151,12 +243,21 @@ def create_endpoints(dms, *, estate: str, run_id: str, source: dict, target: dic
             # where an endpoint points, so a stale one is corrected and the
             # change is said out loud.
             e = existing[0]
+            # ExtraConnectionAttributes is in here for the same reason the
+            # address is. An endpoint created before this project set
+            # useLogMinerReader=N has the right host, port, user and database,
+            # so without this row `drift` is empty, the endpoint is "reused"
+            # unchanged, and the test fails again with "Log Miner is not
+            # supported in Oracle PDB environment" -- a fix that silently does
+            # not apply is worse than no fix, because the message does not
+            # change.
             drift = {k: (e.get(a), v) for k, a, v in (
                 ("host", "ServerName", spec["host"]),
                 ("port", "Port", int(spec["port"])),
                 ("database", "DatabaseName", spec["database"]),
                 ("user", "Username", spec["user"]),
-            ) if e.get(a) != v}
+                ("settings", "ExtraConnectionAttributes", spec.get("extra_settings") or None),
+            ) if (e.get(a) or None) != v}
             if drift:
                 emit({"event": "step",
                       "detail": f"{role} endpoint {name} points elsewhere; updating "

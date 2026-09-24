@@ -197,7 +197,8 @@ def table_mappings(*, schema: str, tables: list[str] | None = None,
     return {"rules": rules}
 
 
-def task_settings(*, migration_type: str, cloudwatch: bool = policy.CLOUDWATCH_LOGS) -> dict:
+def task_settings(*, migration_type: str, cloudwatch: bool = policy.CLOUDWATCH_LOGS,
+                  parallel_subtasks: int | None = None) -> dict:
     """How DMS behaves while it runs.
 
     The values that matter, and why:
@@ -231,7 +232,10 @@ def task_settings(*, migration_type: str, cloudwatch: bool = policy.CLOUDWATCH_L
             "CreatePkAfterFullLoad": False,
             "StopTaskCachedChangesApplied": False,
             "StopTaskCachedChangesNotApplied": False,
-            "MaxFullLoadSubTasks": 8,
+            # How many tables load at once. The single biggest lever on how
+            # long a full load takes, and the reason it is a parameter now:
+            # 33M rows across 11 tables took 47 minutes at 8.
+            "MaxFullLoadSubTasks": parallel_subtasks or policy.PARALLEL_SUBTASKS,
             "TransactionConsistencyTimeout": 600,
             "CommitRate": 10000,
         },

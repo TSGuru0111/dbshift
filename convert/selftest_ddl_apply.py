@@ -42,8 +42,10 @@ def _plan(compiled=True, estate="DBMIG_APP"):
         "tables": [f"CREATE TABLE {estate.lower()}.customer (id BIGINT)",
                    f"CREATE TABLE {estate.lower()}.loan (id BIGINT)"],
         "primary_unique": [f"ALTER TABLE {estate.lower()}.customer ADD PRIMARY KEY (id)"],
-        "foreign": [f"ALTER TABLE {estate.lower()}.loan ADD FOREIGN KEY (id) "
-                    f"REFERENCES {estate.lower()}.customer(id)"],
+        # Named, because a constraint can only be skipped by name, and a real
+        # 4c plan names its foreign keys after the source's.
+        "foreign": [f"ALTER TABLE {estate.lower()}.loan ADD CONSTRAINT fk_loan_cust "
+                    f"FOREIGN KEY (id) REFERENCES {estate.lower()}.customer(id)"],
         "check": [f"ALTER TABLE {estate.lower()}.customer ADD CHECK (id > 0)"],
         "indexes": [f"CREATE INDEX ix_loan ON {estate.lower()}.loan (id)"],
         "compile": {"ran": 8, "failed": 0, "ok": compiled, "rolled_back": True},
@@ -121,6 +123,22 @@ def main() -> int:
     c("keys, checks and indexes are all post-load", len(post) == 4, str(len(post)))
     c("the post-load pass creates no table",
       not any("CREATE TABLE" in s for s in post))
+
+    print("\na constraint the data violates can be left off, by name")
+    kept = ddl_apply.statements_for(p, post_load=True, skip=("fk_loan_cust",))
+    c("the named constraint is gone",
+      not any("fk_loan_cust" in s.lower() for s in kept))
+    c("everything else still applies", len(kept) == len(post) - 1, f"{len(kept)} of {len(post)}")
+    c("the name is matched case-insensitively",
+      len(ddl_apply.statements_for(p, post_load=True, skip=("FK_LOAN_CUST",))) == len(post) - 1)
+    c("a name that is not there changes nothing",
+      len(ddl_apply.statements_for(p, post_load=True, skip=("fk_nonexistent",))) == len(post))
+    c("skipping nothing is the same as not asking",
+      ddl_apply.statements_for(p, post_load=True, skip=()) == post)
+    c("constraint_name reads the name back",
+      ddl_apply.constraint_name(p["foreign"][0]) == "fk_loan_cust")
+    c("constraint_name is None for a statement that adds none",
+      ddl_apply.constraint_name(p["indexes"][0]) is None)
 
     print("\nrefusals, each with a sentence")
     for kwargs, target, why, expect in [

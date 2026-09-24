@@ -57,6 +57,7 @@ from migrate import steps as migrate_steps
 from dms import policy as dms_policy
 from dms import run as dms_run
 from provision import deploy as provision_deploy
+from provision import operator_ip as provision_operator_ip
 from provision import overrides as provision_overrides
 from provision import policy as provision_policy
 from provision import records as prov_records
@@ -1792,6 +1793,12 @@ class SchemaDdlApply(BaseModel):
     approved_by: str
     post_load: bool = False
     allow_existing: bool = False
+    # Constraints to leave off on purpose, by name. Oracle's ENABLE
+    # NOVALIDATE lets a source carry rows that break its own foreign key;
+    # those rows migrate faithfully and PostgreSQL then refuses the
+    # constraint. Naming one here keeps the target an exact copy and the
+    # defect visible, instead of the whole pass rolling back.
+    skip_constraints: list[str] = []
 
 
 @app.post("/api/schemaddl/apply")
@@ -1816,7 +1823,8 @@ def schema_ddl_apply(req: SchemaDdlApply):
     try:
         result = convert_ddl_apply.apply(
             STATE.schema_ddl, target, approved_by=req.approved_by,
-            post_load=req.post_load, allow_existing=req.allow_existing)
+            post_load=req.post_load, allow_existing=req.allow_existing,
+            skip_constraints=tuple(req.skip_constraints or ()))
     except convert_ddl_apply.ApplyRefused as exc:
         raise HTTPException(409, str(exc)) from exc
     STATE.schema_ddl_apply = result
@@ -2298,6 +2306,78 @@ def migrate_plan():
 # DMS is not an alternative engine for the same job -- it is the only route, and
 # it is the one that makes change data capture (and so a short cutover) possible.
 
+@app.post("/api/operator-ip/refresh")
+def operator_ip_refresh():
+    """Re-point every operator /32 rule at this machine's current address.
+
+    A laptop's public address changes, and when it does the console loses the
+    target: Phase 4c cannot connect, and Phase 7's target checks go BLOCKED
+    rather than failing, because an unreadable target is not an empty one.
+    Nothing on screen says the cause is an IP. This makes it one click and
+    reports what changed.
+    """
+    try:
+        ip = provision_operator_ip.current_ip()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"could not resolve this machine's public address: {exc}")
+    cidr = f"{ip}/32"
+
+    session = _aws_session()
+    ec2 = session.client("ec2", region_name=provision_policy.REGION)
+    results = []
+
+    # The target, whose group Phase 6's stack owns.
+    try:
+        plan = _provision_plan()
+        db = session.client("rds", region_name=provision_policy.REGION).describe_db_instances(
+            DBInstanceIdentifier=plan["stack_name"])["DBInstances"][0]
+        port = int(db["Endpoint"]["Port"])
+        for g in db.get("VpcSecurityGroups", []):
+            if g.get("Status") == "active":
+                results.append(provision_operator_ip.refresh_group(
+                    ec2, group_id=g["VpcSecurityGroupId"], port=port, cidr=cidr,
+                    label="target listener"))
+    except Exception as exc:  # noqa: BLE001 -- an absent target is not an error here
+        results.append({"label": "target listener", "error": str(exc).splitlines()[0],
+                        "group_id": None, "added": False, "revoked": [],
+                        "already_current": False})
+
+    # The source, which is an EC2 instance outside any stack of ours.
+    host, _, _ = (STATE.dsn or "").partition("/")
+    host, _, port_s = host.partition(":")
+    if host:
+        from dms import actions as dms_actions
+        src_group = dms_actions.source_security_group(ec2, host, lambda e: None)
+        if src_group:
+            results.append(provision_operator_ip.refresh_group(
+                ec2, group_id=src_group, port=int(port_s or 1521), cidr=cidr,
+                label="source listener"))
+
+    return {"ip": ip, "cidr": cidr, "groups": results,
+            "changed": sum(1 for r in results if r.get("added") or r.get("revoked"))}
+
+
+def _stack_dms_group_id() -> str | None:
+    """The replication security group Phase 6's stack created, if it did.
+
+    Phase 6 now creates this group and grants it on the target in the same
+    template, so Phase 7 attaches to it rather than making its own and then
+    needing a rule added by hand. Returns None for a stack rendered before
+    this existed, which falls back to the old self-created group.
+    """
+    try:
+        plan = _provision_plan()
+        if not plan or not plan.get("stack_name"):
+            return None
+        s = _aws_session().client(
+            "cloudformation", region_name=provision_policy.REGION).describe_stacks(
+            StackName=plan["stack_name"])["Stacks"][0]
+        return {o["OutputKey"]: o["OutputValue"]
+                for o in s.get("Outputs", [])}.get("DmsSecurityGroupId")
+    except Exception:  # noqa: BLE001 -- absent is an ordinary answer here
+        return None
+
+
 def _provisioned_pg_target():
     """The PostgreSQL target Phase 6 actually built, or None.
 
@@ -2377,6 +2457,12 @@ class DmsExecute(BaseModel):
     source_host: str = ""
     source_port: int = 0
     source_database: str = ""
+    # Empty means dms.policy.INSTANCE_CLASS. A bigger class is the one lever
+    # that changes how long a load takes: 33M rows took 47 minutes on
+    # dms.t3.small.
+    instance_class: str = ""
+    # 0 means dms.policy.PARALLEL_SUBTASKS.
+    parallel_subtasks: int = 0
 
 
 @app.post("/api/dms/execute")
@@ -2459,7 +2545,11 @@ def dms_execute(req: DmsExecute):
               "user": STATE.user or "dbmig_collector",
               "password": req.source_password
               or os.environ.get("DBSHIFT_SOURCE_OWNER_PASSWORD", ""),
-              "database": src_db}
+              "database": src_db,
+              # Without this the endpoint test fails on a pluggable database
+              # with "Log Miner is not supported in Oracle PDB environment".
+              # See dms.policy.ORACLE_SOURCE_ATTRIBUTES.
+              "extra_settings": dms_policy.ORACLE_SOURCE_ATTRIBUTES}
     # Same bug as the source, one field over: this was hardcoded to "" and
     # never resolved, so the run just seen live overwrote a working target
     # endpoint's ServerName with a blank string ("target endpoint ... points
@@ -2491,7 +2581,10 @@ def dms_execute(req: DmsExecute):
             # the outer one above does.
             rec = dms_run.execute(_aws_session(), confirm_account=req.confirm_account,
                                   migration_type=req.migration_type, source=source,
-                                  target=target, on_event=emit, target_counts=counts)
+                                  target=target, on_event=emit, target_counts=counts,
+                                  instance_class=req.instance_class or None,
+                                  parallel_subtasks=req.parallel_subtasks or None,
+                                  dms_group_id=_stack_dms_group_id())
         except (PermissionError, ValueError) as exc:
             emit({"event": "refused", "message": str(exc)})
             return
