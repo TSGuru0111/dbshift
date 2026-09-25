@@ -9,6 +9,7 @@ sizing/output/
 
 # Per-machine console preferences: which checks are on, and custom ones
 web/settings.json
+web/target_region.json
 
 # Python
 __pycache__/

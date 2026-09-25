@@ -63,6 +63,8 @@ from provision import policy as provision_policy
 from provision import records as prov_records
 from provision import run as provision_run
 from provision import verify as provision_verify
+import awsregion
+from pricing import query as pricing_query
 from validate import context as validate_context
 from validate import run as validate_run
 from remediate import plan as remediate_plan
@@ -419,6 +421,117 @@ def aws_config_set(req: AwsCredsRequest):
 @app.delete("/api/aws/config")
 def aws_config_clear():
     return {"ok": True, "removed": awscreds.clear_profile()}
+
+
+class PriceRegionRequest(BaseModel):
+    region: str
+
+
+@app.get("/api/aws/pricing-region")
+def price_region():
+    """The AWS target region: where Provision and Migrate create resources, where
+    the kill switch looks, and what prices are quoted for. One value (awsregion)."""
+    return {"region": awsregion.current(),
+            "regions": [{"code": c, "name": n} for c, n in awsregion.regions().items()]}
+
+
+def _region_change_blocker() -> str | None:
+    """Why the region cannot change right now, or None.
+
+    A live stack in the current region is what Validate, Cutover and the rest of
+    Migrate read; changing the region under it would leave them looking in the
+    wrong place while the instance keeps billing. Sizing never blocks -- it does
+    not depend on the region."""
+    plan = _provision_plan()
+    if not plan or not plan.get("stack_name"):
+        return None
+    try:
+        s = _aws_session().client("cloudformation", region_name=awsregion.current()).describe_stacks(
+            StackName=plan["stack_name"])["Stacks"][0]
+    except Exception:  # noqa: BLE001 -- no stack, or no credentials to ask with: nothing known to protect
+        return None
+    return (f"stack {plan['stack_name']} exists in {awsregion.current()} ({s['StackStatus']}). Destroy it "
+            "with the kill switch before moving the project to another region.")
+
+
+@app.post("/api/aws/pricing-region")
+def set_price_region(req: PriceRegionRequest):
+    if req.region not in awsregion.regions():
+        raise HTTPException(400, f"unknown region {req.region!r}")
+    if req.region != awsregion.current():
+        why = _region_change_blocker()
+        if why:
+            raise HTTPException(409, why)
+        awsregion.set_region(req.region)
+        # The rendered plan was preflighted, priced and given a VPC in the old
+        # region; it is not evidence about this one. Sizing is left alone.
+        STATE.provision = None
+    return price_region()
+
+
+def _rds_price_target(phase: str) -> dict | None:
+    """The RDS class, engine and licence to price -- read from what Phase 3 and
+    Phase 6 already decided, never derived here. Provision prefers its own
+    rendered plan (which carries a person's override); before that has run it
+    falls back to the sizing decision plus any override chosen on the form."""
+    d = ((STATE.sizing or {}).get("decision") or {})
+    if not d.get("instance_class"):
+        return None
+    if phase == "provision":
+        rd = (_provision_plan() or {}).get("rendered")
+        if rd:
+            return {"instance_type": rd["instance_class"], "engine": rd["engine"],
+                    "licence": rd["licence"], "multi_az": rd.get("multi_az", provision_policy.MULTI_AZ)}
+    if d.get("engine") == "POSTGRESQL":
+        engine, licence = provision_policy.PG_ENGINE, provision_policy.PG_LICENCE
+    else:
+        engine, licence = provision_policy.ENGINE[d["edition"]]
+    chosen = ((STATE.provision_overrides or {}).get("instance_class") or {}).get("chosen")
+    return {"instance_type": (chosen if phase == "provision" and chosen else d["instance_class"]),
+            "engine": engine, "licence": licence, "multi_az": provision_policy.MULTI_AZ}
+
+
+@app.get("/api/aws/pricing")
+def aws_pricing(phase: str, resourceType: str, region: str | None = None,
+                instanceType: str | None = None):
+    """Live price for the resource a phase is about.
+
+    Prices the instance the phase has *already* chosen; it never recommends one.
+    Target & Sizing and Provision price an RDS class, Migrate prices a DMS
+    replication instance, and a mismatch is refused rather than answered from
+    the wrong catalogue. When no price can be established this answers 200 with
+    `available: false` and a reason -- pricing is decoration on a decision that
+    stands without it, so it must not turn the phase's own screen into an error.
+    """
+    want = pricing_query.PHASE_RESOURCE.get(phase)
+    if want is None:
+        raise HTTPException(400, f"unknown phase {phase!r}")
+    if resourceType != want:
+        raise HTTPException(400, f"phase {phase!r} prices {want!r}, not {resourceType!r}")
+    region = region or awsregion.current()
+
+    kw: dict = {"resource_type": want, "region": region}
+    if want == pricing_query.RDS:
+        target = _rds_price_target(phase)
+        if target is None:
+            raise HTTPException(409, "no sizing decision yet -- run Phase 3 first")
+        # The class is the phase's own. A caller may name one only to price the
+        # candidate it is looking at (the Provision picker), never the engine.
+        kw.update(target, instance_type=instanceType or target["instance_type"])
+    else:
+        kw["instance_type"] = instanceType or dms_policy.INSTANCE_CLASS
+    try:
+        session = _aws_session()
+    except Exception as exc:  # noqa: BLE001 -- no profile is an ordinary state
+        return {"available": False, "code": "no-credentials", "reason": "AWS credentials are not configured",
+                "resourceType": want, "region": region}
+    try:
+        return {"available": True, **pricing_query.price(session, **kw)}
+    except pricing_query.PricingError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except pricing_query.PricingUnavailable as exc:
+        return {"available": False, "code": exc.code, "reason": exc.reason,
+                "resourceType": want, "region": region, "instanceType": kw["instance_type"]}
 
 
 @app.get("/api/catalogue")
@@ -1985,10 +2098,15 @@ def _aws_session():
 
 
 def _provision_plan() -> dict | None:
-    if STATE.provision:
-        return STATE.provision
-    path = provision_run.OUTPUT / "provision_plan.json"
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    plan = STATE.provision
+    if not plan:
+        path = provision_run.OUTPUT / "provision_plan.json"
+        plan = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    # A plan from another region says nothing about this one. Plans written before
+    # the region was recorded carry none and are treated as the default region's.
+    if plan and plan.get("region", awsregion.DEFAULT) != awsregion.current():
+        return None
+    return plan
 
 
 @app.get("/api/provision/options")
@@ -2264,7 +2382,7 @@ def killswitch_scan():
     """What is billing right now. Read-only."""
     try:
         return killswitch_run.execute(_aws_session(), mode=None, confirm=None,
-                                      regions=[provision_policy.REGION])
+                                      regions=awsregion.scan_regions())
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, str(exc).splitlines()[0])
 
@@ -2276,7 +2394,7 @@ def killswitch_act(req: KillRequest):
         raise HTTPException(400, "mode must be stop or destroy")
     try:
         return killswitch_run.execute(_aws_session(), mode=req.mode, confirm=req.confirm,
-                                      regions=[provision_policy.REGION])
+                                      regions=awsregion.scan_regions())
     except PermissionError as exc:
         raise HTTPException(400, str(exc))
 

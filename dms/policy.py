@@ -15,7 +15,7 @@ from __future__ import annotations
 # The kill switch acts on `dbshift*` names, so the prefix is load-bearing.
 PREFIX = "dbshift-"
 
-REGION = "ap-south-1"
+# REGION is dynamic -- see __getattr__ at the foot of this file and awsregion.py.
 
 # dms.t3.small is the smallest orderable class in this region (verified with
 # describe-orderable-replication-instances on 2026-09-14). At this estate's size
@@ -24,9 +24,11 @@ INSTANCE_CLASS = "dms.t3.small"
 
 # How many tables DMS loads at once, and the classes worth offering. AWS
 # allows up to 49 subtasks; past the instance's vCPU count they queue rather
-# than run, so the useful range is small. The hourly rates are ap-south-1
-# on-demand and are shown to a person before they start billing -- stale
-# pricing in a demo is worse than none, so they are labelled as indicative.
+# than run, so the useful range is small. There are deliberately no hourly rates
+# here: a rate committed to git goes stale (the t3.small figure that used to be
+# here was a third under what AWS charged) and it differs by region. The rate
+# for the selected region comes from the AWS Price List API -- see
+# dms.run.priced_classes.
 # Oracle source endpoint attributes.
 #
 # DMS defaults to LogMiner for reading Oracle redo, and LogMiner is not
@@ -43,12 +45,9 @@ ORACLE_SOURCE_ATTRIBUTES = "useLogMinerReader=N;useBfile=Y"
 
 PARALLEL_SUBTASKS = 8
 INSTANCE_CLASSES = [
-    {"class": "dms.t3.small",  "vcpu": 2, "memory_gb": 2,  "usd_per_hour": 0.036,
-     "note": "cheapest; fine for a rehearsal"},
-    {"class": "dms.t3.medium", "vcpu": 2, "memory_gb": 4,  "usd_per_hour": 0.073,
-     "note": "more memory for wide rows and LOBs"},
-    {"class": "dms.c5.large",  "vcpu": 2, "memory_gb": 4,  "usd_per_hour": 0.154,
-     "note": "compute-optimised; fastest of these on a full load"},
+    {"class": "dms.t3.small",  "vcpu": 2, "memory_gb": 2,  "note": "cheapest; fine for a rehearsal"},
+    {"class": "dms.t3.medium", "vcpu": 2, "memory_gb": 4,  "note": "more memory for wide rows and LOBs"},
+    {"class": "dms.c5.large",  "vcpu": 2, "memory_gb": 4,  "note": "compute-optimised; fastest of these on a full load"},
 ]
 SUBTASK_CHOICES = [4, 8, 16]
 
@@ -173,3 +172,14 @@ def endpoint_name(estate: str, role: str) -> str:
     import re
     slug = re.sub(r"[^a-z0-9]+", "-", (estate or "").lower()).strip("-")
     return f"{PREFIX}{role}-{slug}"
+
+
+def __getattr__(name):
+    # `policy.REGION` is read at call time from awsregion, so the region chosen in
+    # the console reaches every AWS call that already spells it `policy.REGION`.
+    # Import-time uses (f-strings at module level) would freeze the first value;
+    # there are none, and the selftest scans for them.
+    if name == "REGION":
+        import awsregion
+        return awsregion.current()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

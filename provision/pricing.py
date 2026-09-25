@@ -1,9 +1,14 @@
-"""Hourly and monthly cost, read from AWS's public price list -- never guessed.
+"""Hourly and monthly cost, read from AWS's price list -- never guessed.
 
-The role here has no pricing:GetProducts, so this reads the regional offer file
-AWS publishes at pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/
-current/<region>/index.json. It is passed in as a path and kept out of the repo;
-prices change, and a stale number committed to git is worse than none.
+`lookup_live` is the source: the Price List Query API, through pricing.query, the
+same path the price card uses, so the estimate, the card and the deploy gate
+agree. `lookup` reads the regional offer file AWS publishes at
+pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/current/<region>/
+index.json and is only the fallback when the API cannot answer (a role without
+pricing:GetProducts, or offline). Both return the same shape and both say which
+they were in `source`; provision.run never uses the two at once. The file is
+passed in as a path and kept out of the repo; prices change, and a stale number
+committed to git is worse than none.
 
 Returns every matching price rather than picking one silently. More than one
 match means the filter is ambiguous and a person should look.
@@ -14,7 +19,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-LOCATION = {"ap-south-1": "Asia Pacific (Mumbai)"}
+import awsregion
+
 EDITION = {"oracle-ee": "Enterprise", "oracle-se2": "Standard Two"}
 LICENCE = {"bring-your-own-license": "Bring your own license", "license-included": "License included"}
 VOLUME = {"gp3": "General Purpose-GP3", "gp2": "General Purpose"}
@@ -34,7 +40,7 @@ def lookup(price_file: Path, *, region: str, engine: str, licence: str, instance
     doc = json.loads(Path(price_file).read_text(encoding="utf-8"))
     products, terms = doc["products"], doc["terms"]
     deployment = "Multi-AZ" if multi_az else "Single-AZ"
-    loc = LOCATION[region]
+    loc = awsregion.name(region)
 
     instance, storage = [], []
     for sku, p in products.items():
@@ -64,6 +70,11 @@ def lookup(price_file: Path, *, region: str, engine: str, licence: str, instance
               and a.get("databaseEngine") in ("Oracle", "PostgreSQL", "Any")):
             storage += [{**x, "sku": sku, "operation": a.get("operation")} for x in _on_demand(terms, sku)]
 
+    return _narrowed("AWS public price list, " + (doc.get("publicationDate") or "unknown date"),
+                     loc, deployment, instance, storage)
+
+
+def _narrowed(source: str, loc: str, deployment: str, instance: list, storage: list) -> dict:
     # Storage is listed once per engine code. Keep the line for the same engine
     # code as the instance (e.g. CreateDBInstance:0005 = Oracle EE BYOL).
     ops = {m["operation"] for m in instance}
@@ -71,9 +82,23 @@ def lookup(price_file: Path, *, region: str, engine: str, licence: str, instance
         same = [s for s in storage if s["operation"] in ops]
         storage = same or storage
 
-    return {"source": "AWS public price list, " + (doc.get("publicationDate") or "unknown date"),
-            "location": loc, "deployment": deployment,
+    return {"source": source, "location": loc, "deployment": deployment,
             "instance_matches": instance, "storage_matches": storage}
+
+
+def lookup_live(session, *, region: str, engine: str, licence: str, instance_class: str,
+                storage_type: str, multi_az: bool) -> dict:
+    """The same answer as `lookup`, from the Price List API. Raises
+    pricing.query.PricingUnavailable when the API cannot give one."""
+    from pricing import query
+    products = query.rds_instance_products(session, region=region, instance_type=instance_class,
+                                           engine=engine, licence=licence, multi_az=multi_az)
+    storage = query.rds_storage_products(session, region=region, volume_type=storage_type,
+                                         multi_az=multi_az)
+    return _narrowed("AWS Price List API (GetProducts)", awsregion.name(region),
+                     "Multi-AZ" if multi_az else "Single-AZ",
+                     [r for i in products for r in query.rows(i)],
+                     [r for i in storage for r in query.rows(i)])
 
 
 def estimate(prices: dict, storage_gb: int, *, oracle: bool = True) -> dict | None:

@@ -146,8 +146,12 @@ tables, 18 constraints, 12 indexes, 11 types and the 6 applied objects. Phase
 once the stored code has actually been converted and compiled.
 
 Phases 6 and 7 render and plan only. Phases 8 and 9 need a provisioned target
-and migrated data; the price file for a real deploy is the public AWS offer
-file, not the pricing API, which this permission set cannot call.
+and migrated data. Prices come from the AWS Price List API (`pricing/query.py`)
+and need `pricing:GetProducts`; the public offer file (`--price-file`) is only a
+labelled fallback when the API cannot answer. The AWS region is one value
+(`awsregion.py`, chosen on the console, persisted in `web/target_region.json`)
+that `provision.policy.REGION` / `dms.policy.REGION`, the kill switch and the
+price lookups all read.
 
 ## Running it
 

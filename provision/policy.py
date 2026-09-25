@@ -13,7 +13,7 @@ from __future__ import annotations
 # acts only on dbshift* names. The prefix is load-bearing twice over.
 STACK_PREFIX = "dbshift-"
 
-REGION = "ap-south-1"
+# REGION is dynamic -- see __getattr__ at the foot of this file and awsregion.py.
 
 # Edition -> (RDS engine, licence model). There is no licence-included EE on RDS.
 ENGINE = {
@@ -105,3 +105,14 @@ PG_ENCODING = "UTF8"
 # the database, not an option group. DMS is the data path here anyway, so the
 # exchange bucket carries no dump for this engine -- it stays for the run
 # artefacts the console writes.
+
+
+def __getattr__(name):
+    # `policy.REGION` is read at call time from awsregion, so the region chosen in
+    # the console reaches every AWS call that already spells it `policy.REGION`.
+    # Import-time uses (f-strings at module level) would freeze the first value;
+    # there are none, and the selftest scans for them.
+    if name == "REGION":
+        import awsregion
+        return awsregion.current()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

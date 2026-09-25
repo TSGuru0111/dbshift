@@ -39,6 +39,8 @@ if __package__ in (None, ""):
 
 from botocore.exceptions import ClientError
 
+import awsregion
+
 from . import policy
 from . import run as run_mod
 
@@ -180,6 +182,7 @@ def deploy(session, *, confirm_account: str, accept_hourly: float | None, halt_r
               "account": identity["Account"], "collector_run_id": r["collector_run_id"],
               "cost": est, "acknowledgement": ack}
     # Written before the first billable call, so an interrupted deploy still has a record.
+    awsregion.mark_used(policy.REGION)   # so the kill switch still looks here if the region is changed later
     _append(OUTPUT / "deployments.jsonl", {**record, "event": "requested"})
 
     # The SSM parameter holding the master password is a resource too, and the

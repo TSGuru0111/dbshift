@@ -29,14 +29,42 @@ DEFAULT_PROFILE = (os.environ.get("DBSHIFT_AWS_PROFILE")
                    or "dbshift-bedrock")
 # AWS's public RDS price list for the region, downloaded by hand. It lives in the
 # gitignored output folder: prices change, and a committed copy would go stale.
-PRICE_FILE = OUTPUT / f"rds_{policy.REGION}_prices.json"
-
-
 def default_price_file() -> Path | None:
     env = os.environ.get("DBSHIFT_PRICE_FILE")
     if env:
         return Path(env)
-    return PRICE_FILE if PRICE_FILE.exists() else None
+    path = OUTPUT / f"rds_{policy.REGION}_prices.json"   # per region, so a Mumbai file is never read for another
+    return path if path.exists() else None
+
+
+def _cost(session, price_file, *, region, engine, licence, instance_class, storage_type,
+          storage_gb, multi_az) -> dict:
+    """The cost block, from one source. The Price List API is authoritative and
+    the deploy gate compares against what it returns; the offer file is used only
+    when the API cannot answer, and `prices.source` says which one this was."""
+    from pricing.query import PricingUnavailable
+    args = dict(region=region, engine=engine, licence=licence, instance_class=instance_class,
+                storage_type=storage_type, multi_az=multi_az)
+    why = "no AWS session"
+    prices = None
+    if session is not None:
+        try:
+            prices = pricing.lookup_live(session, **args)
+        except PricingUnavailable as exc:
+            why = exc.reason
+    if prices is None and price_file:
+        try:
+            prices = pricing.lookup(price_file, **args)
+            why = None
+        except (OSError, KeyError, ValueError) as exc:
+            why = f"{why}; and the price file could not be used ({exc})"
+    if prices is None:
+        return {"prices": None, "estimate": None,
+                "unavailable": f"No price could be established ({why}), so no estimate is shown. A deploy "
+                               "is never offered without a stated cost -- grant pricing:GetProducts, or "
+                               "pass --price-file with the AWS offer file for this region."}
+    return {"prices": prices,
+            "estimate": pricing.estimate(prices, storage_gb, oracle=engine != policy.PG_ENGINE)}
 
 
 def execute(*, session=None, price_file: Path | None = None, operator_cidr: str | None = None,
@@ -110,19 +138,10 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
                                  config_override=config_override)
         checks.append(preflight.validate_template(session, rendered["template"]))
 
-    cost = None
-    if price_file and rendered:
-        prices = pricing.lookup(price_file, region=policy.REGION, engine=engine, licence=licence,
-                                instance_class=instance_class, storage_type=d["storage_type"],
-                                multi_az=(rendered or {}).get("multi_az", policy.MULTI_AZ))
-        cost = {"prices": prices,
-                "estimate": pricing.estimate(prices, d["storage_gb"],
-                                             oracle=engine != policy.PG_ENGINE)}
-    elif rendered:
-        cost = {"prices": None, "estimate": None,
-                "unavailable": "No price file was supplied, so no estimate is shown. A deploy is "
-                               "never offered without a stated cost -- pass --price-file with the "
-                               "AWS offer file for this region."}
+    cost = (_cost(session, price_file, region=policy.REGION, engine=engine, licence=licence,
+                  instance_class=instance_class, storage_type=d["storage_type"],
+                  storage_gb=d["storage_gb"], multi_az=(rendered or {}).get("multi_az", policy.MULTI_AZ))
+            if rendered else None)
 
     # What Phases 4b, 4c and 4d prepared for this target. Checked here rather
     # than in `records.load` because it is optional: provisioning an empty
@@ -136,6 +155,7 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
     plan = {
         "rendered_at_utc": now.isoformat(),
         "stack_name": stack,
+        "region": policy.REGION,
         "estate": estate,
         "collector_run_id": run_id,
         "source": facts,

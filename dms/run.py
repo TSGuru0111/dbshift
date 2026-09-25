@@ -24,6 +24,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import awsregion
+
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "dms"
@@ -215,6 +217,31 @@ def target_counts_from(target) -> tuple[dict | None, str | None]:
             pass
 
 
+def priced_classes(session) -> list[dict]:
+    """policy.INSTANCE_CLASSES with each class's live hourly rate for the selected
+    region. The selection (which classes, their vCPU and memory) is policy and is
+    unchanged; only the price comes from the Price List API. A class with no price
+    carries `usd_per_hour: None` and the reason, and the screen shows it as
+    "Pricing unavailable" -- the class stays selectable."""
+    from pricing import query
+    out, failed = [], None
+    for c in policy.INSTANCE_CLASSES:
+        row = {**c, "usd_per_hour": None, "price_unavailable": None}
+        if failed and failed.code != "no-match":
+            row["price_unavailable"] = failed.reason   # the API itself is down; do not ask twice
+        else:
+            try:
+                if session is None:
+                    raise query.PricingUnavailable("no AWS session", "no-credentials")
+                row["usd_per_hour"] = query.price(
+                    session, resource_type=query.DMS, region=policy.REGION,
+                    instance_type=c["class"], multi_az=policy.MULTI_AZ)["hourlyPrice"]
+            except query.PricingUnavailable as exc:
+                failed, row["price_unavailable"] = exc, exc.reason
+        out.append(row)
+    return out
+
+
 def plan(session=None, *, migration_type: str | None = None,
          target_counts: dict | None = None, target_unread_reason: str | None = None,
          parallel_subtasks: int | None = None, instance_class: str | None = None) -> dict:
@@ -344,7 +371,8 @@ def plan(session=None, *, migration_type: str | None = None,
                      "multi_az": policy.MULTI_AZ},
         # What the screen offers, from policy rather than duplicated in the
         # page, so the classes and their rates cannot drift apart.
-        "sizing_options": {"classes": policy.INSTANCE_CLASSES,
+        "region": policy.REGION,
+        "sizing_options": {"classes": priced_classes(session),
                            "subtasks": policy.SUBTASK_CHOICES,
                            "default_class": policy.INSTANCE_CLASS,
                            "default_subtasks": policy.PARALLEL_SUBTASKS},
@@ -400,6 +428,7 @@ def execute(session, *, confirm_account: str, migration_type: str | None = None,
               "plan": {k: v for k, v in p.items() if k not in ("table_mappings", "task_settings")},
               "events": events}
     _save(record)
+    awsregion.mark_used(policy.REGION)   # so the kill switch still looks here if the region is changed later
 
     dms = session.client("dms", region_name=policy.REGION)
     ec2 = session.client("ec2", region_name=policy.REGION)

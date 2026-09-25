@@ -1209,6 +1209,10 @@ tr:last-child td{border-bottom:none}
         <div class="eyebrow">Chosen target</div>
         <div id="targetSpec"></div>
       </div>
+      <div class="panel pad mt">
+        <div class="eyebrow">Estimated price · Amazon RDS instance class</div>
+        <div id="priceSizing"></div>
+      </div>
       <div id="pgNote" style="display:none" class="mt">
         <div class="note info">RDS for PostgreSQL has <b>no editions and no licence model</b>.
           The Oracle feature usage that decides Enterprise versus Standard Edition 2 — and the
@@ -1611,6 +1615,10 @@ tr:last-child td{border-bottom:none}
 
       <div class="provpane" data-prov="plan">
       <div class="tiles mt" id="provTiles"></div>
+      <div class="panel pad mt">
+        <div class="eyebrow">Estimated price · Amazon RDS instance class</div>
+        <div id="priceProvision"></div>
+      </div>
 
       <!-- The template is the artefact of this phase, and until now it could
            only be read inside a <details> on the Live pane -- which exists
@@ -1797,6 +1805,8 @@ tr:last-child td{border-bottom:none}
             <select id="dmsSubtasks"></select></div>
         </div>
         <div class="note info" id="dmsSizingNote" style="margin:0 0 12px"></div>
+        <div class="eyebrow">Estimated price · AWS DMS replication instance</div>
+        <div id="priceMigrate" style="margin:6px 0 14px"></div>
 
         <div class="field"><label for="dmsConfirm">Type the AWS account id to confirm</label>
           <input id="dmsConfirm" class="mono" placeholder="000000000000"></div>
@@ -2205,7 +2215,7 @@ function provChipState(plan, status){
   // The rate is the fact a person needs before opening the pane, not after.
   set('#provChipDeploy', !plan ? ''
     : s.exists ? 'deployed'
-    : est ? `$${est.instance_per_hour}/h` : 'no price list');
+    : est ? `$${est.instance_per_hour}/h` : 'no price');
 }
 
 function renderPageNav(){
@@ -3328,6 +3338,82 @@ $('#btnSize').onclick = () => {
   es.onerror = () => { es.close(); btn.disabled = false; setStage('target','active','connection lost'); };
 };
 
+/* ---------------- AWS price card ----------------
+   One card, three phases. Target & Sizing and Provision price an Amazon RDS
+   instance class; Migrate prices an AWS DMS replication instance -- different
+   catalogues, so the phase (not the caller) decides which is asked. The class
+   shown is always the phase's own decision, passed in by the caller; the price
+   is looked up for it and never the other way round. If pricing fails the
+   class is still shown, with "Pricing unavailable" beside it. The region only
+   is the project's target region: shared by all three cards, it is where Provision
+   and Migrate create resources and what prices are quoted for. Changing it never
+   re-runs sizing, and is refused while a stack exists in the old region. */
+const PRICE = {region: null, regions: [], seq: {}, cards: {}, note: ''};
+
+async function priceRegions(){
+  if (PRICE.regions.length) return;
+  try {
+    const r = await (await fetch('/api/aws/pricing-region')).json();
+    PRICE.region = r.region; PRICE.regions = r.regions;
+  } catch (e) { /* the card renders without a dropdown and says so */ }
+}
+
+async function renderPriceCard(box, phase, resource, label, cls){
+  const el = typeof box === 'string' ? $('#' + box) : box;
+  if (!el) return;
+  PRICE.cards[el.id] = () => renderPriceCard(el, phase, resource, label, cls);
+  const seq = PRICE.seq[el.id] = (PRICE.seq[el.id] || 0) + 1;
+  await priceRegions();
+  const opts = PRICE.regions.map(x =>
+    `<option value="${esc(x.code)}"${x.code === PRICE.region ? ' selected' : ''}>${esc(x.code)} — ${esc(x.name)}</option>`).join('');
+  const head = `<div class="field" style="max-width:340px"><label>AWS Region</label>
+      <select data-price-region>${opts}</select></div>`;
+  const shell = body => {
+    if (seq !== PRICE.seq[el.id]) return;          // a newer request owns this card
+    el.innerHTML = head + body;
+    const sel = el.querySelector('[data-price-region]');
+    if (sel) sel.onchange = async () => {
+      const r = await fetch('/api/aws/pricing-region', {method: 'POST',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({region: sel.value})});
+      if (r.ok) {
+        PRICE.region = sel.value; PRICE.note = '';
+        // What was rendered for the old region says nothing about this one.
+        if ($('#provResult')) { $('#provResult').style.display = 'none'; $('#provEmpty').style.display = ''; }
+        if ($('#dmsClass')) $('#dmsClass').innerHTML = '';
+        PRICE.migrateClass = null;
+        if (typeof DMSPLAN !== 'undefined' && DMSPLAN) renderDmsPlan();
+      } else {
+        PRICE.note = (await r.json().catch(() => ({}))).detail || 'the region could not be changed';
+      }
+      Object.values(PRICE.cards).forEach(f => f());
+    };
+  };
+  const tile = (k, v, h) => `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${v}</div>
+    <div class="h">${esc(h || '')}</div></div>`;
+  const known = tile(label, esc(cls || '—'), '');
+  shell(`<div class="tiles mt-s">${known}<div class="tile"><div class="k">Price</div>
+    <div class="v">…</div><div class="h">asking the AWS Price List API</div></div></div>`);
+
+  let d;
+  try {
+    const q = new URLSearchParams({phase, resourceType: resource});
+    if (resource === 'dms' && cls) q.set('instanceType', cls);
+    const r = await fetch('/api/aws/pricing?' + q);
+    d = r.ok ? await r.json() : {available: false, reason: (await r.json().catch(() => ({}))).detail || 'request failed'};
+  } catch (e) { d = {available: false, reason: 'network failure'}; }
+
+  const off = PRICE.note ? `<div class="note bad mt-s">${esc(PRICE.note)}</div>` : '';
+  if (!d.available) {
+    shell(`<div class="tiles mt-s">${known}${tile('Price', '<span style="font-size:18px">Pricing unavailable</span>', d.reason || '')}</div>${off}`);
+    return;
+  }
+  shell(`<div class="tiles mt-s">
+      ${tile(label, esc(d.instanceType), `${d.vcpu ?? '—'} vCPU · ${d.memory || '—'}`)}
+      ${tile('Hourly cost', '$' + d.hourlyPrice.toFixed(4) + '<small>/hour</small>', d.currency + ' · on-demand')}
+      ${tile('Estimated monthly cost', '$' + d.monthlyPrice.toFixed(2) + '<small>/month</small>', 'hourly × 730 h — an estimate, not a bill')}
+    </div>${off}`);
+}
+
 async function renderSizing(){
   const s = await (await fetch('/api/sizing')).json();
   const d = s.decision, p = s.proposal, f = s.facts;
@@ -3353,6 +3439,7 @@ async function renderSizing(){
           <div style="font-size:13.5px;color:var(--ink-2);margin-top:3px">${esc(h)}</div></div>`).join('')}
     </div>`;
 
+  renderPriceCard('priceSizing', 'target-sizing', 'rds', 'RDS instance class', d.instance_class);
   $('#editionPanels').style.display = pg ? 'none' : '';
   $('#pgNote').style.display = pg ? '' : 'none';
   $('#forcedList').innerHTML = (d.forced_by || []).map(x => `
@@ -5231,10 +5318,11 @@ async function renderProvision(){
   $('#provTiles').innerHTML = rd ? [
     tile('Engine', esc(rd.engine.replace('oracle-', '').toUpperCase()) + '<small>19c</small>', rd.licence),
     tile('Instance', esc(rd.instance_class), `${rd.storage_gb} GB ${rd.storage_type}`),
-    tile('Per hour', est ? '$' + est.instance_per_hour : '—', est ? `plus $${est.storage_per_month}/month storage` : 'no price list'),
+    tile('Per hour', est ? '$' + est.instance_per_hour : '—', est ? `plus $${est.storage_per_month}/month storage` : 'no price'),
     tile('If forgotten', est ? '$' + est.if_left_running_30_days : '—', est ? `30 days · an 8-hour day is $${est.per_8h_day}` : ''),
   ].join('') : '';
 
+  if (rd) renderPriceCard('priceProvision', 'provision', 'rds', 'RDS instance class', rd.instance_class);
   $('#provChecks').innerHTML = p.checks.map(checkRow).join('');
   $('#provTable').innerHTML = rd ? rd.provenance.map(x => `<tr><td class="mono">${esc(x.property)}</td>
     <td class="mono">${esc(x.value)}</td><td>${esc(x.source)}</td><td>${esc(x.why)}</td></tr>`).join('') : '';
@@ -5246,7 +5334,7 @@ async function renderProvision(){
     ? `Deploying starts billing at <b>$${est.instance_per_hour}/hour</b> plus $${est.storage_per_month}/month
        storage — $${est.per_8h_day} for an 8-hour day, <b>$${est.if_left_running_30_days} if left running
        30 days</b>. Excludes ${esc(est.excludes.replace(/^Oracle/, 'Oracle'))}.`
-    : 'No price list, so no deploy: a deploy is never offered without a stated cost.';
+    : 'No price could be established, so no deploy: a deploy is never offered without a stated cost.';
   setStage('provision', 'active', p.ready ? (est ? `ready · $${est.instance_per_hour}/h` : 'ready') : 'not ready');
   await refreshStatus();
 }
@@ -6111,7 +6199,7 @@ function renderDmsSizing(d){
   const cls = $('#dmsClass'), sub = $('#dmsSubtasks');
   if (!cls.options.length) {
     cls.innerHTML = opts.classes.map(c =>
-      `<option value="${esc(c.class)}">${esc(c.class)} — $${c.usd_per_hour.toFixed(3)}/h · ${esc(c.note)}</option>`).join('');
+      `<option value="${esc(c.class)}">${esc(c.class)} — ${c.usd_per_hour == null ? 'pricing unavailable' : '$' + c.usd_per_hour.toFixed(3) + '/h'} · ${esc(c.note)}</option>`).join('');
     cls.value = d.instance.class || opts.default_class;
     sub.innerHTML = opts.subtasks.map(n =>
       `<option value="${n}">${n} tables at once</option>`).join('');
@@ -6119,24 +6207,33 @@ function renderDmsSizing(d){
     cls.onchange = sub.onchange = () => renderDmsSizing(DMSPLAN);
   }
   const chosen = opts.classes.find(c => c.class === cls.value) || opts.classes[0];
+  // renderDmsSizing runs on every dropdown change; only ask for a price when the
+  // class actually differs from the one already on the card.
+  if (PRICE.migrateClass !== chosen.class) {
+    PRICE.migrateClass = chosen.class;
+    renderPriceCard('priceMigrate', 'migrate', 'dms', 'DMS replication instance', chosen.class);
+  }
   const rows = (d.tables || []).reduce((a, t) => a + (DMSPLAN.row_counts?.[t] || 0), 0)
                || DMS_MEASURED.rows;
   // Scale the measurement by compute and parallelism, then floor it: past a
   // point the source and network bound the load, not the instance.
   const speedup = (chosen.vcpu / DMS_MEASURED.vcpu) * (Number(sub.value) / DMS_MEASURED.subtasks);
   const mins = Math.max(8, Math.round(DMS_MEASURED.minutes * (rows / DMS_MEASURED.rows) / speedup));
-  const cost = (chosen.usd_per_hour * (mins / 60)).toFixed(2);
+  // The rate is the live Price List rate for the selected region, never a
+  // constant. Without one the time estimate stands and the dollar figure is omitted.
+  const cost = chosen.usd_per_hour == null ? null : (chosen.usd_per_hour * (mins / 60)).toFixed(2);
   // en-US grouping explicitly: the browser's own locale renders 32971741 as
   // "3,29,71,741" here, which is correct for India but does not match the
   // "33M" in the same sentence or any other number in this console.
   $('#dmsSizingNote').innerHTML =
     `<b>Roughly ${mins} minutes</b> for ${rows.toLocaleString('en-US')} rows across
-     ${(d.tables || []).length} table(s) — about <b>$${cost}</b> for the replication
-     instance alone.
+     ${(d.tables || []).length} table(s) — ${cost === null
+       ? `<b>pricing unavailable</b> (${esc(chosen.price_unavailable || 'no rate')}), so no cost is shown`
+       : `about <b>$${cost}</b> for the replication instance alone at the live $${chosen.usd_per_hour}/h`}.
      <span style="color:var(--ink-3)">The target keeps billing throughout, so this is
      not the cost of the migration. An estimate scaled from one measured run
      (33M rows, 47 min on dms.t3.small at 8) — row width, indexes and network
-     all move it.</span>`;
+     all move it. Rate: AWS Price List, ${esc(d.region || PRICE.region || '')}.</span>`;
 }
 
 $('#btnDmsPlan').onclick = () => renderDmsPlan();
