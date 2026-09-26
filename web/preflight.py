@@ -299,4 +299,10 @@ NETWORK_REQUIREMENTS = [
         "title": "No inbound firewall hole",
         "detail": "Deliberately. Security teams refuse them, and the collector never needs one.",
     },
+    {
+        "title": "ARCHIVELOG mode and supplemental logging for Change Data Capture (CDC)",
+        "detail": "DMS change data capture needs ARCHIVELOG plus supplemental logging. "
+        "Without both, only a full-outage load is possible. Enabling ARCHIVELOG requires "
+        "a database restart, so it needs a window.",
+    },
 ]
