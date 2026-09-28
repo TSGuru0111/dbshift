@@ -2196,7 +2196,12 @@ function provTab(which){
 }
 document.addEventListener('click', e => {
   const chip = e.target.closest('#provTabs .chip');
-  if (chip) provTab(chip.dataset.prov);
+  if (!chip) return;
+  provTab(chip.dataset.prov);
+  // openDeployTab is declared later in this script (function declarations are
+  // hoisted), and re-renders the plan so the rate shown here can never drift
+  // from what Deploy's own gate will check.
+  if (chip.dataset.prov === 'deploy') openDeployTab();
 });
 // What each pane holds, on the chip itself. The deploy form is on the third
 // pane, so a switcher that said only "Plan / Live / Deploy" left the phase's
@@ -5169,38 +5174,75 @@ let statusTimer = null;
 let PROV_PLAN = null;
 
 const CHECK_MARK = {pass:'✓', warn:'!', fail:'×', blocked:'⏸', info:'i'};
+// Most check names read fine as "snake_case -> words". stack_name_free is the
+// exception: what it actually checks is whether the CloudFormation stack this
+// phase is about to create already exists, and "stack name free" reads as a
+// database naming rule to someone who has not read preflight.py.
+const CHECK_LABEL = {stack_name_free: 'CloudFormation template name'};
 function checkRow(c){
   const cls = c.status === 'pass' ? 'pass' : c.status === 'fail' ? 'fail' : 'warn';
+  const label = CHECK_LABEL[c.name] || c.name.replace(/_/g,' ');
   return `<div class="check ${cls}"><span class="mark">${CHECK_MARK[c.status] || '·'}</span>
-    <div><div class="name">${esc(c.name.replace(/_/g,' '))}</div><div class="detail">${esc(c.detail)}</div>
+    <div><div class="name">${esc(label)}</div><div class="detail">${esc(c.detail)}</div>
     ${c.remedy && c.status !== 'pass' ? `<div class="remedy">${esc(c.remedy)}</div>` : ''}</div></div>`;
 }
 
-$('#btnProvision').onclick = () => {
+// A named declaration (hoisted), not an inline handler, so the Deploy tab can
+// call the exact same render-and-check that the button does -- see
+// openDeployTab() below, which is why this returns a promise rather than
+// nothing.
+function renderAndCheck(){
   const btn = $('#btnProvision');
   btn.disabled = true;
   $('#provEmpty').style.display = 'none';
   $('#provLive').innerHTML = '';
   setStage('provision', 'busy', 'rendering');
-  const es = new EventSource('/api/provision');
-  es.onmessage = async (m) => {
-    const d = JSON.parse(m.data);
-    if (d.event === 'stage') {
-      $('#provLive').insertAdjacentHTML('beforeend', `<div class="tick done"><span class="st"></span>
-        <span class="nm">${esc(d.stage)}</span><span class="meta">${esc(d.detail)}</span></div>`);
-    } else if (d.event === 'complete') {
-      es.close();
-      await renderProvision();
-      btn.disabled = false;
-    } else if (d.event === 'error') {
-      es.close();
-      setStage('provision', 'active', 'failed');
-      $('#provLive').insertAdjacentHTML('beforeend', `<div class="note bad mt-s">${esc(d.message)}</div>`);
-      btn.disabled = false;
-    }
-  };
-  es.onerror = () => { es.close(); btn.disabled = false; setStage('provision', 'active', 'connection lost'); };
-};
+  return new Promise(resolve => {
+    const es = new EventSource('/api/provision');
+    es.onmessage = async (m) => {
+      const d = JSON.parse(m.data);
+      if (d.event === 'stage') {
+        $('#provLive').insertAdjacentHTML('beforeend', `<div class="tick done"><span class="st"></span>
+          <span class="nm">${esc(d.stage)}</span><span class="meta">${esc(d.detail)}</span></div>`);
+      } else if (d.event === 'complete') {
+        es.close();
+        await renderProvision();
+        btn.disabled = false;
+        resolve(true);
+      } else if (d.event === 'error') {
+        es.close();
+        setStage('provision', 'active', 'failed');
+        $('#provLive').insertAdjacentHTML('beforeend', `<div class="note bad mt-s">${esc(d.message)}</div>`);
+        btn.disabled = false;
+        resolve(false);
+      }
+    };
+    es.onerror = () => {
+      es.close(); btn.disabled = false; setStage('provision', 'active', 'connection lost'); resolve(false);
+    };
+  });
+}
+$('#btnProvision').onclick = renderAndCheck;
+
+// deploy()'s own gate recomputes the plan from scratch -- including its price
+// -- and refuses unless --accept-hourly is exactly that fresh number (deploy.py:
+// "must be the rate just computed"). The banner and #dRate here were only ever
+// as current as the last "Render and check", so a config change (Multi-AZ, an
+// instance override) or a live price change made after that render, but before
+// Deploy was opened, left the person typing back a number the server would no
+// longer agree with -- not a hardcoded value, a stale one. Re-rendering on
+// every visit to this tab keeps the two in sync, and clearing #dRate makes
+// clear that whatever was typed before this refresh is not to be trusted.
+async function openDeployTab(){
+  if (!PROV_PLAN) return;   // nothing rendered yet; the empty-plan note covers this
+  const rate = $('#dRate'), btn = $('#btnDeploy');
+  rate.value = '';
+  rate.disabled = true; btn.disabled = true;
+  rate.placeholder = 'recalculating…';
+  await renderAndCheck();
+  rate.disabled = false; btn.disabled = false;
+  rate.placeholder = 'as shown above';
+}
 
 /* ---------------- provision: manual instance and configuration ----------------
    The screen's claim is that every value says where it came from. An override
