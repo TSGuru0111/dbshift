@@ -1569,10 +1569,17 @@ tr:last-child td{border-bottom:none}
 
       <div class="mt"><div class="eyebrow">Instance class</div>
         <div class="row2">
+          <div class="field"><label for="ovRegion">AWS Region</label>
+            <select id="ovRegion"></select></div>
           <div class="field"><label for="ovClass">Class</label>
             <select id="ovClass"></select></div>
+        </div>
+        <div class="row2 mt-s">
           <div class="field"><label>Derived by Phase 3</label>
             <div class="mono" id="ovDerived" style="padding:10px 0;color:var(--ink-3)"></div></div>
+          <div class="field"><label>Estimated price · Amazon RDS<span class="hint" tabindex="0" role="note"
+              title="From the AWS Price List API, for the region and class selected above. hourly x 730 h -- an estimate, not a bill.">i</span></label>
+            <div class="mono" id="ovPrice" style="padding:10px 0"></div></div>
         </div>
         <div id="ovClassNote"></div>
       </div>
@@ -1615,10 +1622,6 @@ tr:last-child td{border-bottom:none}
 
       <div class="provpane" data-prov="plan">
       <div class="tiles mt" id="provTiles"></div>
-      <div class="panel pad mt">
-        <div class="eyebrow">Estimated price · Amazon RDS instance class</div>
-        <div id="priceProvision"></div>
-      </div>
 
       <!-- The template is the artefact of this phase, and until now it could
            only be read inside a <details> on the Live pane -- which exists
@@ -3358,6 +3361,28 @@ async function priceRegions(){
   } catch (e) { /* the card renders without a dropdown and says so */ }
 }
 
+// The one project-wide region change, whichever control it was made from --
+// the Target & Sizing card, the Migrate card, or the Provision region select
+// beside the instance class. It posts the change, then refreshes every
+// registered card (PRICE.cards) so all of them read the same region back,
+// including this one's own select if the change was refused.
+async function changeProjectRegion(newRegion){
+  const r = await fetch('/api/aws/pricing-region', {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({region: newRegion})});
+  if (r.ok) {
+    PRICE.region = newRegion; PRICE.note = '';
+    // What was rendered or priced for the old region says nothing about this one.
+    if ($('#provResult')) { $('#provResult').style.display = 'none'; $('#provEmpty').style.display = ''; }
+    if ($('#dmsClass')) $('#dmsClass').innerHTML = '';
+    PRICE.migrateClass = null;
+    if (typeof DMSPLAN !== 'undefined' && DMSPLAN) renderDmsPlan();
+  } else {
+    PRICE.note = (await r.json().catch(() => ({}))).detail || 'the region could not be changed';
+  }
+  Object.values(PRICE.cards).forEach(f => f());
+  return r.ok;
+}
+
 async function renderPriceCard(box, phase, resource, label, cls){
   const el = typeof box === 'string' ? $('#' + box) : box;
   if (!el) return;
@@ -3372,21 +3397,7 @@ async function renderPriceCard(box, phase, resource, label, cls){
     if (seq !== PRICE.seq[el.id]) return;          // a newer request owns this card
     el.innerHTML = head + body;
     const sel = el.querySelector('[data-price-region]');
-    if (sel) sel.onchange = async () => {
-      const r = await fetch('/api/aws/pricing-region', {method: 'POST',
-        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({region: sel.value})});
-      if (r.ok) {
-        PRICE.region = sel.value; PRICE.note = '';
-        // What was rendered for the old region says nothing about this one.
-        if ($('#provResult')) { $('#provResult').style.display = 'none'; $('#provEmpty').style.display = ''; }
-        if ($('#dmsClass')) $('#dmsClass').innerHTML = '';
-        PRICE.migrateClass = null;
-        if (typeof DMSPLAN !== 'undefined' && DMSPLAN) renderDmsPlan();
-      } else {
-        PRICE.note = (await r.json().catch(() => ({}))).detail || 'the region could not be changed';
-      }
-      Object.values(PRICE.cards).forEach(f => f());
-    };
+    if (sel) sel.onchange = () => changeProjectRegion(sel.value);
   };
   const tile = (k, v, h) => `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${v}</div>
     <div class="h">${esc(h || '')}</div></div>`;
@@ -5198,10 +5209,50 @@ $('#btnProvision').onclick = () => {
    what Phase 3 derived next to what is being chosen instead. */
 let OV = null;   // the options payload, loaded once per render
 
+/* The region select lives beside the class picker rather than in its own price
+   card, but it changes the same project-wide region as the other phases'
+   cards -- so it is registered into PRICE.cards like them, and a region change
+   made anywhere rebuilds this <select> too (picking up the reverted value if
+   the change was refused, e.g. a stack already exists in the old region). */
+async function renderOvRegion(){
+  const sel = $('#ovRegion');
+  if (!sel) return;
+  await priceRegions();
+  sel.innerHTML = PRICE.regions.map(x =>
+    `<option value="${esc(x.code)}"${x.code === PRICE.region ? ' selected' : ''}>${esc(x.code)} — ${esc(x.name)}</option>`).join('');
+  sel.onchange = () => changeProjectRegion(sel.value);
+}
+
+// The compact price readout beside the class picker: priced for whatever class
+// is selected right now, not necessarily a saved override or a rendered plan --
+// so choosing a candidate previews its price before "Use these values".
+let ovPriceSeq = 0;
+async function refreshOvPrice(){
+  const box = $('#ovPrice');
+  const cls = $('#ovClass');
+  if (!box || !cls || !cls.value) { if (box) box.textContent = ''; return; }
+  const seq = ++ovPriceSeq;
+  box.innerHTML = '<span style="color:var(--ink-3)">asking the AWS Price List API…</span>';
+  let d;
+  try {
+    const q = new URLSearchParams({phase: 'provision', resourceType: 'rds', instanceType: cls.value});
+    const r = await fetch('/api/aws/pricing?' + q);
+    d = r.ok ? await r.json() : {available: false, reason: (await r.json().catch(() => ({}))).detail || 'request failed'};
+  } catch (e) { d = {available: false, reason: 'network failure'}; }
+  if (seq !== ovPriceSeq) return;                  // a newer request owns this box
+  box.innerHTML = d.available
+    ? `$${d.hourlyPrice.toFixed(4)}/hour <span style="color:var(--ink-3)">· est. $${d.monthlyPrice.toFixed(2)}/month</span>`
+    : `<span class="mono" style="color:var(--danger,#c0392b)">Pricing unavailable</span>`
+      + `<div style="font-size:12.5px;color:var(--ink-3);margin-top:2px">${esc(d.reason || '')}</div>`;
+}
+PRICE.cards.ovRegion = renderOvRegion;
+PRICE.cards.ovPrice = refreshOvPrice;
+
 async function loadProvOptions(){
   const r = await fetch('/api/provision/options');
   if (!r.ok) return;
   OV = await r.json();
+  renderOvRegion();
 
   $('#ovDerived').textContent = OV.derived.instance_class
     ? `${OV.derived.instance_class} · ${OV.derived.vcpu} vCPU / ${OV.derived.memory_gib} GiB`
@@ -5238,8 +5289,9 @@ async function loadProvOptions(){
       </summary><div class="body">${OV.locked.map(l =>
         `<p class="why"><b>${esc(l.property)}</b> — ${esc(l.why)}</p>`).join('')}</div></details>`;
 
-  $('#ovClass').onchange = showClassNote;
+  $('#ovClass').onchange = () => { showClassNote(); refreshOvPrice(); };
   showClassNote();
+  refreshOvPrice();
   paintOvSummary();
 }
 
@@ -5322,7 +5374,10 @@ async function renderProvision(){
     tile('If forgotten', est ? '$' + est.if_left_running_30_days : '—', est ? `30 days · an 8-hour day is $${est.per_8h_day}` : ''),
   ].join('') : '';
 
-  if (rd) renderPriceCard('priceProvision', 'provision', 'rds', 'RDS instance class', rd.instance_class);
+  // The live price lives beside the class picker now (Instance and database
+  // configuration, above) rather than down here -- refreshed on open in case
+  // rendering ran from a saved override the picker had not re-priced yet.
+  refreshOvPrice();
   $('#provChecks').innerHTML = p.checks.map(checkRow).join('');
   $('#provTable').innerHTML = rd ? rd.provenance.map(x => `<tr><td class="mono">${esc(x.property)}</td>
     <td class="mono">${esc(x.value)}</td><td>${esc(x.source)}</td><td>${esc(x.why)}</td></tr>`).join('') : '';
