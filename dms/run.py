@@ -36,7 +36,7 @@ from provision import run as provision_run
 from provision import policy as prov_policy
 from provision import run as prov_run
 
-from . import actions, mappings, policy, preflight, residue
+from . import actions, mappings, parallel_load, policy, preflight, residue
 
 
 def target_from_deployment(session=None) -> dict | None:
@@ -244,12 +244,25 @@ def priced_classes(session) -> list[dict]:
 
 def plan(session=None, *, migration_type: str | None = None,
          target_counts: dict | None = None, target_unread_reason: str | None = None,
-         parallel_subtasks: int | None = None, instance_class: str | None = None) -> dict:
+         parallel_subtasks: int | None = None, instance_class: str | None = None,
+         parallel_load_batches: int = 0, source_connect=None) -> dict:
     """Everything that can be known without creating anything. Free.
 
     Produces the two JSON documents DMS will be given, the preflight verdict,
     and the list of objects DMS will *not* move -- which is as important as
     what it will, because "DMS migrated the database" is never true.
+
+    `parallel_load_batches` splits one table's full load across that many DMS
+    threads, by range -- see dms.parallel_load. 0 is a normal, single-threaded
+    load; this is the only thing 0 means here, never "unset". Finding which
+    tables are even eligible (a single numeric primary key) is free -- it only
+    reads what Discovery already collected -- and runs regardless of the
+    requested batch count, so the plan can always say why a table would stay
+    single-pass. Sizing the split needs each column's *real* MIN/MAX, which is
+    not something Discovery stores, so that part is skipped unless the caller
+    passes `source_connect` (a zero-arg callable opening a source connection)
+    -- the console supplies one from the connection Phase 1 already made;
+    without it every table is reported single-pass rather than guessed at.
     """
     recs = prov_records.load()
     # None means "whatever Phase 1 declared". An explicit argument still wins,
@@ -349,7 +362,36 @@ def plan(session=None, *, migration_type: str | None = None,
                  "command line. Until then the migration is planned but the target is "
                  "unverified.")))
 
-    tm = mappings.table_mappings(schema=estate, tables=tables, lowercase=heterogeneous)
+    # Eligibility (a single numeric primary key) is offline and free, so it is
+    # always computed and reported -- a table with a composite or non-numeric
+    # key is "single-pass" for a reason worth showing, not just silently
+    # unsplit. Sizing the split (the live MIN/MAX read) only runs when both a
+    # batch count and a connection were actually given.
+    pk_cols = parallel_load.numeric_pk_columns(
+        prov_records._dataset(run_id, "constraints"),
+        prov_records._dataset(run_id, "constraint_columns"),
+        prov_records._dataset(run_id, "columns"), schema=estate, tables=tables)
+    pl_rules: list[dict] = []
+    pl_report = {"requested_batches": parallel_load_batches,
+                 "eligible": sorted(pk_cols), "split": [],
+                 "single_pass": sorted(tables)}
+    if parallel_load_batches and parallel_load_batches > 1 and pk_cols:
+        if source_connect is None:
+            pl_report["reason"] = ("no source connection was available to read the real "
+                                   "MIN/MAX of each table's key, so every table stays "
+                                   "single-pass rather than guessing a split")
+        else:
+            ranges = parallel_load.fetch_ranges(source_connect, estate, pk_cols)
+            pl_rules, split_report = parallel_load.build_rules(
+                schema=estate, table_ranges=ranges, batches=parallel_load_batches)
+            pl_report["split"] = split_report["split"]
+            pl_report["single_pass"] = sorted(set(tables) - set(split_report["split"]))
+    elif parallel_load_batches and parallel_load_batches > 1 and not pk_cols:
+        pl_report["reason"] = ("no included table has a single-column numeric primary "
+                               "key, so there is nothing here range-partitioning could split")
+
+    tm = mappings.table_mappings(schema=estate, tables=tables, lowercase=heterogeneous,
+                                 parallel_load_rules=pl_rules)
     ts = mappings.task_settings(migration_type=migration_type,
                                 parallel_subtasks=parallel_subtasks)
 
@@ -394,6 +436,7 @@ def plan(session=None, *, migration_type: str | None = None,
                       for n in ("sequences", "views", "materialized_views", "external_tables")}),
         "not_moved_by_dms": mappings.excluded_objects(objects, estate),
         "table_mappings": tm,
+        "parallel_load": pl_report,
         "task_settings": ts,
         "lowercase_names": heterogeneous,
         "provision_stack": (prov_plan or {}).get("stack_name"),
@@ -404,7 +447,8 @@ def plan(session=None, *, migration_type: str | None = None,
 def execute(session, *, confirm_account: str, migration_type: str | None = None,
             source: dict, target: dict, on_event=None, target_counts: dict | None = None,
             instance_class: str | None = None, dms_group_id: str | None = None,
-            parallel_subtasks: int | None = None) -> dict:
+            parallel_subtasks: int | None = None, parallel_load_batches: int = 0,
+            source_connect=None) -> dict:
     """Create the instance, endpoints and task, then run it. **This bills.**"""
     events: list[dict] = []
 
@@ -420,7 +464,8 @@ def execute(session, *, confirm_account: str, migration_type: str | None = None,
             f"resolve to ({account}), and it was {confirm_account!r}")
 
     p = plan(session, migration_type=migration_type, target_counts=target_counts,
-             parallel_subtasks=parallel_subtasks, instance_class=instance_class)
+             parallel_subtasks=parallel_subtasks, instance_class=instance_class,
+             parallel_load_batches=parallel_load_batches, source_connect=source_connect)
     if not p["ready"]:
         raise ValueError("preflight refused: " + ", ".join(p["refused_because"]))
 

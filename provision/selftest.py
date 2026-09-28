@@ -136,6 +136,35 @@ def main() -> int:
     ]:
         check(label, ok, why)
 
+    print("the render inside deploy receives the Plan pane's own override")
+    # Regression: deploy() used to call execute() with no instance_override /
+    # config_override at all, so a saved override never reached the render that
+    # actually creates the stack -- it silently deployed the Phase 3 derived
+    # instance instead, and --accept-hourly (checked against THAT derived
+    # instance's price) could disagree with the price the Plan pane had shown
+    # for the override the person believed they were deploying.
+    sess = Session()
+    seen_kwargs = {}
+
+    def spy_execute(**kw):
+        seen_kwargs.update(kw)
+        return _plan()
+
+    want_instance = {"chosen": "db.r6i.2xlarge", "reason": "load test"}
+    want_config = {"changed": True, "values": {"multi_az": True}}
+    with sess:
+        # execute() runs, and the kwargs it received are captured, before the
+        # HALT check below it refuses (no halt_reason here) -- so this proves
+        # what reached the render without needing SSM/CloudFormation stubbed.
+        try:
+            _deploy(sess, _plan(), execute=spy_execute, halt_reason=None,
+                   instance_override=want_instance, config_override=want_config)
+        except d.DeployRefused:
+            pass
+    check("instance_override reaches the render deploy actually uses",
+          seen_kwargs.get("instance_override"), want_instance)
+    check("config_override reaches it too", seen_kwargs.get("config_override"), want_config)
+
     print("happy path under HALT, new password")
     sess = Session()
     sess.stubs["ssm"].add_client_error("get_parameter", "ParameterNotFound", expected_params={"Name": PW_PARAM})

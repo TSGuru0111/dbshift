@@ -346,6 +346,7 @@ def get_state():
         "rehearsal_dsn": STATE.rehearsal_dsn,
         "run_id": STATE.run_id,
         "network_requirements": preflight.NETWORK_REQUIREMENTS,
+        "cdc_requirements": preflight.CDC_REQUIREMENTS,
     }
 
 
@@ -2241,10 +2242,16 @@ def provision_deploy_route(req: DeployRequest):
 
     def runner():
         try:
+            # The exact override the render the person is looking at used --
+            # matching the GET /api/provision route below, so deploy prices and
+            # creates the same instance the Plan pane showed, not the Phase 3
+            # derived one it would silently fall back to without this.
+            ov = STATE.provision_overrides or {}
             outcome["record"] = provision_deploy.deploy(
                 _aws_session(), confirm_account=req.confirm_account,
                 accept_hourly=req.accept_hourly, halt_reason=req.halt_reason or None,
-                price_file=provision_run.default_price_file(), on_event=on_event)
+                price_file=provision_run.default_price_file(), on_event=on_event,
+                instance_override=ov.get("instance_class"), config_override=ov.get("configuration"))
         except provision_deploy.DeployRefused as exc:
             outcome["refused"] = str(exc)
         except Exception as exc:  # noqa: BLE001 -- shown in status, never swallowed
@@ -2523,11 +2530,30 @@ def _provisioned_pg_target():
         return None
 
 
+def _source_connect_from_state():
+    """A zero-arg callable opening the same read-only source connection Connect
+    already proved works -- for dms.parallel_load.fetch_ranges, which owns and
+    closes whatever this returns. None when there is nothing to connect with
+    yet, so a caller can fall back to reporting every table single-pass
+    instead of raising.
+    """
+    if not (STATE.dsn and STATE.user and STATE.password):
+        return None
+
+    def connect():
+        import oracledb
+        return oracledb.connect(user=STATE.user, password=STATE.password, dsn=STATE.dsn)
+
+    return connect
+
+
 @app.get("/api/dms/plan")
-def dms_plan(migration_type: str = dms_policy.FULL_LOAD):
+def dms_plan(migration_type: str = dms_policy.FULL_LOAD, parallel_load_batches: int = 0):
     """Everything knowable without creating anything. Free, and creates nothing."""
     if migration_type not in dms_policy.MIGRATION_TYPES:
         raise HTTPException(400, f"unknown migration type {migration_type!r}")
+    if parallel_load_batches < 0:
+        raise HTTPException(400, "parallel_load_batches cannot be negative")
     try:
         session = _aws_session()
     except Exception:  # noqa: BLE001 -- planning works offline; only the billing check needs AWS
@@ -2545,7 +2571,10 @@ def dms_plan(migration_type: str = dms_policy.FULL_LOAD):
     counts, why = dms_run.target_counts_from(_provisioned_pg_target() or STATE.pg_target)
     try:
         return dms_run.plan(session, migration_type=migration_type,
-                            target_counts=counts, target_unread_reason=why)
+                            target_counts=counts, target_unread_reason=why,
+                            parallel_load_batches=parallel_load_batches,
+                            source_connect=(_source_connect_from_state()
+                                           if parallel_load_batches else None))
     except FileNotFoundError as exc:
         raise HTTPException(409, f"a record this phase needs is missing: {exc}") from exc
 
@@ -2581,6 +2610,10 @@ class DmsExecute(BaseModel):
     instance_class: str = ""
     # 0 means dms.policy.PARALLEL_SUBTASKS.
     parallel_subtasks: int = 0
+    # 0 means a normal, single-threaded load for every table -- never "unset".
+    # Any other value splits each eligible table's own load into that many
+    # DMS threads, by range. See dms/parallel_load.py.
+    parallel_load_batches: int = 0
 
 
 @app.post("/api/dms/execute")
@@ -2593,6 +2626,8 @@ def dms_execute(req: DmsExecute):
     """
     if req.migration_type not in dms_policy.MIGRATION_TYPES:
         raise HTTPException(400, f"unknown migration type {req.migration_type!r}")
+    if req.parallel_load_batches < 0:
+        raise HTTPException(400, "parallel_load_batches cannot be negative")
     # A replication instance left behind by an expired token keeps billing.
     try:
         awscreds.guard_long_run("a DMS run")
@@ -2702,6 +2737,13 @@ def dms_execute(req: DmsExecute):
                                   target=target, on_event=emit, target_counts=counts,
                                   instance_class=req.instance_class or None,
                                   parallel_subtasks=req.parallel_subtasks or None,
+                                  # The console's own read of each table's real MIN/MAX,
+                                  # not a DMS-side connection -- STATE's host is the one
+                                  # proven reachable from here, unlike `source["host"]`
+                                  # above, which may be the DMS-only private IP.
+                                  parallel_load_batches=req.parallel_load_batches or 0,
+                                  source_connect=(_source_connect_from_state()
+                                                 if req.parallel_load_batches else None),
                                   dms_group_id=_stack_dms_group_id())
         except (PermissionError, ValueError) as exc:
             emit({"event": "refused", "message": str(exc)})

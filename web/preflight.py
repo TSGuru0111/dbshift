@@ -299,10 +299,39 @@ NETWORK_REQUIREMENTS = [
         "title": "No inbound firewall hole",
         "detail": "Deliberately. Security teams refuse them, and the collector never needs one.",
     },
+]
+
+# What DMS change data capture needs from the *source* engine, which is not the
+# same list for every engine -- unlike the four requirements above, which apply
+# regardless of what the source database is. Kept separate from
+# NETWORK_REQUIREMENTS so the Connect screen can show it as its own,
+# engine-labelled panel instead of one bullet that was really only ever about
+# Oracle.
+#
+# SQL Server is not a source this project migrates from -- see
+# docs/02-architecture.md and sct/targets.py, which rule it out. It is listed
+# here anyway because this panel is client-facing reference for what a site
+# will be asked for, and a client running SQL Server asks about CDC before
+# they ask what DBShift itself supports.
+CDC_REQUIREMENTS = [
     {
-        "title": "ARCHIVELOG mode and supplemental logging for Change Data Capture (CDC)",
+        "engine": "Oracle",
+        "title": "ARCHIVELOG mode and supplemental logging",
         "detail": "DMS change data capture needs ARCHIVELOG plus supplemental logging. "
         "Without both, only a full-outage load is possible. Enabling ARCHIVELOG requires "
         "a database restart, so it needs a window.",
+    },
+    {
+        "engine": "SQL Server",
+        "title": "SQL Server Agent running, and CDC or replication enabled",
+        "detail": "DMS reads change data either through SQL Server's own CDC "
+        "(sp_cdc_enable_db, then sp_cdc_enable_table per captured table -- Standard "
+        "edition supports this from SQL Server 2016 SP1) or, on older or unsupported "
+        "editions, through transactional replication configured for DMS. Either way, "
+        "SQL Server Agent must be running: it drives the CDC capture and cleanup jobs. "
+        "The recovery model must be Full or Bulk-logged, never Simple, or the log DMS "
+        "reads from is truncated before it gets to it. Not a source this project "
+        "migrates to RDS today -- see docs/02-architecture.md -- included here because "
+        "a client running SQL Server asks about this before they ask what DBShift covers.",
     },
 ]

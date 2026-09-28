@@ -969,7 +969,13 @@ tr:last-child td{border-bottom:none}
     </div>
     <div class="panel pad mt">
       <div class="eyebrow">What a client environment needs<span class="hint" tabindex="0" role="note" title="On this laptop the database is local, so nothing is in the way. At a client site these are what to request up front — the first one blocks everything else.">i</span></div>
-      <div class="netreq" id="netreq"></div>
+      <div class="row2 mt-s" style="align-items:start">
+        <div class="netreq" id="netreq"></div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:10px">Change Data Capture (CDC)<span class="hint" tabindex="0" role="note" title="What DMS needs from the source engine to replicate ongoing changes, not just an initial load. This differs by engine, unlike the general requirements on the left.">i</span></div>
+          <div class="netreq" id="cdcreq"></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -1787,6 +1793,23 @@ tr:last-child td{border-bottom:none}
           <pre id="dmsMappingJson"></pre></details>
         <details class="steplog"><summary>Task settings — how DMS behaves while it runs</summary>
           <pre id="dmsSettingsJson"></pre></details>
+
+        <!-- One table can dwarf the rest of the estate, and MaxFullLoadSubTasks
+             above only runs several *tables* at once -- it does nothing for
+             that one. This splits a single table's own load across several DMS
+             threads, by range, the same "ranges" parallel-load AWS's own docs
+             show. 0 is a normal, single-threaded load; only a table with one
+             numeric primary key column can split at all, and the box below
+             says which of this estate's tables that is, once a number is set. -->
+        <div class="mt"><div class="eyebrow">Parallel load, per table<span class="hint" tabindex="0" role="note"
+            title="Splits one table's own load across this many DMS threads, by range on its primary key -- not how many tables load at once (that is above). Only a table with a single numeric primary key column can split. 0 means every table loads as one pass, same as today.">i</span></div>
+          <div class="row2">
+            <div class="field"><label for="dmsBatches">Batches per table</label>
+              <input id="dmsBatches" type="number" inputmode="numeric" min="0" step="1" value="0"></div>
+            <div class="field"><label>&nbsp;</label>
+              <div class="mono" id="dmsBatchesNote" style="padding:10px 0;color:var(--ink-3)"></div></div>
+          </div>
+        </div>
       </div>
 
       <div class="panel pad" id="dmsRunPanel" style="display:none">
@@ -2307,6 +2330,11 @@ async function loadState(){
   const s = await (await fetch('/api/state')).json();
   $('#netreq').innerHTML = s.network_requirements.map(r =>
     `<div><div class="t">${esc(r.title)}</div><div class="d">${esc(r.detail)}</div></div>`).join('');
+  // One entry per engine, each headed by its engine name -- CDC needs a
+  // different setup on Oracle than on SQL Server, unlike the general list.
+  $('#cdcreq').innerHTML = (s.cdc_requirements || []).map(r =>
+    `<div><div class="t">${esc(r.engine)} <span style="font-weight:400;color:var(--ink-3)">— ${esc(r.title)}</span></div>
+      <div class="d">${esc(r.detail)}</div></div>`).join('');
   if (s.engine) { ENGINE = s.engine; renderPaths(); showMigrationEngine(); }
   if (s.migration_modes) {
     MODES = s.migration_modes; MODE = s.migration_mode;
@@ -6123,11 +6151,33 @@ function showMigrationEngine(){
   $('#valCrossEngine').style.display = pg ? '' : 'none';
 }
 
+// What batches actually did, in the estate's own table names -- the box only
+// says a number, and "4 batches" means nothing without knowing whether it
+// applied to one table or eleven.
+function renderParallelLoadNote(report, requested){
+  const box = $('#dmsBatchesNote');
+  if (!box) return;
+  if (!report || !requested) {
+    box.textContent = 'One pass per table, same as today.';
+    return;
+  }
+  const split = report.split || [], single = report.single_pass || [];
+  const bits = [];
+  if (split.length) bits.push(`<b>${split.length} table(s) split</b> into ${requested}: ${esc(split.join(', '))}`);
+  if (single.length) bits.push(`${single.length} single-pass -- no single numeric primary key to split on`);
+  box.innerHTML = bits.join('<br>') || 'Nothing eligible to split; every table stays single-pass.';
+  if (report.reason) box.innerHTML += `<div class="note info mt-s" style="padding:8px">${esc(report.reason)}</div>`;
+}
+
 async function renderDmsPlan(){
   const btn = $('#btnDmsPlan');
   btn.disabled = true;
   const type = $('#dmsType') ? $('#dmsType').value : 'full-load';
-  const r = await fetch('/api/dms/plan?migration_type=' + encodeURIComponent(type));
+  // 0 (or blank, or negative -- the field is clamped on blur below) always
+  // reads as 0: a normal, single-threaded load, same as before this existed.
+  const batches = Math.max(0, parseInt(($('#dmsBatches') || {}).value, 10) || 0);
+  const q = new URLSearchParams({migration_type: type, parallel_load_batches: String(batches)});
+  const r = await fetch('/api/dms/plan?' + q);
   btn.disabled = false;
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));
@@ -6162,6 +6212,7 @@ async function renderDmsPlan(){
       <div class="detail">${esc(why)}</div></div></div>`).join('');
   $('#dmsMappingJson').textContent = JSON.stringify(d.table_mappings, null, 2);
   $('#dmsSettingsJson').textContent = JSON.stringify(d.task_settings, null, 2);
+  renderParallelLoadNote(d.parallel_load, batches);
 
   // The plain-language summary. Everything below this point is detail, and a
   // person reading the screen for the first time should not have to assemble
@@ -6392,7 +6443,8 @@ $('#btnDmsRun').onclick = async () => {
       source_password: $('#dmsSourcePw').value,
       target_password: $('#dmsTargetPw').value,
       instance_class: ($('#dmsClass') || {}).value || '',
-      parallel_subtasks: Number(($('#dmsSubtasks') || {}).value || 0)})});
+      parallel_subtasks: Number(($('#dmsSubtasks') || {}).value || 0),
+      parallel_load_batches: Math.max(0, parseInt(($('#dmsBatches') || {}).value, 10) || 0)})});
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));
     btn.disabled = false;
