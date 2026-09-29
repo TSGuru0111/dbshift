@@ -470,26 +470,31 @@ def set_price_region(req: PriceRegionRequest):
     return price_region()
 
 
-def _rds_price_target(phase: str) -> dict | None:
-    """The RDS class, engine and licence to price -- read from what Phase 3 and
-    Phase 6 already decided, never derived here. Provision prefers its own
-    rendered plan (which carries a person's override); before that has run it
-    falls back to the sizing decision plus any override chosen on the form."""
+def _rds_price_target() -> dict | None:
+    """The engine and licence to price Provision's RDS class against -- read
+    from what Phase 3 decided, never derived here. Prefers the rendered plan
+    (which carries a person's override) once one exists; before that, the
+    sizing decision plus any override chosen on the class picker.
+
+    The instance *class* itself is never read from here -- aws_pricing always
+    takes it from the caller (the region/class picker, or the rendered plan's
+    own class), because pricing a candidate the picker is only looking at,
+    before it is saved as an override, is exactly what that picker is for.
+    """
     d = ((STATE.sizing or {}).get("decision") or {})
     if not d.get("instance_class"):
         return None
-    if phase == "provision":
-        rd = (_provision_plan() or {}).get("rendered")
-        if rd:
-            return {"instance_type": rd["instance_class"], "engine": rd["engine"],
-                    "licence": rd["licence"], "multi_az": rd.get("multi_az", provision_policy.MULTI_AZ)}
+    rd = (_provision_plan() or {}).get("rendered")
+    if rd:
+        return {"instance_type": rd["instance_class"], "engine": rd["engine"],
+                "licence": rd["licence"], "multi_az": rd.get("multi_az", provision_policy.MULTI_AZ)}
     if d.get("engine") == "POSTGRESQL":
         engine, licence = provision_policy.PG_ENGINE, provision_policy.PG_LICENCE
     else:
         engine, licence = provision_policy.ENGINE[d["edition"]]
     chosen = ((STATE.provision_overrides or {}).get("instance_class") or {}).get("chosen")
-    return {"instance_type": (chosen if phase == "provision" and chosen else d["instance_class"]),
-            "engine": engine, "licence": licence, "multi_az": provision_policy.MULTI_AZ}
+    return {"instance_type": chosen or d["instance_class"], "engine": engine, "licence": licence,
+            "multi_az": provision_policy.MULTI_AZ}
 
 
 @app.get("/api/aws/pricing")
@@ -497,12 +502,15 @@ def aws_pricing(phase: str, resourceType: str, region: str | None = None,
                 instanceType: str | None = None):
     """Live price for the resource a phase is about.
 
-    Prices the instance the phase has *already* chosen; it never recommends one.
-    Target & Sizing and Provision price an RDS class, Migrate prices a DMS
-    replication instance, and a mismatch is refused rather than answered from
-    the wrong catalogue. When no price can be established this answers 200 with
-    `available: false` and a reason -- pricing is decoration on a decision that
-    stands without it, so it must not turn the phase's own screen into an error.
+    Prices the instance the phase has *already* chosen, or a candidate it is
+    only looking at; it never recommends one. Only Provision prices an RDS
+    class -- Target & Sizing recommends one but is never priced, see
+    pricing.query.PHASE_RESOURCE -- and Migrate prices a DMS replication
+    instance; a mismatch is refused rather than answered from the wrong
+    catalogue. When no price can be established this answers 200 with
+    `available: false` and a reason -- pricing is decoration on a decision
+    that stands without it, so it must not turn the phase's own screen into
+    an error.
     """
     want = pricing_query.PHASE_RESOURCE.get(phase)
     if want is None:
@@ -513,7 +521,7 @@ def aws_pricing(phase: str, resourceType: str, region: str | None = None,
 
     kw: dict = {"resource_type": want, "region": region}
     if want == pricing_query.RDS:
-        target = _rds_price_target(phase)
+        target = _rds_price_target()
         if target is None:
             raise HTTPException(409, "no sizing decision yet -- run Phase 3 first")
         # The class is the phase's own. A caller may name one only to price the

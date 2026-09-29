@@ -175,13 +175,12 @@ def run() -> int:
     real_plan = W._provision_plan
     W._provision_plan = lambda: None
     seen = {}
-    for phase, res, extra in (("target-sizing", "rds", {}), ("provision", "rds", {}),
+    for phase, res, extra in (("provision", "rds", {}),
                               ("migrate", "dms", {"instanceType": "dms.t3.small"})):
         sess.calls.clear()
         Q._cache.clear()
         out = W.aws_pricing(phase=phase, resourceType=res, **extra)
         seen[phase] = (out["available"], out["service"], sorted(set(sess.calls)))
-    check("target-sizing asks AmazonRDS", seen["target-sizing"], (True, "AmazonRDS", ["AmazonRDS"]))
     check("provision asks AmazonRDS", seen["provision"], (True, "AmazonRDS", ["AmazonRDS"]))
     check("migrate asks the DMS catalogue only", seen["migrate"],
           (True, "AWSDatabaseMigrationSvc", ["AWSDatabaseMigrationSvc"]))
@@ -193,6 +192,10 @@ def run() -> int:
             return exc.status_code
     check("migrate cannot be asked for RDS", status(phase="migrate", resourceType="rds"), 400)
     check("provision cannot be asked for DMS", status(phase="provision", resourceType="dms"), 400)
+    # Target & Sizing recommends an instance class; it is never priced. Pricing
+    # lives only on Provision now, where a region and a class are both given.
+    check("target-sizing is refused outright, not priced",
+          status(phase="target-sizing", resourceType="rds"), 400)
 
     print("3. the selected region is propagated")
     W._provision_plan = real_plan
@@ -284,12 +287,10 @@ def run() -> int:
     check("Provision: the file is used only because the API could not answer, and labelled",
           (fallback["estimate"]["instance_per_hour"], fallback["prices"]["source"].startswith("AWS public price list")),
           (9.99, True))
-    out = W.aws_pricing(phase="migrate", resourceType="dms", instanceType="dms.t3.small") \
-        if False else None
     W._aws_session = lambda: down
     Q._cache.clear()
-    r = W.aws_pricing(phase="target-sizing", resourceType="rds")
-    check("Target & Sizing endpoint: available false with a reason, HTTP 200",
+    r = W.aws_pricing(phase="provision", resourceType="rds")
+    check("Provision endpoint: available false with a reason, HTTP 200",
           (r["available"], r["code"]), (False, "access-denied"))
     check("...and the sizing decision it was asked about is untouched",
           W.STATE.sizing["decision"]["instance_class"], "db.r6i.2xlarge")

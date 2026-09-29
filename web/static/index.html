@@ -1215,10 +1215,6 @@ tr:last-child td{border-bottom:none}
         <div class="eyebrow">Chosen target</div>
         <div id="targetSpec"></div>
       </div>
-      <div class="panel pad mt">
-        <div class="eyebrow">Estimated price · Amazon RDS instance class</div>
-        <div id="priceSizing"></div>
-      </div>
       <div id="pgNote" style="display:none" class="mt">
         <div class="note info">RDS for PostgreSQL has <b>no editions and no licence model</b>.
           The Oracle feature usage that decides Enterprise versus Standard Edition 2 — and the
@@ -1576,7 +1572,8 @@ tr:last-child td{border-bottom:none}
       <div class="mt"><div class="eyebrow">Instance class</div>
         <div class="row2">
           <div class="field"><label for="ovRegion">AWS Region</label>
-            <select id="ovRegion"></select></div>
+            <select id="ovRegion"></select>
+            <div id="ovRegionNote" style="font-size:12.5px;margin-top:4px"></div></div>
           <div class="field"><label for="ovClass">Class</label>
             <select id="ovClass"></select></div>
         </div>
@@ -3375,14 +3372,23 @@ $('#btnSize').onclick = () => {
 };
 
 /* ---------------- AWS price card ----------------
-   One card, three phases. Target & Sizing and Provision price an Amazon RDS
-   instance class; Migrate prices an AWS DMS replication instance -- different
-   catalogues, so the phase (not the caller) decides which is asked. The class
-   shown is always the phase's own decision, passed in by the caller; the price
-   is looked up for it and never the other way round. If pricing fails the
-   class is still shown, with "Pricing unavailable" beside it. The region only
-   is the project's target region: shared by all three cards, it is where Provision
-   and Migrate create resources and what prices are quoted for. Changing it never
+   renderPriceCard() is Migrate's price card (an AWS DMS replication instance).
+   Provision has its own inline picker instead (region + class + price, in
+   "Instance and database configuration"), because there a person is choosing
+   a candidate before saving it, not just reading a decision already made --
+   see renderOvRegion()/refreshOvPrice() further down. Target & Sizing has no
+   price of its own: it recommends an instance class, and that class is only
+   priced once Provision is reached. Both still share one region -- see
+   changeProjectRegion() below -- and PRICE.region and PRICE.cards are what tie
+   the DMS card and Provision's inline picker together, even though only the
+   DMS card is a "card" in the literal, boxed-panel sense any more.
+
+   The class shown is always the phase's own decision, or a candidate it is
+   only looking at, passed in by the caller; the price is looked up for it and
+   never the other way round. If pricing fails the class is still shown, with
+   "Pricing unavailable" beside it. The region is the project's target region:
+   it is where Provision and Migrate create resources and what prices are
+   quoted for. Changing it never
    re-runs sizing, and is refused while a stack exists in the old region. */
 const PRICE = {region: null, regions: [], seq: {}, cards: {}, note: ''};
 
@@ -3483,7 +3489,6 @@ async function renderSizing(){
           <div style="font-size:13.5px;color:var(--ink-2);margin-top:3px">${esc(h)}</div></div>`).join('')}
     </div>`;
 
-  renderPriceCard('priceSizing', 'target-sizing', 'rds', 'RDS instance class', d.instance_class);
   $('#editionPanels').style.display = pg ? 'none' : '';
   $('#pgNote').style.display = pg ? '' : 'none';
   $('#forcedList').innerHTML = (d.forced_by || []).map(x => `
@@ -5291,6 +5296,13 @@ async function renderOvRegion(){
   sel.innerHTML = PRICE.regions.map(x =>
     `<option value="${esc(x.code)}"${x.code === PRICE.region ? ' selected' : ''}>${esc(x.code)} — ${esc(x.name)}</option>`).join('');
   sel.onchange = () => changeProjectRegion(sel.value);
+  // A refused change (a live stack in the old region, most often) reverts this
+  // select silently -- PRICE.region did not move, so the rebuilt options just
+  // re-select where it already was. Without this the person sees their pick
+  // snap back with no visible reason.
+  const note = $('#ovRegionNote');
+  if (note) note.innerHTML = PRICE.note
+    ? `<span style="color:var(--bad,#c0392b)">${esc(PRICE.note)}</span>` : '';
 }
 
 // The compact price readout beside the class picker: priced for whatever class

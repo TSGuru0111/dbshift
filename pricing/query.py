@@ -54,8 +54,10 @@ RDS, DMS = "rds", "dms"
 SERVICE = {RDS: "AmazonRDS", DMS: "AWSDatabaseMigrationSvc"}
 
 # Which resource each phase prices. The server enforces this so the Migrate
-# screen cannot be handed an RDS price, or Provision a DMS one.
-PHASE_RESOURCE = {"target-sizing": RDS, "provision": RDS, "migrate": DMS}
+# screen cannot be handed an RDS price, or Provision a DMS one. Target & Sizing
+# has no entry -- it recommends an instance class but never prices it; the
+# price is Provision's own, asked for the region and class chosen there.
+PHASE_RESOURCE = {"provision": RDS, "migrate": DMS}
 
 # Every standard-partition region with RDS, DMS and CloudFormation -- see awsregion.
 REGIONS = awsregion.regions()
