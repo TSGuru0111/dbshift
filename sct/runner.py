@@ -24,10 +24,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+
+import engines
+from engines import spec as engine_spec
 
 from . import scenario as scenario_mod
 from . import targets, toolchain as toolchain_mod
@@ -38,34 +42,84 @@ OUTPUT = Path(__file__).resolve().parent / "output"
 HOSTS = {local_host.NAME: local_host}
 
 
-def _cache_key(target_id: str, schemas: list[str] | None) -> str:
-    """What an SCT result actually depends on: the schemas read and the target.
+def _host_tag(dsn: str | None) -> str:
+    """A short, stable tag for the SERVER a DSN names -- not the whole DSN.
+
+    Added 2026-09-29, after a real collision: the same estate seeded on a local
+    Docker MySQL and on an EC2 host produced the same `(engine, schemas, target)`
+    key, so the EC2 run served the container's cached report. It looked right --
+    identical action items, because it is the same estate -- which is exactly what
+    makes it dangerous. A report is evidence about a SERVER, and two servers are
+    two reports.
+
+    The host, not the port or the database: a tunnel or a port change does not
+    make it a different estate, and including the database would split the cache
+    for a DSN difference that the schema filter already governs. `localhost` and
+    `127.0.0.1` deliberately collapse to one tag, because they are the same
+    machine and re-running locally should hit the cache.
+    """
+    host = str(dsn or "").split("/")[0].split(":")[0].strip().lower()
+    if host in ("", "localhost", "127.0.0.1", "::1"):
+        return "local"
+    # Dots and colons are legal in a hostname and awkward in a directory name.
+    return re.sub(r"[^a-z0-9]+", "-", host).strip("-")[:32] or "local"
+
+
+def _cache_key(target_id: str, schemas: list[str] | None,
+               source_engine: str | None = None, dsn: str | None = None) -> str:
+    """What an SCT result actually depends on: source engine, schemas, target.
 
     **Deliberately not the collector run id.** It was, and that was wrong in
-    both directions. SCT connects to Oracle and reads the live data dictionary
-    itself -- it never opens a collector run -- so a fresh discovery produces a
-    new run id without changing anything SCT would see. Keying on it meant every
-    re-discovery invalidated a 25-minute assessment for no reason, which the
-    Phases 1-5 browser drive exposed by running discovery first each time.
+    both directions. SCT connects to the source and reads the live data
+    dictionary itself -- it never opens a collector run -- so a fresh discovery
+    produces a new run id without changing anything SCT would see. Keying on it
+    meant every re-discovery invalidated a 25-minute assessment for no reason,
+    which the Phases 1-5 browser drive exposed by running discovery first each
+    time.
 
     It is also not *only* the target: assessing DBMIG_APP and DBMIG_TELCO
     against the same target are different reports, and sharing a directory would
     have one silently overwrite the other.
 
+    **The source engine joined the key on 2026-09-29**, because `rds-postgresql`
+    is a target id from both Oracle and MySQL: without it, two estates that
+    happen to share a schema name would share a directory and one assessment
+    would silently overwrite the other.
+
+    **Oracle's key is unchanged, and that is deliberate.** Prefixing every engine
+    would rename the directories holding the five real SCT assessments already on
+    disk -- each a ~25-minute run -- orphaning them for no benefit, since Oracle
+    was the only source when they were produced. So Oracle keeps the historical
+    shape and MySQL carries the prefix. Any third engine should carry one too.
+
     A schema list change therefore invalidates the cache, which is correct --
     that genuinely is a different assessment.
     """
-    estate = "-".join(sorted(s.upper() for s in (schemas or []))) or "noestate"
+    engine = engines.normalize(source_engine)
+    # Case is folded on Oracle and preserved on MySQL, matching how each engine
+    # treats a schema name. Folding a MySQL name here would make `Sales` and
+    # `SALES` -- two genuinely different databases on Linux -- share a directory.
+    fold = engine_spec.spec(engine)["fold_schema_names"]
+    names = [(s.upper() if fold else s) for s in (schemas or [])]
+    estate = "-".join(sorted(names)) or "noestate"
     if len(estate) > 60:
         # Keep the directory name readable and inside Windows' path limits while
         # staying unique: a hash of the full list, with the first names visible.
         digest = hashlib.sha256(estate.encode()).hexdigest()[:8]
         estate = f"{estate[:48]}-{digest}"
-    return f"{estate}-{target_id}"
+    prefix = "" if engine == engines.ORACLE else f"{engine.lower()}-"
+    # The host joins the key only when it is not local, for the same reason
+    # Oracle keeps its historical prefix-free key: every existing directory on
+    # disk was produced from a local source, and renaming them would orphan five
+    # real 25-minute assessments.
+    host = _host_tag(dsn)
+    host_part = "" if host == "local" else f"{host}-"
+    return f"{prefix}{host_part}{estate}-{target_id}"
 
 
-def _run_dir(target_id: str, schemas: list[str] | None = None) -> Path:
-    return OUTPUT / _cache_key(target_id, schemas)
+def _run_dir(target_id: str, schemas: list[str] | None = None,
+             source_engine: str | None = None, dsn: str | None = None) -> Path:
+    return OUTPUT / _cache_key(target_id, schemas, source_engine, dsn)
 
 
 def _now() -> str:
@@ -80,26 +134,33 @@ def plan(
     schemas: list[str],
     collector_run_id: str = "",
     host: str = local_host.NAME,
+    source_engine: str | None = None,
 ) -> dict:
     """What an assessment would do. Free, and needs no password.
 
     Exists so the console can show the whole shape -- target, schemas, host,
     prerequisites -- and refuse with a reason before anyone types a password.
     """
-    target = targets.get(target_id)
-    tc = toolchain_mod.discover()
-    out = _run_dir(target_id, schemas)
+    engine = engines.normalize(source_engine)
+    target = targets.get(target_id, engine)
+    tc = toolchain_mod.discover(engine)
+    out = _run_dir(target_id, schemas, engine, dsn)
 
     return {
         "phase": "2-sct",
         "planned_at_utc": _now(),
         "host": host,
+        "source_engine": engine,
         "target": {
             "id": target["id"],
             "label": target["label"],
             "sct_platform": target["sct_platform"],
             "in_scope": target["in_scope"],
             "scope_note": target["scope_note"],
+            # Whether SCT reports conversion work for this pair at all. False on a
+            # homogeneous pair, where zero action items is a complete result rather
+            # than evidence not yet collected -- Phase 5 reads this.
+            "sct_conversion": target["sct_conversion"],
         },
         "source": {"dsn": dsn, "user": user, "schemas": list(schemas)},
         "collector_run_id": collector_run_id or None,
@@ -112,15 +173,17 @@ def plan(
                 project_name="plan", project_dir=out / "project", report_dir=out / "report",
                 log_dir=out / "log", target_id=target_id, dsn=dsn, user=user, password="",
                 schemas=list(schemas) or ["PLACEHOLDER"],
-                jdbc_jar=Path(tc.jdbc_jar or "ojdbc8.jar"),
+                jdbc_jar=Path(tc.jdbc_jar or "driver.jar"),
+                source_engine=engine,
             )
         ),
     }
 
 
-def cached(target_id: str, schemas: list[str] | None = None) -> dict | None:
-    """A stored result for this (estate, target), if SCT has already assessed it."""
-    path = _run_dir(target_id, schemas) / "sct_assessment.json"
+def cached(target_id: str, schemas: list[str] | None = None,
+           source_engine: str | None = None, dsn: str | None = None) -> dict | None:
+    """A stored result for this (engine, host, estate, target), if already assessed."""
+    path = _run_dir(target_id, schemas, source_engine, dsn) / "sct_assessment.json"
     if not path.exists():
         return None
     try:
@@ -141,16 +204,18 @@ def assess(
     on_line: Callable[[str], None] | None = None,
     reuse_cached: bool = True,
     timeout: int | None = None,
+    source_engine: str | None = None,
 ) -> dict:
     """Run AWS SCT for one target and record what it produced."""
+    engine = engines.normalize(source_engine)
     if reuse_cached:
-        hit = cached(target_id, schemas)
+        hit = cached(target_id, schemas, engine, dsn)
         if hit:
             hit["from_cache"] = True
             return hit
 
-    target = targets.get(target_id)
-    tc = toolchain_mod.discover()
+    target = targets.get(target_id, engine)
+    tc = toolchain_mod.discover(engine)
     if not tc.ready:
         return {
             "ok": False,
@@ -169,7 +234,7 @@ def assess(
             "assessed_at_utc": _now(),
         }
 
-    out = _run_dir(target_id, schemas)
+    out = _run_dir(target_id, schemas, engine, dsn)
     project_dir = out / "project"
     report_dir = out / "report"
     # A stale report directory is worse than none: SCT writing no file would
@@ -195,6 +260,7 @@ def assess(
         password=password,
         schemas=list(schemas),
         jdbc_jar=tc.jdbc_jar,
+        source_engine=engine,
     )
     scenario_path = out / "scenario.scts"
 
@@ -240,12 +306,19 @@ def assess(
         "finished_at_utc": _now(),
         "collector_run_id": collector_run_id or None,
         "host": result.as_dict(),
+        # On the record, because a report read six months later must say which
+        # engine produced it without anyone inferring it from the CSV path.
+        "source_engine": engine,
         "target": {
             "id": target["id"],
             "label": target["label"],
             "sct_platform": target["sct_platform"],
             "in_scope": target["in_scope"],
             "scope_note": target["scope_note"],
+            # Whether SCT publishes conversion work for this pair. Phase 5 reads
+            # it: on a homogeneous pair zero action items is a complete result,
+            # not evidence still to be collected.
+            "sct_conversion": target["sct_conversion"],
         },
         "source": {"dsn": dsn, "user": user, "schemas": list(schemas)},
         "toolchain": tc.as_dict(),
@@ -273,9 +346,12 @@ def artefact_paths(record: dict) -> dict:
 
     Two things learned from SCT 1.0.677's real output on 2026-09-17:
 
-      - **The CSVs are nested**, under `<report>/ORACLE/<target>/`, not written
-        flat into the directory given to `SaveReportCSV`. `rglob` was already
-        right; the flat assumption would have been wrong.
+      - **The CSVs are nested**, under `<report>/<SOURCE>/<target>/` -- e.g.
+        `ORACLE/` or `MYSQL/`, named for the AddSource name -- not written flat
+        into the directory given to `SaveReportCSV`. `rglob` was already right,
+        which is why adding MySQL needed no change here; the flat assumption
+        would have been wrong and the hardcoded `ORACLE/` would have been wrong
+        again a year later.
       - **SCT writes three CSVs**, and only one holds the action items. The
         other two are rollups (`_Summary`, `_Action_Items_Summary`). The
         detail file is listed first so `artefact_paths(...)["csv"][0]` is the

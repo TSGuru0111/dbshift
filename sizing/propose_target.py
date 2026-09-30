@@ -100,6 +100,65 @@ def _basis(code: dict) -> str | None:
 # --------------------------------------------------------------- heuristic
 
 
+MYSQL = "MYSQL"
+
+
+def heuristic_target_proposal_mysql(paths: dict, code: dict) -> dict:
+    """The recommendation from a MySQL source. Deterministic; no model.
+
+    **The Oracle recommender's central argument does not exist here.** From
+    Oracle, conversion effort is weighed against ending an Oracle licence, and
+    the heterogeneous path earns its cost. MySQL and PostgreSQL are both open
+    source: moving buys no licence saving, so every point of conversion effort is
+    cost with no offsetting line.
+
+    So the homogeneous path is recommended unless it is blocked -- not because
+    PostgreSQL is worse, but because the reasons to prefer it (a platform
+    standard, a feature MySQL lacks, a team that knows PostgreSQL) are not in the
+    estate and this function cannot see them. The reason text says exactly that,
+    so a client who HAS such a reason knows the recommendation does not weigh it.
+
+    No model tier on this path yet: `validate_target` bounds a model's answer to
+    ORACLE / POSTGRESQL, and extending it would be a model decision this project
+    has not made. The heuristic answer is recorded as the heuristic.
+    """
+    my, pg = paths[MYSQL], paths[POSTGRESQL]
+
+    if not my["possible"] and not pg["possible"]:
+        return {"source": "heuristic", "model_id": None, "target": None,
+                "confidence": INSUFFICIENT, "evidence_basis": _basis(code),
+                "reason": "Both paths are blocked. Resolve the blockers before choosing."}
+    if not my["possible"]:
+        names = ", ".join(b["subject"] for b in my["blockers"])
+        return {"source": "heuristic", "model_id": None, "target": POSTGRESQL,
+                "confidence": HIGH, "evidence_basis": _basis(code),
+                "reason": f"RDS for MySQL is blocked by {names}; PostgreSQL is the open path."}
+    if not pg["possible"]:
+        names = ", ".join(b["subject"] for b in pg["blockers"])
+        return {"source": "heuristic", "model_id": None, "target": MYSQL,
+                "confidence": HIGH, "evidence_basis": _basis(code),
+                "reason": f"PostgreSQL is blocked by {names}. The homogeneous path "
+                          "carries the estate as it stands."}
+
+    extra = pg["effort_points"] - my["effort_points"]
+    return {
+        "source": "heuristic",
+        "model_id": None,
+        "target": MYSQL,
+        "confidence": HIGH,
+        "evidence_basis": _basis(code),
+        "reason": (
+            f"Both engines are open source, so moving to PostgreSQL ends no licence -- "
+            f"the conversion effort buys nothing on its own. RDS for MySQL carries "
+            f"{my['effort_points']} effort point(s) against PostgreSQL's "
+            f"{pg['effort_points']}"
+            + (f" ({extra} more)" if extra > 0 else "")
+            + ", and moves the schema and stored code unchanged. Choose PostgreSQL for a "
+              "reason this assessment cannot see -- a platform standard, a feature MySQL "
+              "lacks, or the team that will run it."),
+    }
+
+
 def heuristic_target_proposal(paths: dict, code: dict) -> dict:
     """The deterministic recommendation. Also the fallback for every model error.
 
@@ -381,8 +440,131 @@ def bedrock_target_proposal(paths: dict, code: dict, model_id: str = "", client=
     }
 
 
+def is_mysql_source(paths: dict) -> bool:
+    """The assessment's own shape says which source it came from."""
+    return MYSQL in paths
+
+
+def heuristic_for(paths: dict, code: dict) -> dict:
+    """The deterministic recommendation for whichever source these paths are from."""
+    if is_mysql_source(paths):
+        return heuristic_target_proposal_mysql(paths, code)
+    return heuristic_target_proposal(paths, code)
+
+
 def propose_target(paths: dict, code: dict, use_bedrock: bool = False,
                    model_id: str | None = None, client=None) -> dict:
+    if is_mysql_source(paths):
+        if use_bedrock:
+            return bedrock_target_proposal_mysql(paths, code, model_id or "", client=client)
+        return heuristic_target_proposal_mysql(paths, code)
     if use_bedrock:
         return bedrock_target_proposal(paths, code, model_id or "", client=client)
     return heuristic_target_proposal(paths, code)
+
+
+PROMPT_MYSQL = """You are advising on a MySQL database migration to AWS. Two targets are \
+possible and the client must choose one:
+
+  MYSQL       Amazon RDS for MySQL        (homogeneous; schema and stored code move unchanged)
+  POSTGRESQL  Amazon RDS for PostgreSQL   (heterogeneous; stored code and some types are rewritten)
+
+BOTH ENGINES ARE OPEN SOURCE. Unlike an Oracle migration, moving to PostgreSQL \
+ends no licence and saves no licence cost. Do not argue for PostgreSQL on cost \
+grounds -- there are none in this evidence.
+
+Neither target is blocked -- that has already been established.
+
+EVIDENCE
+{evidence}
+
+Reply with JSON and nothing else:
+
+{{"target": "MYSQL" or "POSTGRESQL" or null,
+  "confidence": one of {confidence_options},
+  "reason": "two to four sentences a client can act on: what the numbers are, \
+what each path costs, and what the choice turns on"}}
+
+Rules you must follow:
+- Cite only numbers that appear in the evidence. Do not estimate or invent a figure.
+- Items listed on BOTH paths are pre-migration work on the source whichever target \
+is chosen. Do not count them as a reason to prefer either.
+- A reason to choose PostgreSQL that is not in the evidence (a platform standard, a \
+feature MySQL lacks) may be NAMED as something the client should weigh, but not \
+asserted as a fact about this estate.
+- `null` is valid if the evidence does not favour either path."""
+
+
+def bedrock_target_proposal_mysql(paths: dict, code: dict, model_id: str = "",
+                                  client=None) -> dict:
+    """Ask the model to recommend between RDS for MySQL and RDS for PostgreSQL.
+
+    Bounded exactly as the Oracle proposal is: a blocked path never reaches the
+    model, an answer naming a target that is not a path falls back to the
+    heuristic, and `validate_target` re-checks every number and confidence.
+
+    The prompt differs in the one fact that changes the answer: **there is no
+    licence saving**. Without saying so, a model trained on Oracle-migration
+    writing will reach for "PostgreSQL ends the licence" -- a sentence that is
+    simply false here.
+    """
+    from bedrock.client import BedrockClient, BedrockError
+
+    if not paths[MYSQL]["possible"] or not paths[POSTGRESQL]["possible"]:
+        return heuristic_target_proposal_mysql(paths, code)
+
+    evidence = {
+        name.lower() + "_path": {
+            "effort_points": p["effort_points"],
+            "effort": [{"subject": i["subject"], "detail": i["detail"]} for i in p["effort"]],
+        }
+        for name, p in paths.items()
+    }
+    evidence["stored_code"] = {k: code.get(k) for k in (
+        "basis", "convertible", "ready", "handwork", "model_tier", "manual", "pct_automatic")}
+    # Recommending the homogeneous path does not rest on conversion evidence, so
+    # every confidence is available to it; validate_target enforces the basis
+    # limit only on a PostgreSQL recommendation.
+    options = [HIGH, JUDGEMENT, PROJECTION, INSUFFICIENT]
+
+    client = client or BedrockClient()
+    try:
+        reply = client.complete(
+            "reasoning",
+            PROMPT_MYSQL.format(evidence=json.dumps(evidence, indent=2),
+                                confidence_options=json.dumps(options)),
+            max_tokens=700)
+    except BedrockError as exc:
+        out = heuristic_target_proposal_mysql(paths, code)
+        out["source"] = "heuristic_after_model_error"
+        out["model_error"] = str(exc)[:200]
+        return out
+
+    text = (reply.get("text") or "").strip()
+    if text.startswith("```"):
+        text = text.split("```")[1] if "```" in text[3:] else text[3:]
+        text = text.removeprefix("json").strip()
+    try:
+        parsed = json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except (ValueError, KeyError) as exc:
+        out = heuristic_target_proposal_mysql(paths, code)
+        out["source"] = "heuristic_after_unparseable_reply"
+        out["model_error"] = f"reply was not JSON: {str(exc)[:80]}"
+        return out
+
+    target = parsed.get("target")
+    if target not in (MYSQL, POSTGRESQL, None):
+        out = heuristic_target_proposal_mysql(paths, code)
+        out["source"] = "heuristic_after_unknown_target"
+        out["model_error"] = f"proposed {target!r}, which is not a path from MySQL"
+        return out
+
+    return {
+        "source": "bedrock",
+        "model_id": reply.get("model_id"),
+        "tokens": {"in": reply.get("input_tokens"), "out": reply.get("output_tokens")},
+        "target": target,
+        "confidence": parsed.get("confidence"),
+        "evidence_basis": _basis(code),
+        "reason": str(parsed.get("reason") or "").strip()[:900],
+    }

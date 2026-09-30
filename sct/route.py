@@ -42,7 +42,7 @@ WHERE_LABEL = {
 }
 
 WHERE_MEANING = {
-    SOURCE: "A defect in the Oracle estate. Migrating does not fix it, and on a "
+    SOURCE: "A defect in the source estate. Migrating does not fix it, and on a "
             "CDC migration some of these degrade replication rather than fail it.",
     TARGET: "Nothing is wrong with the source. The target needs DDL, an extension "
             "or a setting, applied when the target is built.",
@@ -355,6 +355,187 @@ ROUTES: dict[str, dict] = {
     ),
 }
 
+# ------------------------------------------------------------------ MySQL
+# SCT's action-item codes are per source vendor: MySQL's are 8xxx, Oracle's
+# 5xxx, and the generic 999x codes are shared. A shared code can mean different
+# things per source -- 9994 is Oracle Advanced Queuing on DBMIG_APP and a MySQL
+# EVENT on DBMIG_MYSQL_APP -- so rows here OVERRIDE `ROUTES` for a MySQL source
+# rather than joining it. A code absent here falls back to `ROUTES` (9997 and
+# 9996 read the same on either engine), and then to UNMAPPED.
+#
+# Written against a real SCT 1.0.677 run, DBMIG_MYSQL_APP on the EC2 source ->
+# RDS for PostgreSQL, 2026-09-29, using SCT's own titles and recommendations.
+# Nothing here is routed to the SOURCE: none of these is a defect in MySQL, and
+# the only source-side gates this project has are Oracle's.
+MYSQL_ROUTES: dict[str, dict] = {
+    "8706": _r(
+        TARGET, MODEL,
+        "SCT has no PostgreSQL type for these columns. On DBMIG_MYSQL_APP they are "
+        "a JSON column and a SET column: JSON becomes jsonb, and SET has no "
+        "equivalent at all -- it is a bitmap of named flags. The source is not "
+        "wrong; the target table needs a type chosen for each column.",
+        "Every flagged column has a PostgreSQL type in the target DDL, and DMS "
+        "can write the source values into it.",
+        how=[
+            "JSON: declare the target column jsonb. It accepts every valid MySQL JSON document; note jsonb does not keep key order or duplicate keys.",
+            "SET: declare the target column text with a CHECK that each comma-separated member is one of the allowed values, or text[] if the application will be changed to read an array.",
+            "Write the chosen types into the target DDL (Phase 4c) before the load, not after it.",
+        ],
+        verify=[
+            "DMS delivers a SET value as its comma-separated string. A text column takes it as is; text[] needs a DMS transformation rule, or the full load fails on this column.",
+            "No MySQL JSON value in the data relies on key order or duplicate keys, which jsonb discards.",
+        ]
+    ),
+    "8825": _r(
+        TARGET, MODEL,
+        "A DATETIME/TIMESTAMP default SCT wants reviewed. DEFAULT CURRENT_TIMESTAMP "
+        "maps to a PostgreSQL default directly, but ON UPDATE CURRENT_TIMESTAMP -- "
+        "product.updated_at on this estate -- has no column-level equivalent: "
+        "PostgreSQL needs a BEFORE UPDATE trigger to keep the column current, or "
+        "the value silently stops changing after cutover.",
+        "Each flagged column's default is set on the target, and every ON UPDATE "
+        "CURRENT_TIMESTAMP column is maintained by a trigger.",
+        how=[
+            "DEFAULT CURRENT_TIMESTAMP: ALTER TABLE ... ALTER COLUMN ... SET DEFAULT LOCALTIMESTAMP for a DATETIME column (timestamp without time zone), CURRENT_TIMESTAMP for a TIMESTAMP one (timestamptz).",
+            "ON UPDATE CURRENT_TIMESTAMP: a BEFORE UPDATE trigger that sets the column and RETURNS NEW. The trigger function is PL/pgSQL, so it is written and compiled in Phase 4b, not here.",
+            "View columns in the list (v_order_summary.order_date) inherit from their table and need nothing of their own.",
+        ],
+        verify=[
+            "The target's timezone parameter matches the source's time_zone, or DATETIME defaults land in a different zone from the rows already migrated.",
+            "Every ON UPDATE column has its trigger, and the trigger RETURNS NEW -- a BEFORE trigger that returns NULL silently cancels the update.",
+        ]
+    ),
+    "8795": _r(
+        DECISION, PERSON,
+        "MySQL compares strings under the column's collation, and the default "
+        "utf8mb4_0900_ai_ci is case- and accent-insensitive: 'ABC' = 'abc' is true. "
+        "PostgreSQL's = is case-sensitive. Every flagged comparison changes meaning "
+        "unless a single approach is chosen for the whole estate -- and the same "
+        "choice decides whether a UNIQUE key that holds on MySQL still holds.",
+        "One approach is chosen and recorded, and the flagged routines are "
+        "converted under it.",
+        how=[
+            "Choose one estate-wide approach: citext columns, a nondeterministic ICU collation (e.g. und-u-ks-level2) on the affected columns, or explicit lower() on both sides of each comparison.",
+            "Apply it in the target DDL (Phase 4c) and in the converted routines (Phase 4b) consistently -- mixing approaches is how two comparisons of the same values start to disagree.",
+            "Check the unique keys on those columns: under case-sensitive comparison they admit rows MySQL would have refused.",
+        ],
+        verify=[
+            "The application's lookups (customer_ref, sku, status) return the same rows on the target for mixed-case input.",
+            "A nondeterministic collation cannot back a LIKE or a b-tree pattern search; the queries using one have been checked.",
+        ]
+    ),
+    "9994": _r(
+        DECISION, PERSON,
+        "SCT cannot convert the object at all -- on this estate, a MySQL EVENT "
+        "(ev_purge_old_audit). PostgreSQL has no built-in scheduler. The "
+        "replacement is pg_cron, which RDS for PostgreSQL supports as an extension, "
+        "or a job outside the database (EventBridge Scheduler). No SQL can be "
+        "drafted until that choice is made.",
+        "A scheduling approach is chosen and the job exists on it, with the same "
+        "schedule and body.",
+        how=[
+            "Decide where the job runs: pg_cron inside the target (add it to shared_preload_libraries in the parameter group, then CREATE EXTENSION pg_cron), or a scheduler outside the database.",
+            "Re-create the job body as a PostgreSQL statement or procedure -- the event's DELETE uses MySQL's INTERVAL syntax and must be converted with the rest of the code.",
+            "Disable the event on the source at cutover, so the purge does not run on both sides.",
+        ],
+        verify=[
+            "The schedule is the same, including the time zone it fires in: pg_cron schedules in GMT by default.",
+            "The job's first run on the target is after the data it purges has fully migrated.",
+        ]
+    ),
+    "8811": _r(
+        HUMAN, MODEL,
+        "SCT could not convert these routines and left them for manual work -- here "
+        "sp_place_order and the trg_order_audit_upd trigger. Rewriting stored code "
+        "is Phase 4b's job: a model may draft the PL/pgSQL, which is compiled "
+        "against the real target and reviewed before it is kept.",
+        "Each routine has a PL/pgSQL version that compiles on the target and "
+        "behaves as the original does.",
+        how=[
+            "Convert each routine in Phase 4b from its full SHOW CREATE text, which the collector captured -- not from SCT's partial output.",
+            "A MySQL trigger body becomes a trigger FUNCTION plus CREATE TRIGGER; an AFTER trigger returns NULL, a BEFORE trigger must RETURN NEW.",
+            "CURRENT_USER(), LAST_INSERT_ID() and YEAR(NOW()) become current_user, RETURNING ... INTO, and EXTRACT(YEAR FROM now()).",
+        ],
+        verify=[
+            "The converted routine compiles on the target (Phase 4b's compile gate), and a call with representative arguments gives the same result as on MySQL.",
+            "SELECT ... INTO keeps MySQL's zero-row behaviour: the variable is NULL and the code's IS NULL check still runs. Adding STRICT -- the Oracle rule -- would turn that check into an unhandled exception.",
+        ]
+    ),
+    "8829": _r(
+        HUMAN, MODEL,
+        "INSERT ... ON DUPLICATE KEY UPDATE has a direct PostgreSQL counterpart, "
+        "INSERT ... ON CONFLICT (...) DO UPDATE, but it must name the conflict "
+        "target explicitly. MySQL fires on ANY unique key; PostgreSQL only on the "
+        "one named, so a table with two unique keys behaves differently.",
+        "The statement is rewritten with ON CONFLICT naming the right key, and "
+        "compiles in the converted routine.",
+        how=[
+            "Rewrite as INSERT ... ON CONFLICT (<key columns>) DO UPDATE SET col = EXCLUDED.col -- VALUES(col) becomes EXCLUDED.col.",
+            "Name the conflict target: the primary key or unique index the upsert is meant to hit (product_daily_sales: sale_date, product_id).",
+        ],
+        verify=[
+            "The table has exactly the unique key named -- if it has more than one, a duplicate on the other now raises instead of updating.",
+            "Accumulating updates (units = units + VALUES(units)) reference the existing row by table name and the new one by EXCLUDED.",
+        ]
+    ),
+    "8844": _r(
+        HUMAN, MODEL,
+        "SIGNAL SQLSTATE '45000' and MySQL's error numbers do not carry over: "
+        "PostgreSQL raises with RAISE EXCEPTION and its own SQLSTATE space. Code "
+        "that catches an error by number -- in the routine or in the application "
+        "-- stops matching after conversion.",
+        "Each SIGNAL is a RAISE EXCEPTION with an agreed SQLSTATE, and every caller "
+        "that tests for the error tests for the new one.",
+        how=[
+            "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'x' becomes RAISE EXCEPTION 'x' USING ERRCODE = 'P0001' (or a project-specific code).",
+            "An EXIT HANDLER FOR SQLEXCEPTION ... RESIGNAL becomes an EXCEPTION WHEN OTHERS block that re-raises with RAISE.",
+            "Search the application for MySQL error 1644 / SQLSTATE 45000 handling; it must be changed alongside the routine.",
+        ],
+        verify=[
+            "The application's error handling is tested against the target's error codes, not just the routine in isolation.",
+        ]
+    ),
+    "8850": _r(
+        HUMAN, MODEL,
+        "A routine parameter uses a type or mode PostgreSQL does not accept as "
+        "written -- on sp_place_order, the UNSIGNED integer parameters. PostgreSQL "
+        "has no unsigned types, so the parameter is widened and the range check "
+        "the unsigned type gave for free must be written explicitly.",
+        "The parameters are declared with PostgreSQL types and the converted "
+        "routine rejects the values MySQL's type refused.",
+        how=[
+            "INT UNSIGNED becomes bigint; BIGINT UNSIGNED becomes numeric(20,0), or bigint where the values are known to fit.",
+            "Add an explicit check for negative input where the unsigned type used to refuse it.",
+            "An OUT parameter of a procedure stays OUT; a function with OUT parameters returns a row instead.",
+        ],
+        verify=[
+            "Callers passing values above 2^63-1 are either impossible or handled: bigint overflows where BIGINT UNSIGNED did not.",
+        ]
+    ),
+    "8859": _r(
+        HUMAN, MODEL,
+        "START TRANSACTION inside a stored procedure has no direct PL/pgSQL form. "
+        "A PostgreSQL procedure may COMMIT or ROLLBACK only when called outside an "
+        "explicit transaction, and never inside a block that has an EXCEPTION "
+        "handler -- which is exactly sp_place_order's shape (an EXIT HANDLER that "
+        "rolls back). The transaction boundary has to be redesigned, not "
+        "translated.",
+        "The routine's transaction boundary is decided -- in the procedure or in "
+        "the caller -- and the converted code compiles and behaves atomically.",
+        how=[
+            "Usually: drop START TRANSACTION and the handler's ROLLBACK, and let the caller's transaction make the work atomic -- an exception in PL/pgSQL already rolls back the block.",
+            "If the procedure must own its transaction, make it a PROCEDURE called with CALL outside any transaction, with COMMIT at the end and no EXCEPTION block around it.",
+        ],
+        verify=[
+            "A failure half-way leaves no partial order: tested on the target by forcing the second INSERT to fail.",
+            "Callers that relied on the procedure committing on its own now commit themselves.",
+        ]
+    ),
+}
+
+ROUTES_BY_SOURCE = {"MYSQL": MYSQL_ROUTES}
+
+
 # What happens to a code nobody has mapped yet. Not "automatic", deliberately.
 UNMAPPED = _r(
     HUMAN, PERSON,
@@ -377,25 +558,27 @@ UNMAPPED = _r(
 )
 
 
-def route(issue_code: str) -> dict:
+def route(issue_code: str, source_engine: str | None = None) -> dict:
     """Where and by whom one SCT action item must be fixed.
 
     Always returns a route. An unknown code gets `UNMAPPED`, flagged so the
     console and the gate can show it as unmapped rather than as a decision
-    somebody made.
+    somebody made. `source_engine` selects the per-source overrides; omitted,
+    the Oracle table applies, as it did before there was a second source.
     """
     code = str(issue_code or "").strip()
-    row = ROUTES.get(code)
+    override = ROUTES_BY_SOURCE.get((source_engine or "").upper(), {})
+    row = override.get(code) or ROUTES.get(code)
     if row is None:
         return {**UNMAPPED, "issue_code": code, "mapped": False}
     return {**row, "issue_code": code, "mapped": True}
 
 
-def annotate(issues: list[dict]) -> list[dict]:
+def annotate(issues: list[dict], source_engine: str | None = None) -> list[dict]:
     """Attach a route to each parsed SCT issue, leaving SCT's own fields alone."""
     out = []
     for issue in issues:
-        r = route(issue.get("issue_code"))
+        r = route(issue.get("issue_code"), source_engine)
         out.append({
             **issue,
             "where": r["where"],
@@ -414,13 +597,14 @@ def annotate(issues: list[dict]) -> list[dict]:
     return out
 
 
-def segregate(issues: list[dict]) -> dict:
+def segregate(issues: list[dict], source_engine: str | None = None) -> dict:
     """Group annotated issues by where the work lands, worst first within each.
 
     The four groups are the answer to "who has to do what": the source team, the
     target build, an architecture decision, and code somebody must write.
     """
-    annotated = annotate(issues) if issues and "where" not in issues[0] else list(issues)
+    annotated = (annotate(issues, source_engine) if issues and "where" not in issues[0]
+                 else list(issues))
     groups = {w: [] for w in (SOURCE, TARGET, DECISION, HUMAN)}
     for issue in annotated:
         groups[issue["where"]].append(issue)
@@ -453,14 +637,16 @@ def segregate(issues: list[dict]) -> dict:
     }
 
 
-def blocking(issues: list[dict], phases: list[str] | None = None) -> list[dict]:
+def blocking(issues: list[dict], phases: list[str] | None = None,
+             source_engine: str | None = None) -> list[dict]:
     """Annotated issues that stand in front of a downstream phase.
 
     `phases` narrows to the phases actually in scope for this migration -- on a
     full-load run, a CDC-only blocker blocks nothing, which is the same rule
     Phase 2 applies to the rules engine's CDC-only findings.
     """
-    annotated = annotate(issues) if issues and "where" not in issues[0] else list(issues)
+    annotated = (annotate(issues, source_engine) if issues and "where" not in issues[0]
+                 else list(issues))
     out = []
     for issue in annotated:
         hits = issue.get("blocks") or []

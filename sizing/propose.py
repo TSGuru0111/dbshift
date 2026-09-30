@@ -193,8 +193,111 @@ def bedrock_proposal(facts: dict, model_id: str, client=None) -> dict:
     }
 
 
+PROMPT_MYSQL = """You are sizing a MySQL database for migration to Amazon RDS.
+
+Propose an instance class and storage. There is NO edition to choose and NO \
+licence to count: RDS for MySQL and RDS for PostgreSQL are both open source. A \
+deterministic rules engine checks every value you give and overrides you where the \
+evidence disagrees.
+
+EVIDENCE
+{evidence}
+
+INSTANCE CLASSES AVAILABLE
+{classes}
+
+Reply with JSON only, no prose and no code fence:
+{{"instance_class": "one of the classes listed above",
+  "storage_gb": integer,
+  "rationale": "two or three sentences: what the numbers are and what they imply"}}
+
+Rules you must follow:
+- Do not invent an instance class. Choose from the list.
+- Storage must cover segment_gb with room to grow.
+- Cite only numbers that appear in the evidence.
+"""
+
+
+def _is_mysql(facts: dict) -> bool:
+    return str(facts.get("source_engine") or "").upper() == "MYSQL"
+
+
+def bedrock_proposal_mysql(facts: dict, model_id: str, client=None) -> dict:
+    """The MySQL sizing proposal. No edition field, because there is no edition.
+
+    Bounded like the Oracle proposal: an unknown class or an unparseable reply
+    falls back to the heuristic, visibly, and validate.py recomputes the rest.
+    """
+    import json
+
+    from bedrock.client import BedrockClient, BedrockError
+
+    evidence = {
+        "segment_gb": facts["segment_gb"],
+        "table_count": facts["table_count"],
+        "object_count": facts.get("object_count"),
+        "character_set": facts.get("character_set"),
+        "mysql": facts.get("mysql"),
+        "utilization": {"basis": (facts.get("utilization") or {}).get("basis"),
+                        "reason": (facts.get("utilization") or {}).get("reason")},
+    }
+    catalogue = [f"{i['class']} ({i['vcpu']} vCPU, {i['memory_gib']} GiB)"
+                 for i in instances.CATALOGUE]
+    client = client or BedrockClient()
+    try:
+        reply = client.complete("reasoning", PROMPT_MYSQL.format(
+            evidence=json.dumps(evidence, indent=2), classes="\n".join(catalogue)),
+            max_tokens=600)
+    except BedrockError as exc:
+        out = heuristic_proposal(facts)
+        out["source"] = "heuristic_after_model_error"
+        out["model_error"] = str(exc)[:200]
+        return out
+
+    text = (reply.get("text") or "").strip()
+    if text.startswith("```"):
+        text = text.split("```")[1] if "```" in text[3:] else text[3:]
+        text = text.removeprefix("json").strip()
+    try:
+        parsed = json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except (ValueError, KeyError) as exc:
+        out = heuristic_proposal(facts)
+        out["source"] = "heuristic_after_unparseable_reply"
+        out["model_error"] = f"reply was not JSON: {str(exc)[:80]}"
+        return out
+
+    known = {i["class"] for i in instances.CATALOGUE}
+    if parsed.get("instance_class") not in known:
+        out = heuristic_proposal(facts)
+        out["source"] = "heuristic_after_unknown_class"
+        out["model_error"] = f"proposed {parsed.get('instance_class')!r}, which is not a class"
+        return out
+
+    return {
+        "source": "bedrock",
+        "model_id": reply.get("model_id"),
+        "tokens": {"in": reply.get("input_tokens"), "out": reply.get("output_tokens")},
+        "edition": None,
+        "apparent_forcing_features": [],
+        "instance_class": parsed["instance_class"],
+        "storage_gb": int(parsed.get("storage_gb") or policy.storage_floor_gb(facts["segment_bytes"])),
+        "sizing_basis": {"basis": (facts.get("utilization") or {}).get("basis"),
+                         "percentile": None, "headroom": None},
+        "rationale": str(parsed.get("rationale") or "").strip()[:800],
+    }
+
+
 def propose(facts: dict, use_bedrock: bool = False, model_id: str | None = None,
             client=None) -> dict:
+    if _is_mysql(facts):
+        if use_bedrock:
+            return bedrock_proposal_mysql(facts, model_id or "", client=client)
+        out = heuristic_proposal(facts)
+        # The heuristic's edition is Oracle arithmetic over an empty feature list;
+        # on MySQL there is no edition at all, and "SE2" here would read as one.
+        out["edition"] = None
+        out["apparent_forcing_features"] = []
+        return out
     if use_bedrock:
         return bedrock_proposal(facts, model_id or "", client=client)
     return heuristic_proposal(facts)

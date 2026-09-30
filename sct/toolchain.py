@@ -41,6 +41,7 @@ REQUIRED_JAVA_MAJOR = ACCEPTED_JAVA_MAJORS[0]
 ENV_SCT_HOME = "DBSHIFT_SCT_HOME"
 ENV_JAVA_HOME = "DBSHIFT_SCT_JAVA_HOME"
 ENV_JDBC = "DBSHIFT_ORACLE_JDBC_JAR"
+ENV_MYSQL_JDBC = "DBSHIFT_MYSQL_JDBC_JAR"
 
 # Where the no-elevation install this project uses puts things, and where the
 # MSI installer puts them. Both are searched so either install works.
@@ -196,34 +197,92 @@ def _find_sct() -> tuple[Path | None, Path | None, Check]:
     )
 
 
-def _find_jdbc() -> tuple[Path | None, Check]:
-    explicit = os.environ.get(ENV_JDBC)
-    candidates = ([Path(explicit)] if explicit else []) + _JDBC_CANDIDATES
+# One JDBC driver per source engine. SCT registers the jar under a
+# vendor-specific settings key (`oracle_driver_file`, `mysql_driver_file` -- see
+# sct/scenario.py), so the two are not interchangeable: a MySQL assessment with
+# only ojdbc present fails inside AddSource with a driver error rather than a
+# connection error, which is the confusing failure this check exists to prevent.
+#
+# MySQL's official jar is named for its version, so its candidates are matched by
+# glob rather than listed exactly -- mysql-connector-j-8.4.0.jar and
+# mysql-connector-java-8.0.33.jar are both what an operator will actually have
+# downloaded, and pinning either spelling would reject the other.
+_JDBC_BY_ENGINE = {
+    "ORACLE": {
+        "env": ENV_JDBC,
+        "label": "Oracle",
+        "check_name": "oracle_jdbc_driver",
+        "exact": list(_JDBC_CANDIDATES),
+        "globs": [],
+        "remedy": ("Download ojdbc8.jar (Maven Central: com/oracle/database/jdbc/ojdbc8) "
+                   "and set {env} to it, or place it in "
+                   "%LOCALAPPDATA%\\dbshift-tools\\jdbc\\."),
+    },
+    "MYSQL": {
+        "env": ENV_MYSQL_JDBC,
+        "label": "MySQL",
+        "check_name": "mysql_jdbc_driver",
+        "exact": [],
+        "globs": [
+            (_LOCAL_TOOLS / "jdbc", "mysql-connector-j-*.jar"),
+            (_LOCAL_TOOLS / "jdbc", "mysql-connector-java-*.jar"),
+        ],
+        "remedy": ("Download MySQL Connector/J (dev.mysql.com/downloads/connector/j, or "
+                   "Maven Central: com/mysql/mysql-connector-j) and set {env} to it, or "
+                   "place it in %LOCALAPPDATA%\\dbshift-tools\\jdbc\\."),
+    },
+}
 
-    for jar in candidates:
+
+def _find_jdbc(source_engine: str | None = None) -> tuple[Path | None, Check]:
+    """The JDBC driver for one source engine. Oracle when none is named."""
+    import engines as _engines
+
+    spec = _JDBC_BY_ENGINE[_engines.normalize(source_engine)]
+    explicit = os.environ.get(spec["env"])
+    searched: list[str] = []
+    found: list[Path] = []
+
+    if explicit:
+        found.append(Path(explicit))
+        searched.append(str(Path(explicit)))
+    for jar in spec["exact"]:
+        found.append(jar)
+        searched.append(str(jar))
+    for directory, pattern in spec["globs"]:
+        searched.append(str(directory / pattern))
+        if directory.is_dir():
+            # Reverse-sorted so 8.4.0 wins over 8.0.33 when both are present.
+            found.extend(sorted(directory.glob(pattern), reverse=True))
+
+    for jar in found:
         if jar.is_file():
             return jar, Check(
-                "oracle_jdbc_driver", OK, f"Oracle JDBC driver at {jar}", path=str(jar),
+                spec["check_name"], OK,
+                f"{spec['label']} JDBC driver at {jar}", path=str(jar),
             )
 
     return None, Check(
-        "oracle_jdbc_driver", MISSING,
-        "no ojdbc jar found in " + "; ".join(str(c) for c in candidates),
-        "Download ojdbc8.jar (Maven Central: com/oracle/database/jdbc/ojdbc8) and set "
-        f"{ENV_JDBC} to it, or place it in %LOCALAPPDATA%\\dbshift-tools\\jdbc\\.",
+        spec["check_name"], MISSING,
+        f"no {spec['label']} JDBC jar found in " + "; ".join(searched),
+        spec["remedy"].format(env=spec["env"]),
     )
 
 
-def discover() -> Toolchain:
+def discover(source_engine: str | None = None) -> Toolchain:
     """Find all three prerequisites. Read-only; installs nothing.
 
     SCT is located **first**, because its bundled runtime is the JVM to prefer
     and cannot be looked for until the install directory is known.
+
+    `source_engine` selects which JDBC driver is required -- Oracle's ojdbc or
+    MySQL's Connector/J. Defaults to Oracle, so a caller that predates the
+    source-engine flag gets exactly the checks it got before.
     """
     tc = Toolchain()
     tc.sct_batch_jar, tc.sct_home, sct_check = _find_sct()
     tc.java, java_check = _find_java(tc.sct_home)
-    tc.jdbc_jar, jdbc_check = _find_jdbc()
+    tc.jdbc_jar, jdbc_check = _find_jdbc(source_engine)
     tc.checks = [java_check, sct_check, jdbc_check]
     return tc
 

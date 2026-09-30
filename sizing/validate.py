@@ -32,6 +32,8 @@ def validate(proposal: dict, facts: dict, engine: str = target_mod.ORACLE) -> di
     """
     if engine == target_mod.POSTGRESQL:
         return _validate_postgresql(proposal, facts)
+    if engine == target_mod.MYSQL:
+        return _validate_mysql(proposal, facts)
     checks: list[dict] = []
 
     # 1 -- Edition. Recomputed from evidence rather than trusted.
@@ -255,8 +257,8 @@ def _validate_postgresql(proposal: dict, facts: dict) -> dict:
     checks.append(_check(
         "edition", "PASS",
         "RDS for PostgreSQL has no editions and no licence model: the engine is open "
-        "source and AWS charges for the instance alone. Nothing about the estate's "
-        "Oracle feature usage can change that, so there is no edition to decide and "
+        "source and AWS charges for the instance alone. Nothing about the source "
+        "estate's feature usage can change that, so there is no edition to decide and "
         "no processor licence to count.",
         None, None))
 
@@ -305,7 +307,11 @@ def _validate_postgresql(proposal: dict, facts: dict) -> dict:
 
     # Character set. AL32UTF8 maps to UTF8; anything else needs a conversion decision.
     cs = facts.get("character_set")
-    if cs in ("AL32UTF8", "UTF8"):
+    # utf8mb4 is MySQL's full UTF-8 and maps to PostgreSQL UTF8 exactly. Without it
+    # here every MySQL -> PostgreSQL sizing warned about transcoding that does not
+    # happen. utf8mb3 is deliberately NOT listed: it is a subset that has already
+    # lost 4-byte characters, and the warning is right for it.
+    if str(cs).upper() in ("AL32UTF8", "UTF8", "UTF8MB4"):
         checks.append(_check(
             "encoding", "PASS",
             f"Source character set {cs} maps to PostgreSQL UTF8 without transcoding.",
@@ -327,8 +333,8 @@ def _validate_postgresql(proposal: dict, facts: dict) -> dict:
         detail = (
             f"No usable utilization data -- {util['reason']}. This sizing is a "
             "capacity-derived floor, not a load-derived recommendation. PostgreSQL's "
-            "execution model differs from Oracle's, so Oracle's measured load does not "
-            "transfer directly either: rehearse before cutover."
+            "execution model differs from the source engine's, so the source's measured "
+            "load would not transfer directly either: rehearse before cutover."
         )
         if measured and not measured.get("usable_for_sizing"):
             detail += f" A utilization file was supplied but rejected: {measured['reason']}."
@@ -354,6 +360,126 @@ def _validate_postgresql(proposal: dict, facts: dict) -> dict:
         "storage_gb": storage_gb,
         "storage_type": "gp3",
         "character_set": "UTF8",
+        "source_character_set": cs,
+        "processor_licences": 0,
+        "forced_by": [],
+        "dismissed": [],
+        "checks": checks,
+        "override_count": len(overrides),
+        "warning_count": len(warnings),
+        "agreed_with_proposal": not overrides,
+    }
+
+
+def _validate_mysql(proposal: dict, facts: dict) -> dict:
+    """The RDS for MySQL decision: capacity only, no licence arithmetic.
+
+    A separate function for the same reason `_validate_postgresql` is one:
+    edition, rationale, the SE2 vCPU ceiling and processor licences have no MySQL
+    meaning, and threading `if engine ==` through the Oracle checks would read as
+    though they did.
+
+    Storage is sized from MySQL's own figures (data_length + index_length), which
+    the collector reports as `segments`. No cross-engine multiple is applied:
+    same engine, same page format, same indexes.
+    """
+    checks: list[dict] = []
+    m = facts.get("mysql") or {}
+
+    checks.append(_check(
+        "edition", "PASS",
+        "RDS for MySQL has no editions and no licence model: the Community engine "
+        "is open source and AWS charges for the instance alone. There is no edition "
+        "to decide and no processor licence to count.",
+        None, None))
+
+    spec = instances.get(proposal["instance_class"])
+    if spec is None:
+        spec = instances.smallest_meeting(policy.__dict__.get("MIN_VCPU", 2), 4)
+        checks.append(_check(
+            "instance_class", "OVERRIDE",
+            f"Proposed class {proposal['instance_class']!r} is not in the catalogue; "
+            f"{spec['class']} is the smallest that meets the floor.",
+            proposal["instance_class"], spec["class"]))
+    else:
+        checks.append(_check(
+            "instance_class", "PASS",
+            f"{spec['class']} -- {spec['vcpu']} vCPU, {spec['memory_gib']} GiB.",
+            spec["class"], spec["class"]))
+    instance_class = spec["class"]
+    if instance_class.startswith("db.t"):
+        checks.append(_check(
+            "burstable", "WARN",
+            f"{instance_class} is burstable. Adequate for migration rehearsal and demo; "
+            "validate CPU credit behaviour before steady production use."))
+
+    storage_gb = policy.storage_floor_gb(facts["segment_bytes"])
+    if proposal.get("storage_gb", 0) < storage_gb:
+        checks.append(_check(
+            "storage", "OVERRIDE",
+            f"{storage_gb} GB -- MySQL's data and index length with the usual "
+            f"{policy.STORAGE_HEADROOM}x headroom. Same engine, so no cross-engine "
+            "multiple applies.", proposal.get("storage_gb"), storage_gb))
+    else:
+        checks.append(_check(
+            "storage", "PASS", f"{storage_gb} GB covers the estate with headroom.",
+            proposal.get("storage_gb"), storage_gb))
+
+    # Encoding. The server default and the columns that disagree with it are two
+    # different facts: a utf8mb4 server can still hold utf8mb3 columns, and those
+    # are the ones that already truncated 4-byte characters.
+    cs = str(facts.get("character_set") or "UNKNOWN")
+    n3 = m.get("utf8mb3_columns") or 0
+    if cs.lower() == "utf8mb4" and not n3:
+        checks.append(_check(
+            "encoding", "PASS",
+            "Server and columns are utf8mb4; RDS for MySQL defaults to the same.",
+            cs, "utf8mb4"))
+    else:
+        detail = []
+        if cs.lower() != "utf8mb4":
+            detail.append(f"the server character set is {cs}, not utf8mb4")
+        if n3:
+            detail.append(f"{n3} column(s) are utf8mb3 and cannot hold 4-byte characters")
+        checks.append(_check(
+            "encoding", "WARN",
+            "; ".join(detail).capitalize() + ". Set the target parameter group to "
+            "utf8mb4 and convert the columns before the load -- characters already lost "
+            "on the source are not recovered by the move.", cs, "utf8mb4"))
+
+    # CDC readiness is a Phase 1 fact; restated here only as a warning, because it
+    # decides whether this instance can be cut over with a short outage.
+    if facts.get("supplemental_logging") not in ("YES", "IMPLICIT"):
+        checks.append(_check(
+            "cdc", "WARN",
+            "The source binlog is not configured for change data capture "
+            "(binlog_format=ROW, binlog_row_image=FULL). A full load is unaffected; a "
+            "low-downtime cutover is not available until it is."))
+
+    util = facts["utilization"]
+    if not util["available"]:
+        checks.append(_check(
+            "utilization_evidence", "WARN",
+            f"No usable utilization data -- {util['reason']}. This sizing is a "
+            "capacity-derived floor, not a load-derived recommendation."))
+    else:
+        checks.append(_check(
+            "utilization_evidence", "PASS",
+            f"Sizing is load-derived -- {util['reason']}."))
+
+    overrides = [c for c in checks if c["verdict"] == "OVERRIDE"]
+    warnings = [c for c in checks if c["verdict"] == "WARN"]
+    return {
+        "engine": target_mod.MYSQL,
+        "engine_label": target_mod.LABEL[target_mod.MYSQL],
+        "edition": None,
+        "licence_model": None,
+        "instance_class": instance_class,
+        "vcpu": spec["vcpu"],
+        "memory_gib": spec["memory_gib"],
+        "storage_gb": storage_gb,
+        "storage_type": "gp3",
+        "character_set": "utf8mb4",
         "source_character_set": cs,
         "processor_licences": 0,
         "forced_by": [],

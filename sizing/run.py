@@ -69,10 +69,15 @@ def execute(
     loaded = loader.load_run(run_dir, db_path)
     emit("loaded", f"{loaded['total_rows']} rows across {len(loaded['tables'])} tables")
 
+    # The source engine comes from the run's own manifest, not the environment:
+    # a sizing must describe the estate it was built from, and the console can
+    # hold a different engine than the run on disk.
+    source_engine = _source_engine(run_dir)
+
     emit("facts", "reading feature usage, segments and utilization")
     conn = sqlite3.connect(db_path)
     try:
-        facts = facts_mod.extract(conn, measured=measured)
+        facts = facts_mod.extract(conn, measured=measured, source_engine=source_engine)
     finally:
         conn.close()
     emit(
@@ -82,21 +87,33 @@ def execute(
     )
 
     emit("target", "assessing both migration paths against the estate")
-    assessment = target_mod.assess(facts, conversion=conversion)
+    # use_bedrock reaches the TARGET recommendation too. It did not before
+    # 2026-09-29: only the sizing proposal consulted the model, so with --bedrock
+    # the recommendation silently stayed heuristic on every run, on both engines.
+    assessment = target_mod.assess(facts, conversion=conversion,
+                                   use_bedrock=use_bedrock, model_id=model_id)
     pg = assessment["paths"][target_mod.POSTGRESQL]
     emit("target_done",
          ("PostgreSQL blocked by " + ", ".join(b["subject"] for b in pg["blockers"]))
          if not pg["possible"] else
          f"both paths open; PostgreSQL carries {pg['effort_points']} effort point(s)")
 
-    chosen = target_mod.choose(engine or target_mod.ORACLE, assessment, chosen_by=chosen_by)
+    # With no engine named, size the source's own homogeneous target -- RDS for
+    # Oracle from Oracle, RDS for MySQL from MySQL. Defaulting to ORACLE here
+    # would refuse every MySQL run, since RDS for Oracle is not a path from it.
+    default_target = (target_mod.MYSQL if source_engine == "MYSQL" else target_mod.ORACLE)
+    chosen = target_mod.choose(engine or default_target, assessment, chosen_by=chosen_by)
     emit("target_chosen", f"{chosen['label']}"
          + ("" if chosen["agreed_with_recommendation"] is not False
             else " (differs from the recommendation)"))
 
-    emit("propose", "proposing edition, instance class and storage")
+    # Only Oracle has an edition to propose; saying so elsewhere printed
+    # "None / db.t3.small" on every MySQL run.
+    emit("propose", "proposing edition, instance class and storage" if source_engine == "ORACLE"
+         else "proposing instance class and storage")
     proposal = propose_mod.propose(facts, use_bedrock=use_bedrock, model_id=model_id)
-    emit("proposed", f"{proposal['edition']} / {proposal['instance_class']} ({proposal['source']})")
+    emit("proposed", " / ".join(x for x in (proposal.get("edition"), proposal["instance_class"]) if x)
+         + f" ({proposal['source']})")
 
     emit("validate", "running the rules engine against the proposal")
     decision = validate_mod.validate(proposal, facts, engine=chosen["target"])
@@ -118,6 +135,17 @@ def execute(
         json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     return out
+
+
+def _source_engine(run_dir: Path) -> str:
+    """ORACLE or MYSQL, read from the collector run's manifest."""
+    try:
+        m = json.loads((Path(run_dir) / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "ORACLE"
+    eng = ((m.get("collector") or {}).get("connection") or {}).get("source_engine") \
+        or (m.get("source") or {}).get("source_engine") or "ORACLE"
+    return str(eng).upper()
 
 
 def load_utilization(path: Path) -> dict:
@@ -213,7 +241,8 @@ def _report(out: dict) -> None:
     a = out.get("target_assessment")
     if a:
         print("\nMIGRATION PATHS  (rules only; the client chooses)")
-        for name in target_mod.TARGETS:
+        # The paths legal from THIS source -- a MySQL assessment has no ORACLE path.
+        for name in [t for t in target_mod.TARGETS if t in a["paths"]]:
             path = a["paths"][name]
             head = "OPEN " if path["possible"] else "BLOCK"
             print(f"  [{head}] {path['label']}"

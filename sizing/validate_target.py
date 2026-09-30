@@ -54,7 +54,10 @@ def _evidence_numbers(paths: dict, code: dict) -> set[str]:
         v = code.get(key)
         if isinstance(v, int):
             nums.add(str(v))
-    for name in (target_mod.ORACLE, target_mod.POSTGRESQL):
+    # Every path in the assessment, not a fixed pair: from MySQL the paths are
+    # MYSQL and POSTGRESQL, and reading only ORACLE here flagged every MySQL
+    # effort figure a model cited as invented.
+    for name in paths:
         p = paths.get(name) or {}
         nums.add(str(p.get("effort_points")))
         nums.add(str(len(p.get("effort") or [])))
@@ -91,7 +94,7 @@ def validate_target(proposal: dict, assessment: dict) -> dict:
     # something bypassed that -- a hand-written proposal, or a future caller.
     if target and not paths[target]["possible"]:
         names = ", ".join(b["subject"] for b in paths[target]["blockers"])
-        fallback = pt.heuristic_target_proposal(paths, code)
+        fallback = pt.heuristic_for(paths, code)
         checks.append(_check(
             "target_open", "OVERRIDE",
             f"{target_mod.LABEL[target]} is blocked by {names}. A blocker is not a "
@@ -111,6 +114,12 @@ def validate_target(proposal: dict, assessment: dict) -> dict:
     #
     # The rule that keeps a projection from reading as a measurement.
     allowed = pt.ALLOWED_BY_BASIS.get(basis, (pt.INSUFFICIENT,))
+    # From MySQL, recommending the HOMOGENEOUS path rests on nothing being
+    # converted, so the conversion-evidence tier does not limit it. The limit
+    # exists to stop a heterogeneous recommendation overclaiming, and it still
+    # applies in full to a PostgreSQL recommendation from MySQL.
+    if pt.is_mysql_source(paths) and decided_target == target_mod.MYSQL:
+        allowed = (pt.HIGH, pt.JUDGEMENT, pt.PROJECTION, pt.INSUFFICIENT)
     if decided_confidence not in allowed:
         corrected = pt.PROJECTION if basis == "classified" else pt.JUDGEMENT
         if corrected not in allowed:
@@ -164,7 +173,7 @@ def validate_target(proposal: dict, assessment: dict) -> dict:
             f"judgement rather than a recommendation. The rules make no recommendation "
             f"where handwork remains.",
             decided_target, None))
-        fallback = pt.heuristic_target_proposal(paths, code)
+        fallback = pt.heuristic_for(paths, code)
         decided_target = None
         decided_confidence = fallback["confidence"]
         decided_reason = fallback["reason"]

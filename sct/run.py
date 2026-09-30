@@ -26,21 +26,46 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "sct"
 
+import engines
+from engines import spec as engine_spec
+
 from . import parse, runner, targets, toolchain
 
 PASSWORD_ENV = "DBSHIFT_COLLECTOR_PASSWORD"
 DEFAULT_DSN = "localhost:1521/XEPDB1"
+DEFAULT_MYSQL_DSN = "localhost:3306"
 DEFAULT_USER = "dbmig_collector"
 DEFAULT_SCHEMAS = ("DBMIG_APP",)
+DEFAULT_MYSQL_SCHEMAS = ("dbmig_mysql_app",)
 
 
-def _schemas() -> list[str]:
+def _engine(args=None) -> str:
+    """The declared source engine: the flag, then the environment, then Oracle."""
+    named = getattr(args, "source_engine", None) if args else None
+    return engines.normalize(named or os.environ.get(engines.ENV))
+
+
+def _default_dsn(engine: str) -> str:
+    return DEFAULT_DSN if engines.is_oracle(engine) else DEFAULT_MYSQL_DSN
+
+
+def _schemas(engine: str = engines.DEFAULT) -> list[str]:
+    """The schemas to assess, cased the way the engine stores them.
+
+    **Not upper-cased on MySQL.** A MySQL schema is a directory on disk, so on
+    Linux `Sales` and `SALES` are different databases and folding the name here
+    would send SCT looking for one that does not exist -- it would report an
+    empty schema rather than an error. Same trap as `collector/config.py`, and
+    the same fix: ask `engines/spec.py` whether this engine folds.
+    """
+    fold = engine_spec.spec(engine)["fold_schema_names"]
     raw = os.environ.get("DBSHIFT_SCHEMAS")
     if raw:
-        names = [n.strip().upper() for n in raw.split(",") if n.strip()]
+        names = [(n.strip().upper() if fold else n.strip())
+                 for n in raw.split(",") if n.strip()]
         if names:
             return names
-    return list(DEFAULT_SCHEMAS)
+    return list(DEFAULT_SCHEMAS if engines.is_oracle(engine) else DEFAULT_MYSQL_SCHEMAS)
 
 
 def _latest_collector_run() -> str:
@@ -53,33 +78,37 @@ def _latest_collector_run() -> str:
     return runs[0].name if runs else ""
 
 
-def cmd_list_targets() -> int:
-    print("Targets AWS SCT can assess:\n")
-    for t in targets.for_console():
+def cmd_list_targets(engine: str = engines.DEFAULT) -> int:
+    print(f"Targets AWS SCT can assess from {engines.LABEL[engine]}:\n")
+    for t in targets.for_console(engine):
         scope = "in scope" if t["in_scope"] else "OUT OF SCOPE"
         star = " (default)" if t["default"] else ""
-        print(f"  {t['id']:20} {t['label']:34} [{scope}]{star}")
+        conv = "converts code" if t["sct_conversion"] else "assessment only"
+        print(f"  {t['id']:20} {t['label']:34} [{scope}] [{conv}]{star}")
         print(f"  {'':20} {t['scope_note']}\n")
     return 0
 
 
-def cmd_check() -> int:
-    tc = toolchain.discover()
-    print("AWS SCT prerequisites:\n")
+def cmd_check(engine: str = engines.DEFAULT) -> int:
+    tc = toolchain.discover(engine)
+    print(f"AWS SCT prerequisites for a {engines.LABEL[engine]} source:\n")
     for line in toolchain.summary_lines(tc):
         print(line)
     print()
     if tc.ready:
-        print("Ready. `python -m sct.run --target rds-postgresql` will run SCT.")
+        print("Ready. `python -m sct.run --target rds-postgresql` will run SCT.")  # noqa: E501
         return 0
     print("Not ready. Install what is marked above, then re-run --check.")
     return 1
 
 
 def cmd_plan(args) -> int:
+    engine = _engine(args)
     p = runner.plan(
-        target_id=args.target, dsn=args.dsn, user=args.user,
-        schemas=_schemas(), collector_run_id=args.collector_run or _latest_collector_run(),
+        target_id=args.target, dsn=args.dsn or _default_dsn(engine), user=args.user,
+        schemas=_schemas(engine),
+        collector_run_id=args.collector_run or _latest_collector_run(),
+        source_engine=engine,
     )
     print(json.dumps(p, indent=2))
     return 0 if p["ready"] else 1
@@ -92,23 +121,34 @@ def cmd_assess(args) -> int:
               file=sys.stderr)
         return 2
 
-    target = targets.get(args.target)
+    engine = _engine(args)
+    target = targets.get(args.target, engine)
     if not target["in_scope"]:
         # Allowed, because a client asks for the comparison -- but never silently.
         print(f"NOTE: {target['label']} is out of DBShift's migration scope.")
         print(f"      {target['scope_note']}")
         print("      SCT will assess it for comparison; it is not a migration path.\n")
 
-    schemas = _schemas()
-    print(f"AWS SCT -> {target['label']}  ({target['sct_platform']})")
-    print(f"source  :  {args.user}@{args.dsn}  schemas: {', '.join(schemas)}\n")
+    schemas = _schemas(engine)
+    dsn = args.dsn or _default_dsn(engine)
+    print(f"AWS SCT: {engines.LABEL[engine]} -> {target['label']}  ({target['sct_platform']})")
+    print(f"source  :  {args.user}@{dsn}  schemas: {', '.join(schemas)}")
+    if not target["sct_conversion"]:
+        # Said before the run, not discovered after it. On a pair AWS publishes no
+        # conversion path for, zero action items is the correct and complete
+        # result -- and an operator expecting a list should know why there is none.
+        print("NOTE: AWS publishes no conversion path for this pair, so SCT reports a")
+        print("      same-engine assessment only. Zero action items is the expected")
+        print("      result, not a failure.")
+    print()
 
     rec = runner.assess(
-        target_id=args.target, dsn=args.dsn, user=args.user, password=password,
+        target_id=args.target, dsn=dsn, user=args.user, password=password,
         schemas=schemas, collector_run_id=args.collector_run or _latest_collector_run(),
         on_line=lambda line: print(f"  {line}"),
         reuse_cached=not args.force,
         timeout=args.timeout,
+        source_engine=engine,
     )
 
     if rec.get("from_cache"):
@@ -153,9 +193,13 @@ def cmd_assess(args) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--target", default=targets.DEFAULT_TARGET_ID,
-                    help="target platform id (see --list-targets)")
-    ap.add_argument("--dsn", default=os.environ.get("DBSHIFT_DSN", DEFAULT_DSN))
+    ap.add_argument("--target", default=None,
+                    help="target platform id (see --list-targets); "
+                         "defaults to the source engine's own default")
+    ap.add_argument("--source-engine", default=None,
+                    help="ORACLE (default) or MYSQL; also DBSHIFT_SOURCE_ENGINE")
+    # No default here: it depends on the engine, and is resolved after parsing.
+    ap.add_argument("--dsn", default=os.environ.get("DBSHIFT_DSN"))
     ap.add_argument("--user", default=os.environ.get("DBSHIFT_COLLECTOR_USER", DEFAULT_USER))
     ap.add_argument("--collector-run", default="", help="tie the report to a collector run id")
     ap.add_argument("--timeout", type=int, default=None, help="seconds before SCT is killed")
@@ -165,13 +209,20 @@ def main(argv=None) -> int:
     ap.add_argument("--list-targets", action="store_true")
     args = ap.parse_args(argv)
 
+    engine = _engine(args)
     if args.list_targets:
-        return cmd_list_targets()
+        return cmd_list_targets(engine)
     if args.check:
-        return cmd_check()
+        return cmd_check(engine)
+
+    # The default target depends on the source, so it cannot be an argparse
+    # default -- Oracle's rds-postgresql happens to be legal from MySQL too, but
+    # relying on that would break the moment a third engine arrives.
+    if args.target is None:
+        args.target = targets.default_target_id(engine)
 
     try:
-        targets.get(args.target)
+        targets.get(args.target, engine)
     except targets.UnknownTarget as exc:
         print(str(exc), file=sys.stderr)
         return 2

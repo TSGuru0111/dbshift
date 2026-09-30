@@ -35,11 +35,17 @@ from __future__ import annotations
 
 ORACLE = "ORACLE"
 POSTGRESQL = "POSTGRESQL"
-TARGETS = (ORACLE, POSTGRESQL)
+# Added 2026-09-29 with the MySQL source. `TARGETS` is every target this project
+# migrates to across ALL sources; which of them are legal from a given source is
+# `engines/spec.py`'s decision, not this tuple's -- MySQL does not migrate to RDS
+# for Oracle, and nothing here should imply it does.
+MYSQL = "MYSQL"
+TARGETS = (ORACLE, POSTGRESQL, MYSQL)
 
 LABEL = {
     ORACLE: "Amazon RDS for Oracle",
     POSTGRESQL: "Amazon RDS for PostgreSQL",
+    MYSQL: "Amazon RDS for MySQL",
 }
 
 # Features whose presence means PostgreSQL cannot host this estate as it stands.
@@ -253,9 +259,176 @@ def _code_items(conversion: dict | None, object_count: int | None) -> tuple[list
     return items, summary
 
 
+def _summarise(items: list[dict]) -> dict:
+    blockers = [i for i in items if i["kind"] == "blocker"]
+    effort = [i for i in items if i["kind"] == "effort"]
+    return {
+        "possible": not blockers,
+        "blockers": blockers,
+        "effort": effort,
+        "effort_points": sum(i["weight"] for i in effort),
+    }
+
+
+def _assess_mysql(facts: dict, conversion: dict | None = None, use_bedrock: bool = False,
+                  model_id: str | None = None, client=None) -> dict:
+    """The two paths from a MySQL source: RDS for MySQL and RDS for PostgreSQL.
+
+    **What is different from the Oracle case, and why it changes the answer.**
+    Oracle -> PostgreSQL is weighed against a licence: every point of conversion
+    effort buys the end of an Oracle bill. MySQL and PostgreSQL are both open
+    source, so there is **no licence saving on either side**. Conversion effort on
+    the PostgreSQL path is therefore pure cost unless the client has a reason
+    outside this assessment -- a platform standard, or a feature MySQL lacks.
+
+    The evidence is MySQL's own: storage engines, character sets, column types,
+    definer rights. None of it appears in Oracle's feature-usage catalogue.
+
+    Items that apply to BOTH paths (MyISAM, utf8mb3, missing primary keys) are
+    listed on both, because they are pre-migration work whichever target is
+    chosen -- leaving them off the homogeneous path would make it look free.
+    """
+    m = facts.get("mysql") or {}
+    my: list[dict] = []
+    pg: list[dict] = []
+
+    def both(subject, detail, evidence, weight):
+        my.append(_item("effort", subject, detail, evidence, weight))
+        pg.append(_item("effort", subject, detail, evidence, weight))
+
+    # -- pre-migration work on the SOURCE, whichever target -----------------
+    if m.get("non_innodb_tables"):
+        n = m["non_innodb_tables"]
+        both(f"{n} non-InnoDB table(s)",
+             "Converted to InnoDB before migrating. A MyISAM table has no "
+             "transactions and no crash recovery, and DMS change data capture cannot "
+             "replicate it.", "information_schema.TABLES.ENGINE", n)
+    if m.get("utf8mb3_columns"):
+        n = m["utf8mb3_columns"]
+        both(f"{n} utf8mb3 column(s)",
+             "Legacy 3-byte utf8 cannot hold a 4-byte character, so emoji and some CJK "
+             "were already truncated on the source. Convert to utf8mb4 and check what "
+             "was lost -- the move cannot restore it.",
+             "information_schema.COLUMNS.CHARACTER_SET_NAME", 1)
+    if m.get("tables_without_pk"):
+        n = m["tables_without_pk"]
+        both(f"{n} table(s) without a primary key",
+             "InnoDB hides a clustered index DMS cannot address, so change data capture "
+             "cannot locate a row for UPDATE or DELETE. A full load is unaffected.",
+             "information_schema.TABLE_CONSTRAINTS", n)
+
+    # -- the homogeneous path ------------------------------------------------
+    if m.get("unrecreatable_definers"):
+        n = m["unrecreatable_definers"]
+        my.append(_item(
+            "effort", f"{n} definer-rights object(s) owned by root or localhost",
+            "RDS grants no SUPER privilege, so a routine or view defined by "
+            "root@localhost cannot be recreated as-is and fails at runtime. Redefine "
+            "each under an account that exists on the target.",
+            "information_schema.ROUTINES / VIEWS", n))
+    if m.get("events"):
+        my.append(_item(
+            "effort", f"{m['events']} scheduled event(s)",
+            "RDS runs the event scheduler only when event_scheduler is set in the "
+            "parameter group. Otherwise the events migrate and never fire.",
+            "information_schema.EVENTS", 1))
+    my.append(_item(
+        "effort", "Data moves with AWS DMS",
+        "Same engine, so the schema and stored code move unchanged. DMS reads the "
+        "binlog, so a full load can be followed by change data capture for a short "
+        "cutover. The replication instance bills while it runs.",
+        "architecture", weight=0))
+
+    # -- the heterogeneous path ----------------------------------------------
+    code_items, code_summary = _code_items(conversion, facts.get("object_count"))
+    if conversion:
+        pg += code_items
+    elif m.get("routines") or m.get("triggers"):
+        # No Phase 4b evidence yet, so the stored code is counted, not costed --
+        # and labelled that way rather than given a guessed weight.
+        n = (m.get("routines") or 0) + (m.get("triggers") or 0)
+        pg.append(_item(
+            "effort", f"{n} stored routine(s) and trigger(s) to rewrite",
+            "SQL/PSM to PL/pgSQL. Not yet converted, so this is a count, not an "
+            "estimate: GROUP_CONCAT, ON DUPLICATE KEY UPDATE, SIGNAL and LAST_INSERT_ID "
+            "each take a different shape on PostgreSQL. Phase 4b measures it.",
+            "information_schema.ROUTINES / TRIGGERS", n))
+    if m.get("enum_set_columns"):
+        n = m["enum_set_columns"]
+        pg.append(_item(
+            "effort", f"{n} ENUM or SET column(s)",
+            "ENUM becomes a CHECK constraint or an enum type; SET has no PostgreSQL "
+            "equivalent and becomes an array or a join table -- an application change, "
+            "not a type mapping.", "information_schema.COLUMNS", n))
+    if m.get("unsigned_bigint_values"):
+        n = m["unsigned_bigint_values"]
+        ids = (m.get("unsigned_bigint_columns") or 0) - n
+        pg.append(_item(
+            "effort", f"{n} unsigned BIGINT value column(s)",
+            "PostgreSQL has no unsigned types and its bigint stops at 2^63-1. A value "
+            "column may already hold more, with nowhere to land, so these map to numeric "
+            "-- wider, slower to index, and a change every reader must accept."
+            + (f" Check each: {', '.join(m.get('unsigned_bigint_value_names') or [])}."
+               if m.get("unsigned_bigint_value_names") else "")
+            + (f" The other {ids} are identities or foreign keys to one -- they count up "
+               "from 1, map to bigint safely, and are not weighed." if ids > 0 else ""),
+            "information_schema.COLUMNS.COLUMN_TYPE", n))
+    if m.get("case_insensitive_columns"):
+        pg.append(_item(
+            "effort", f"{m['case_insensitive_columns']} case-insensitive column(s)",
+            "MySQL's _ci collations make 'A' = 'a'; PostgreSQL's default does not. "
+            "Uniqueness and joins change behaviour, not just rendering -- each needs a "
+            "nondeterministic collation, citext, or an application change.",
+            "information_schema.COLUMNS.COLLATION_NAME", 2))
+    if m.get("fulltext_indexes"):
+        n = m["fulltext_indexes"]
+        pg.append(_item(
+            "effort", f"{n} FULLTEXT index(es)",
+            "Rebuilt as tsvector columns with GIN indexes, and every MATCH ... AGAINST "
+            "query rewritten. Ranking will differ.", "information_schema.STATISTICS", n))
+    if (facts.get("structural") or {}).get("partitioned_tables"):
+        n = facts["structural"]["partitioned_tables"]
+        pg.append(_item(
+            "effort", f"{n} partitioned table(s)",
+            "Rewritten as PostgreSQL declarative partitioning. The keys carry across; "
+            "the DDL does not.", "information_schema.PARTITIONS", n))
+    if m.get("events"):
+        pg.append(_item(
+            "effort", f"{m['events']} scheduled event(s)",
+            "PostgreSQL has no event scheduler. Each becomes a pg_cron job or moves "
+            "out of the database.", "information_schema.EVENTS", m["events"]))
+    pg.append(_item(
+        "effort", "Data moves with AWS DMS",
+        "The only route across engines. A replication instance bills while it runs.",
+        "architecture", weight=0))
+
+    paths = {MYSQL: _summarise(my), POSTGRESQL: _summarise(pg)}
+    for name, path in paths.items():
+        path["target"] = name
+        path["label"] = LABEL[name]
+
+    return {
+        "source_engine": "MYSQL",
+        "paths": paths,
+        "stored_code": code_summary,
+        # The same bounded route as Oracle: heuristic by default, a model when
+        # asked, and validate_target re-checking whatever the model said.
+        "recommended": _recommend(paths, code_summary, use_bedrock=use_bedrock,
+                                  model_id=model_id, client=client),
+    }
+
+
 def assess(facts: dict, conversion: dict | None = None, use_bedrock: bool = False,
            model_id: str | None = None, client=None) -> dict:
-    """Evidence for and against each target. Chooses nothing."""
+    """Evidence for and against each target. Chooses nothing.
+
+    Dispatches on the source engine, because the two sources are weighed on
+    different evidence and -- more importantly -- against different stakes: an
+    Oracle licence on one side, nothing on the other.
+    """
+    if str(facts.get("source_engine") or "").upper() == "MYSQL":
+        return _assess_mysql(facts, conversion, use_bedrock=use_bedrock,
+                             model_id=model_id, client=client)
     used = _feature_names(facts.get("features_detected", []))
     structural = facts.get("structural") or {}
 
@@ -382,6 +555,13 @@ def choose(target: str, assessment: dict, chosen_by: str | None = None) -> dict:
     """
     if target not in TARGETS:
         raise ValueError(f"unknown target {target!r}; expected one of {', '.join(TARGETS)}")
+    # A known target is not necessarily a path FROM THIS SOURCE: RDS for Oracle
+    # exists, but not from MySQL. The assessment only holds the legal ones.
+    if target not in assessment["paths"]:
+        legal = ", ".join(LABEL[t] for t in assessment["paths"])
+        raise ValueError(
+            f"{LABEL[target]} is not a migration path from this source. "
+            f"The paths assessed are: {legal}.")
     path = assessment["paths"][target]
     if not path["possible"]:
         names = ", ".join(b["subject"] for b in path["blockers"])
