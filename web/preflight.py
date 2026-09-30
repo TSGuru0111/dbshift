@@ -307,12 +307,6 @@ NETWORK_REQUIREMENTS = [
 # NETWORK_REQUIREMENTS so the Connect screen can show it as its own,
 # engine-labelled panel instead of one bullet that was really only ever about
 # Oracle.
-#
-# SQL Server is not a source this project migrates from -- see
-# docs/02-architecture.md and sct/targets.py, which rule it out. It is listed
-# here anyway because this panel is client-facing reference for what a site
-# will be asked for, and a client running SQL Server asks about CDC before
-# they ask what DBShift itself supports.
 CDC_REQUIREMENTS = [
     {
         "engine": "Oracle",
@@ -330,8 +324,6 @@ CDC_REQUIREMENTS = [
         "editions, through transactional replication configured for DMS. Either way, "
         "SQL Server Agent must be running: it drives the CDC capture and cleanup jobs. "
         "The recovery model must be Full or Bulk-logged, never Simple, or the log DMS "
-        "reads from is truncated before it gets to it. Not a source this project "
-        "migrates to RDS today -- see docs/02-architecture.md -- included here because "
-        "a client running SQL Server asks about this before they ask what DBShift covers.",
+        "reads from is truncated before it gets to it.",
     },
 ]
