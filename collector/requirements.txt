@@ -1,4 +1,5 @@
 oracledb>=4.0.2
+pymysql>=1.1.1        # MySQL source engine; pure Python, like oracledb thin mode
 boto3>=1.43.0
 fastapi>=0.141
 uvicorn>=0.52

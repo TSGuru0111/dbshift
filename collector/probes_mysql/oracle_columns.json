@@ -1,0 +1,500 @@
+{
+ "what_this_is": "The column set of every Oracle dataset, captured from a real collector run. collector/probes_mysql.conform() pads MySQL rows to this shape so every downstream reader -- assess, sizing, convert, the console -- sees the same columns from either engine.",
+ "captured_from_run": "b08024a7-9298-4720-b28c-7cde3f88decd",
+ "captured_at": "2026-09-29T06:04:53.715849+00:00",
+ "datasets": {
+  "awr_coverage": [
+   "snapshot_count",
+   "earliest_snapshot",
+   "latest_snapshot"
+  ],
+  "column_profile": [
+   "owner",
+   "table_name",
+   "column_name",
+   "actual_rows",
+   "scanned_rows",
+   "sampled",
+   "sample_pct",
+   "duplicate_count",
+   "non_ascii_count",
+   "checked_duplicates",
+   "checked_non_ascii"
+  ],
+  "columns": [
+   "owner",
+   "table_name",
+   "column_name",
+   "column_id",
+   "data_type",
+   "data_type_mod",
+   "data_type_owner",
+   "data_length",
+   "data_precision",
+   "data_scale",
+   "char_length",
+   "char_used",
+   "character_set_name",
+   "collation",
+   "nullable",
+   "default_length",
+   "data_default",
+   "default_on_null",
+   "num_nulls",
+   "num_distinct",
+   "avg_col_len",
+   "hidden_column",
+   "virtual_column",
+   "identity_column",
+   "user_generated"
+  ],
+  "constraint_columns": [
+   "owner",
+   "constraint_name",
+   "table_name",
+   "column_name",
+   "position"
+  ],
+  "constraints": [
+   "owner",
+   "constraint_name",
+   "constraint_type",
+   "table_name",
+   "search_condition_vc",
+   "r_owner",
+   "r_constraint_name",
+   "delete_rule",
+   "status",
+   "deferrable",
+   "deferred",
+   "validated",
+   "generated",
+   "rely",
+   "index_name"
+  ],
+  "database": [
+   "instance_name",
+   "host_name",
+   "version",
+   "version_full",
+   "startup_time",
+   "status",
+   "name",
+   "dbid",
+   "created",
+   "log_mode",
+   "platform_name",
+   "cdb",
+   "supplemental_log_data_min",
+   "supplemental_log_data_pk",
+   "supplemental_log_data_all",
+   "force_logging",
+   "con_name",
+   "db_name",
+   "session_user",
+   "source_time",
+   "banner_full"
+  ],
+  "database_options": [
+   "parameter",
+   "value"
+  ],
+  "db_links": [
+   "owner",
+   "db_link",
+   "username",
+   "host",
+   "created"
+  ],
+  "directories": [
+   "owner",
+   "directory_name",
+   "directory_path"
+  ],
+  "external_tables": [
+   "owner",
+   "table_name",
+   "type_owner",
+   "type_name",
+   "default_directory_owner",
+   "default_directory_name",
+   "reject_limit",
+   "access_type"
+  ],
+  "feature_usage": [
+   "name",
+   "version",
+   "detected_usages",
+   "total_samples",
+   "currently_used",
+   "first_usage_date",
+   "last_usage_date",
+   "last_sample_date",
+   "aux_count",
+   "feature_info",
+   "edition_forcing"
+  ],
+  "index_columns": [
+   "index_owner",
+   "index_name",
+   "table_owner",
+   "table_name",
+   "column_name",
+   "column_position",
+   "descend"
+  ],
+  "index_expressions": [
+   "index_owner",
+   "index_name",
+   "table_owner",
+   "table_name",
+   "column_expression",
+   "column_position"
+  ],
+  "indexes": [
+   "owner",
+   "index_name",
+   "index_type",
+   "table_owner",
+   "table_name",
+   "table_type",
+   "uniqueness",
+   "compression",
+   "tablespace_name",
+   "status",
+   "partitioned",
+   "temporary",
+   "generated",
+   "num_rows",
+   "distinct_keys",
+   "clustering_factor",
+   "leaf_blocks",
+   "blevel",
+   "degree",
+   "visibility",
+   "last_analyzed"
+  ],
+  "invalid_objects": [
+   "owner",
+   "object_name",
+   "object_type",
+   "status",
+   "last_ddl_time"
+  ],
+  "lobs": [
+   "owner",
+   "table_name",
+   "column_name",
+   "segment_name",
+   "tablespace_name",
+   "in_row",
+   "securefile",
+   "compression",
+   "deduplication"
+  ],
+  "materialized_views": [
+   "owner",
+   "mview_name",
+   "container_name",
+   "query",
+   "refresh_mode",
+   "refresh_method",
+   "build_mode",
+   "fast_refreshable",
+   "last_refresh_type",
+   "last_refresh_date",
+   "staleness",
+   "compile_state"
+  ],
+  "mview_logs": [
+   "log_owner",
+   "master",
+   "log_table",
+   "rowids",
+   "primary_key",
+   "object_id",
+   "filter_columns",
+   "sequence",
+   "include_new_values"
+  ],
+  "nls_parameters": [
+   "parameter",
+   "value"
+  ],
+  "objects": [
+   "owner",
+   "object_name",
+   "subobject_name",
+   "object_id",
+   "object_type",
+   "created",
+   "last_ddl_time",
+   "timestamp",
+   "status",
+   "temporary",
+   "generated",
+   "secondary"
+  ],
+  "os_statistics": [
+   "stat_name",
+   "value"
+  ],
+  "parameters": [
+   "name",
+   "value",
+   "isdefault",
+   "description"
+  ],
+  "partition_key_columns": [
+   "owner",
+   "name",
+   "object_type",
+   "column_name",
+   "column_position"
+  ],
+  "partitioned_tables": [
+   "owner",
+   "table_name",
+   "partitioning_type",
+   "subpartitioning_type",
+   "partition_count",
+   "def_tablespace_name",
+   "partitioning_key_count",
+   "interval",
+   "autolist"
+  ],
+  "plsql_errors": [
+   "owner",
+   "name",
+   "type",
+   "sequence",
+   "line",
+   "position",
+   "text",
+   "attribute",
+   "message_number"
+  ],
+  "plsql_source": [
+   "owner",
+   "object_type",
+   "object_name",
+   "line_count",
+   "char_length",
+   "source_sha256",
+   "source_text",
+   "source_text_truncated",
+   "source_text_file"
+  ],
+  "profiles": [
+   "profile",
+   "resource_name",
+   "resource_type",
+   "limit"
+  ],
+  "queues": [
+   "owner",
+   "name",
+   "queue_table",
+   "queue_type",
+   "max_retries",
+   "enqueue_enabled",
+   "dequeue_enabled"
+  ],
+  "role_privileges": [
+   "grantee",
+   "granted_role",
+   "admin_option",
+   "default_role"
+  ],
+  "roles": [
+   "role",
+   "authentication_type",
+   "oracle_maintained",
+   "common"
+  ],
+  "scheduler_jobs": [
+   "owner",
+   "job_name",
+   "job_style",
+   "job_type",
+   "job_action",
+   "schedule_type",
+   "repeat_interval",
+   "enabled",
+   "state",
+   "run_count",
+   "failure_count",
+   "last_start_date",
+   "next_run_date"
+  ],
+  "segments": [
+   "owner",
+   "segment_name",
+   "partition_name",
+   "segment_type",
+   "tablespace_name",
+   "bytes",
+   "blocks",
+   "extents"
+  ],
+  "sequences": [
+   "sequence_owner",
+   "sequence_name",
+   "min_value",
+   "max_value",
+   "increment_by",
+   "cycle_flag",
+   "order_flag",
+   "cache_size",
+   "last_number"
+  ],
+  "synonyms": [
+   "owner",
+   "synonym_name",
+   "table_owner",
+   "table_name",
+   "db_link"
+  ],
+  "system_metrics": [
+   "metric_name",
+   "value",
+   "metric_unit",
+   "begin_time",
+   "end_time"
+  ],
+  "system_privileges": [
+   "grantee",
+   "privilege",
+   "admin_option"
+  ],
+  "table_comments": [
+   "owner",
+   "table_name",
+   "comments"
+  ],
+  "table_partitions": [
+   "table_owner",
+   "table_name",
+   "partition_name",
+   "partition_position",
+   "high_value",
+   "tablespace_name",
+   "num_rows",
+   "blocks",
+   "compression",
+   "last_analyzed"
+  ],
+  "table_privileges": [
+   "grantee",
+   "owner",
+   "table_name",
+   "grantor",
+   "privilege",
+   "grantable"
+  ],
+  "table_profile": [
+   "owner",
+   "table_name",
+   "estimated_rows",
+   "actual_rows",
+   "profiled",
+   "skip_reason",
+   "scanned_rows",
+   "sampled",
+   "sample_pct"
+  ],
+  "tables": [
+   "owner",
+   "table_name",
+   "tablespace_name",
+   "status",
+   "num_rows",
+   "blocks",
+   "empty_blocks",
+   "avg_row_len",
+   "chain_cnt",
+   "partitioned",
+   "temporary",
+   "iot_type",
+   "nested",
+   "compression",
+   "compress_for",
+   "degree",
+   "last_analyzed",
+   "logging",
+   "row_movement"
+  ],
+  "tablespaces": [
+   "tablespace_name",
+   "block_size",
+   "status",
+   "contents",
+   "extent_management",
+   "segment_space_management",
+   "encrypted",
+   "compress_for"
+  ],
+  "text_indexes": [
+   "owner",
+   "index_name",
+   "table_owner",
+   "table_name",
+   "status",
+   "docid_count",
+   "sync_type",
+   "sync_interval"
+  ],
+  "triggers": [
+   "owner",
+   "trigger_name",
+   "trigger_type",
+   "triggering_event",
+   "table_owner",
+   "base_object_type",
+   "table_name",
+   "referencing_names",
+   "when_clause",
+   "status",
+   "action_type",
+   "crossedition"
+  ],
+  "types": [
+   "owner",
+   "type_name",
+   "typecode",
+   "attributes",
+   "methods",
+   "predefined",
+   "incomplete",
+   "final",
+   "instantiable"
+  ],
+  "users": [
+   "username",
+   "account_status",
+   "default_tablespace",
+   "temporary_tablespace",
+   "profile",
+   "authentication_type",
+   "oracle_maintained",
+   "common",
+   "created",
+   "lock_date",
+   "expiry_date"
+  ],
+  "views": [
+   "owner",
+   "view_name",
+   "text_length",
+   "text",
+   "read_only",
+   "editioning_view"
+  ],
+  "xml_schemas": [
+   "owner",
+   "schema_url",
+   "local",
+   "int_objname"
+  ]
+ }
+}

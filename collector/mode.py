@@ -61,6 +61,29 @@ DETAIL = {
     ),
 }
 
+# The same two descriptions for a MySQL source, whose change capture reads the
+# binary log. DETAIL is Oracle's words; a MySQL Connect screen showed "no redo
+# configuration" and "Requires ARCHIVELOG" until 2026-09-30.
+DETAIL_MYSQL = {
+    FULL_LOAD: (
+        "The estate is copied once while applications are stopped. Simplest path, "
+        "no binary-log configuration needed on the source, and the outage lasts as long "
+        "as the load. Nothing replicates afterwards."
+    ),
+    FULL_LOAD_AND_CDC: (
+        "The full load runs while applications stay up, then change data capture "
+        "replicates everything written since, read from the binary log. The cutover "
+        "waits for replication to catch up, so the outage is minutes rather than hours. "
+        "Requires the binary log in ROW format with FULL row images, and REPLICATION "
+        "CLIENT for the migration account."
+    ),
+}
+
+
+def detail(mode: str, source_engine: str | None = None) -> str:
+    return (DETAIL_MYSQL if (source_engine or "").upper() == "MYSQL" else DETAIL)[mode]
+
+
 # The default. A full load is the weaker claim: it needs nothing from the source
 # that is not already true, and choosing it cannot make a migration less correct
 # -- only slower to cut over. Defaulting to CDC would silently assert a source
@@ -127,14 +150,61 @@ def wants_cdc(mode: str) -> bool:
     return normalize(mode) == FULL_LOAD_AND_CDC
 
 
-def readiness(log_mode: str | None, supplemental_min: str | None) -> dict:
+# What "configured for CDC" means, and how to fix it, per source engine. The
+# verdict keys (`archivelog`, `supplemental_logging`, `ready`, `unmet`) are the
+# same on both so every reader keeps working; only the words differ. Before
+# 2026-09-29 a MySQL source was told to run ALTER DATABASE ARCHIVELOG -- the
+# facts were mapped onto Oracle's vocabulary and so was the advice.
+CDC_WORDING = {
+    "ORACLE": {
+        "requirements": "ARCHIVELOG and supplemental logging",
+        "reads": "redo",
+        "evidence": "the Connect preflight's own reading of v$database",
+        "clears_when": (
+            "ALTER DATABASE ARCHIVELOG (which needs a restart, so a maintenance window) "
+            "and ALTER DATABASE ADD SUPPLEMENTAL LOG DATA. Neither is something this "
+            "project applies to a client's source -- both are a DBA's scheduled change."
+        ),
+        "restart_note": "which needs a database restart for ARCHIVELOG",
+    },
+    "MYSQL": {
+        "requirements": "a ROW-format binary log with FULL row images",
+        "reads": "the binary log",
+        "evidence": ("the Connect preflight's own reading of @@log_bin, "
+                     "@@binlog_format and @@binlog_row_image"),
+        "clears_when": (
+            "log_bin on (a restart if it is off), SET PERSIST binlog_format = 'ROW' and "
+            "binlog_row_image = 'FULL', binlog retention (binlog_expire_logs_seconds) "
+            "longer than the full load, and REPLICATION CLIENT plus REPLICATION SLAVE "
+            "for the DMS account. On an RDS source the first three are parameter-group "
+            "settings and retention is mysql.rds_set_configuration('binlog retention "
+            "hours', N). None of it is applied by this project -- it is a DBA's change."
+        ),
+        "restart_note": "which needs a server restart if the binary log is off",
+    },
+}
+
+
+def wording(source_engine: str | None) -> dict:
+    return CDC_WORDING["MYSQL" if (source_engine or "").upper() == "MYSQL" else "ORACLE"]
+
+
+def readiness(log_mode: str | None, supplemental_min: str | None, *,
+              source_engine: str | None = None, native: dict | None = None) -> dict:
     """Is the source actually configured for CDC, on the evidence collected?
 
     Returns the facts and a verdict, never a decision. A client may declare CDC
     against a source that is not ready yet -- that is a remediation task with a
     restart window attached, not a reason to refuse the declaration. Phase 2 and
     Phase 5 are where an unmet requirement becomes a blocker.
+
+    On MySQL `log_mode`/`supplemental_min` are the identity probe's mapping of
+    the binlog settings onto Oracle's columns; `native` carries the readings
+    themselves (binlog_format, binlog_row_image, replication_client) so the
+    unmet list names what a MySQL DBA would actually change.
     """
+    if (source_engine or "").upper() == "MYSQL":
+        return _mysql_readiness(log_mode, supplemental_min, native or {})
     archivelog = (log_mode or "").upper() == "ARCHIVELOG"
     supplemental = (supplemental_min or "").upper() in ("YES", "IMPLICIT")
     unmet = []
@@ -152,9 +222,48 @@ def readiness(log_mode: str | None, supplemental_min: str | None) -> dict:
     }
 
 
+def _mysql_readiness(log_mode, supplemental_min, native: dict) -> dict:
+    binlog_on = (log_mode or "").upper() == "ARCHIVELOG"
+    fmt = native.get("binlog_format")
+    image = native.get("binlog_row_image")
+    unmet = []
+    if log_mode is None:
+        unmet.append("the binary log setting is unknown (not collected on this run)")
+    elif not binlog_on:
+        unmet.append("log_bin is off (turning it on needs a restart)")
+    if fmt is not None or image is not None:
+        if str(fmt or "").upper() != "ROW":
+            unmet.append(f"binlog_format is {fmt or 'unknown'}, not ROW")
+        if str(image or "").upper() != "FULL":
+            unmet.append(f"binlog_row_image is {image or 'unknown'}, not FULL")
+        row_ok = str(fmt or "").upper() == "ROW" and str(image or "").upper() == "FULL"
+    else:
+        # Only the mapped column is available: it is YES exactly when ROW + FULL.
+        row_ok = (supplemental_min or "").upper() == "YES"
+        if binlog_on and not row_ok:
+            unmet.append("the binary log is not ROW format with FULL row images")
+    if native.get("replication_client") is False:
+        unmet.append("the account lacks REPLICATION CLIENT")
+    return {
+        "source_engine": "MYSQL",
+        "log_mode": log_mode,
+        "supplemental_log_data_min": supplemental_min,
+        "log_bin": binlog_on,
+        "binlog_format": fmt,
+        "binlog_row_image": image,
+        # The shared verdict keys, so the gate and console need no MySQL branch
+        # to read them -- only to word them.
+        "archivelog": binlog_on,
+        "supplemental_logging": row_ok,
+        "ready": binlog_on and row_ok and native.get("replication_client") is not False,
+        "unmet": unmet,
+    }
+
+
 def decide(mode: str | None, *, chosen_by: str | None = None,
            log_mode: str | None = None, supplemental_min: str | None = None,
-           declared: bool = True) -> dict:
+           declared: bool = True, source_engine: str | None = None,
+           native: dict | None = None) -> dict:
     """The record written into the discovery manifest.
 
     `declared` is False when nobody chose and the default applied. That
@@ -163,7 +272,9 @@ def decide(mode: str | None, *, chosen_by: str | None = None,
     present them identically.
     """
     resolved = normalize(mode)
-    facts = readiness(log_mode, supplemental_min)
+    facts = readiness(log_mode, supplemental_min,
+                      source_engine=source_engine, native=native)
+    words = wording(source_engine)
     record = {
         "mode": resolved,
         "label": LABEL[resolved],
@@ -176,13 +287,13 @@ def decide(mode: str | None, *, chosen_by: str | None = None,
         record["warning"] = (
             "CDC is in scope but the source is not configured for it: "
             + "; ".join(facts["unmet"])
-            + ". This stays a blocker until the source is changed, which needs a "
-              "database restart for ARCHIVELOG."
+            + f". This stays a blocker until the source is changed, "
+              f"{words['restart_note']}."
         )
     if not record["cdc_in_scope"] and facts["ready"]:
         record["note"] = (
-            "The source is already configured for CDC (ARCHIVELOG plus supplemental "
-            "logging), so a low-downtime cutover is available if the outage window "
+            f"The source is already configured for CDC ({words['requirements']}), "
+            "so a low-downtime cutover is available if the outage window "
             "turns out to be a problem."
         )
     return record

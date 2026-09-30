@@ -14,10 +14,12 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "collector"
 
-from . import config, mode as migration_mode, writer
-from .db import connect, in_binds
+import engines
+
+from . import config, dialect as dialect_mod, mode as migration_mode, writer
+from .db import connect
 from .db import Session
-from .probes import PROBES
+from .probes import probes_for
 
 log = logging.getLogger("collector")
 
@@ -25,20 +27,23 @@ log = logging.getLogger("collector")
 def _resolve_owners(session: Session, configured: tuple[str, ...]) -> dict:
     """Cross-check the configured schema list against what the database actually has.
 
-    Oracle flags its own schemas with ORACLE_MAINTAINED='Y'. Anything marked 'N'
-    that is not in the configured list gets reported rather than silently included
-    or silently dropped -- schema drift should be visible, not inferred.
+    Each engine flags its own schemas differently -- Oracle with
+    ORACLE_MAINTAINED='Y', MySQL by being one of the four the server owns -- so
+    the two queries come from the dialect. What does not vary is the reporting:
+    a schema that is configured but absent, or present but not configured, is
+    reported rather than silently included or dropped. Schema drift should be
+    visible, not inferred.
     """
+    dialect = session.dialect
     discovered = session.fetch(
         "config.discover_schemas",
-        """SELECT username FROM dba_users
-           WHERE oracle_maintained = 'N' ORDER BY username""",
+        dialect.discover_schemas_sql(),
     )
     discovered_names = [r["username"] for r in discovered]
-    frag, binds = in_binds("o", configured)
+    frag, binds = dialect.in_binds("o", configured)
     present = session.fetch(
         "config.verify_schemas",
-        f"SELECT username FROM dba_users WHERE username IN ({frag}) ORDER BY username",
+        dialect.verify_schemas_sql(frag),
         binds,
     )
     present_names = [r["username"] for r in present]
@@ -48,7 +53,7 @@ def _resolve_owners(session: Session, configured: tuple[str, ...]) -> dict:
         log.warning("configured schema not present in database: %s", ", ".join(missing))
     if unconfigured:
         log.warning(
-            "non-Oracle schema present but NOT collected (add to DBSHIFT_SCHEMAS to include): %s",
+            "user schema present but NOT collected (add to DBSHIFT_SCHEMAS to include): %s",
             ", ".join(unconfigured),
         )
     return {
@@ -143,23 +148,22 @@ def execute(
 
     log.info("collector_run_id=%s output=%s", run_id, run_dir)
 
+    dialect = dialect_mod.for_engine(cfg.source_engine)
     connection = connect(cfg)
-    session = Session(connection=connection)
+    session = Session(connection=connection, dialect=dialect)
 
     try:
         schema_report = _resolve_owners(session, cfg.schemas)
         owners = schema_report["present"] or list(cfg.schemas)
 
-        identity_rows = session.fetch(
-            "identity.snapshot",
-            """SELECT sys_context('USERENV','CON_NAME') AS con_name,
-                      sys_context('USERENV','DB_NAME')  AS db_name
-               FROM dual""",
-        )
+        identity_rows = session.fetch("identity.snapshot", dialect.identity_sql())
         source = identity_rows[0] if identity_rows else {}
         source["dsn"] = cfg.dsn
+        # On the record, so a reader of the run never has to infer the engine
+        # from the shape of the SQL that produced it.
+        source["source_engine"] = cfg.source_engine
 
-        available = list(PROBES) + list(extra_probes or [])
+        available = list(probes_for(cfg.source_engine)) + list(extra_probes or [])
         selected = [p for p in available if enabled_probes is None or p.NAME in enabled_probes]
         skipped = [p.NAME for p in available if p not in selected]
 
@@ -182,6 +186,10 @@ def execute(
             mark = len(session.query_log)
             probe_started = time.perf_counter()
             produced = probe.collect(session, owners)
+            if engines.is_mysql(cfg.source_engine):
+                # Pad to Oracle's column set -- see probes_mysql.conform().
+                from .probes_mysql import conform
+                conform(produced)
             if probe.NAME == "identity":
                 rows = produced.get("source_inventory.database") or []
                 if rows:
@@ -231,6 +239,8 @@ def execute(
             log_mode=database_facts.get("log_mode"),
             supplemental_min=database_facts.get("supplemental_log_data_min"),
             declared=cfg.mode_declared,
+            source_engine=cfg.source_engine,
+            native=database_facts,
         )
         if not database_facts:
             mode_record["cdc_readiness"]["evidence_missing"] = (
