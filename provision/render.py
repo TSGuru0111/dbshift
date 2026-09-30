@@ -35,7 +35,11 @@ def stack_name_for(estate: str, engine: str | None = None) -> str:
     resolving; only PostgreSQL adds a suffix.
     """
     base = policy.STACK_PREFIX + "target-" + re.sub(r"[^a-z0-9]+", "-", estate.lower()).strip("-")
-    return base + "-pg" if engine == policy.PG_ENGINE else base
+    if engine == policy.PG_ENGINE:
+        return base + "-pg"
+    if engine == policy.MYSQL_ENGINE:
+        return base + "-mysql"
+    return base
 
 
 def _tags(stack: str, estate: str, run_id: str, expires: str) -> list[dict]:
@@ -71,13 +75,29 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
     # edition to map and no licence to count, so that whole branch is skipped
     # rather than fed a null.
     pg = d.get("engine") == "POSTGRESQL"
-    if pg:
+    my = d.get("engine") == "MYSQL"
+    src_label = "MySQL" if facts.get("source_engine") == "MYSQL" else "Oracle"
+    mysql_major = None
+    if my:
+        engine, licence = policy.MYSQL_ENGINE, policy.MYSQL_LICENCE
+        trace("Engine", engine, "sizing.decision.engine (Phase 3)",
+              "the homogeneous path: MySQL to Amazon RDS for MySQL")
+        trace("LicenseModel", licence, "RDS for MySQL",
+              "the Community engine is open source; AWS charges for the instance alone")
+        mysql_major = ".".join(engine_version.split(".")[:2])
+        if mysql_major not in policy.MYSQL_MAJORS:
+            raise RenderError(f"engine version {engine_version} is not one of MySQL "
+                              f"{', '.join(policy.MYSQL_MAJORS)}")
+        trace("EngineVersion", engine_version, "preflight: RDS support lifecycle + latest orderable",
+              f"source is MySQL {facts.get('version')}; the major was chosen from RDS standard "
+              "support, so no Extended Support charge is taken silently")
+    elif pg:
         engine, licence = policy.PG_ENGINE, policy.PG_LICENCE
         trace("Engine", engine, "sizing.decision.engine (Phase 3)",
-              "the heterogeneous path: the client chose PostgreSQL over Oracle")
+              f"the heterogeneous path: the client chose PostgreSQL for this {src_label} source")
         trace("LicenseModel", licence, "RDS for PostgreSQL",
-              "the engine is open source; AWS charges for the instance alone and no "
-              "Oracle licence is carried")
+              "the engine is open source; AWS charges for the instance alone"
+              + ("; no Oracle licence is carried" if src_label == "Oracle" else ""))
         if not engine_version.startswith(policy.PG_TARGET_MAJOR + "."):
             raise RenderError(
                 f"engine version {engine_version} is not PostgreSQL {policy.PG_TARGET_MAJOR}")
@@ -127,7 +147,8 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
                        f"{sizing['facts']['segment_gb']} GB of segments; "
                        + ("PostgreSQL stores the same data larger (no segment compression, "
                           "8 KB pages, bigger indexes), so Phase 3 raised it before headroom"
-                          if pg else "RDS Oracle minimum is 20 GB"))
+                          if pg else "RDS for MySQL minimum is 20 GB" if my
+                          else "RDS Oracle minimum is 20 GB"))
     storage_type = trace("StorageType", d["storage_type"], "sizing.decision.storage_type (Phase 3)",
                          "gp3 includes baseline IOPS without provisioning them")
 
@@ -147,7 +168,35 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
     # UTF8 and the encoding is fixed then. Phase 3's encoding check is what
     # verifies the source can map to it, so there is nothing to render here.
     cs = nchar = None
-    if pg:
+    mysql_params: dict = {}
+    if my:
+        # RDS for MySQL has no CharacterSetName property; the server character
+        # set, collation and the rest are parameter-group settings, carried from
+        # the source so the application meets the server it was written against.
+        src_params = facts.get("mysql_parameters") or {}
+        for name, why in policy.MYSQL_CARRIED.items():
+            value = src_params.get(name)
+            if value is None or value == "":
+                trace(f"Parameter {name}", "not set", "collector parameters (SHOW VARIABLES)",
+                      f"the source did not report it, so the RDS default applies -- {why}")
+                continue
+            value = str(value)
+            if name in policy.MYSQL_BOOLEAN_AS_01 and value.upper() in ("ON", "OFF"):
+                value = "1" if value.upper() == "ON" else "0"
+            mysql_params[name] = value
+            trace(f"Parameter {name}", value, "collector parameters (SHOW VARIABLES)",
+                  f"copied from the source: {why}")
+        for name, (value, why) in policy.MYSQL_FORCED.items():
+            mysql_params[name] = value
+            trace(f"Parameter {name}", value, "provision/policy.py", why)
+        tz = src_params.get("time_zone")
+        eff = src_params.get("system_time_zone") if tz == "SYSTEM" else tz
+        trace("TimeZone", eff or "unknown", "collector parameters time_zone / system_time_zone",
+              "RDS for MySQL runs UTC unless the time_zone parameter says otherwise"
+              + ("; the source is UTC too, so nothing is set" if (eff or "").upper() in ("UTC", "+00:00")
+                 else "; the source differs -- NOW() and DATETIME defaults will disagree until "
+                      "time_zone is set to match"))
+    elif pg:
         trace("Encoding", policy.PG_ENCODING, "RDS for PostgreSQL default",
               f"source {d.get('source_character_set')} maps to UTF8; PostgreSQL has no "
               "CharacterSetName property and the encoding cannot be changed afterwards")
@@ -172,7 +221,11 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
     # not arrive by Data Pump anyway -- DMS writes straight into the target -- so
     # there is no S3 load path to enable.
     rules = {f["rule_id"] for f in assessment["findings"]}
-    if pg:
+    if my:
+        trace("OptionGroup", "not rendered", "RDS for MySQL",
+              "no MySQL option is needed: data arrives through AWS DMS, and the server "
+              "settings that matter are in the parameter group")
+    elif pg:
         trace("OptionGroup", "not rendered", "RDS for PostgreSQL",
               "PostgreSQL has no option groups. Data arrives through AWS DMS, not a Data Pump "
               "dump staged in S3, so no S3 load path is needed on the instance")
@@ -204,10 +257,10 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
                 for e in remediation.get("entries", []) if e.get("artefact")]
     handoffs = [h for h in handoffs if h["phase"] and h["phase"] != "provision"]
 
-    listener_port = policy.PG_PORT if pg else policy.PORT
+    listener_port = policy.PG_PORT if pg else policy.MYSQL_PORT if my else policy.PORT
     trace("ListenerPort", str(listener_port), "provision/policy.py",
           f"the security group opens exactly this port for the operator's /32; "
-          f"{'PostgreSQL listens on 5432' if pg else 'Oracle listens on 1521'}")
+          f"{'PostgreSQL listens on 5432' if pg else 'MySQL listens on 3306' if my else 'Oracle listens on 1521'}")
 
     expires = (now + timedelta(hours=policy.TTL_HOURS)).strftime("%Y-%m-%dT%H:%MZ")
     tags = _tags(stack_name, estate, run_id, expires)
@@ -268,7 +321,11 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
             "DbSecurityGroup": {
                 "Type": "AWS::EC2::SecurityGroup",
                 "Properties": {
-                    "GroupDescription": f"{stack_name}: Oracle listener from one operator /32 only",
+                    # Oracle's wording is kept for Oracle and PostgreSQL stacks: a
+                    # changed GroupDescription REPLACES the group on update.
+                    "GroupDescription": (f"{stack_name}: MySQL listener from one operator /32 only"
+                                         if my else
+                                         f"{stack_name}: Oracle listener from one operator /32 only"),
                     "VpcId": {"Ref": "VpcId"},
                     # The listener port, which differs by engine. This was
                     # hardcoded to Oracle's 1521, so a PostgreSQL target came up
@@ -327,7 +384,16 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
                     "Tags": tags,
                 },
             },
-            **({} if pg else {"OptionGroup": {
+            **({"DbParameterGroup": {
+                "Type": "AWS::RDS::DBParameterGroup",
+                "Properties": {
+                    "Family": f"mysql{mysql_major}",
+                    "Description": f"{stack_name}: server settings carried from the source",
+                    "Parameters": mysql_params,
+                    "Tags": tags,
+                },
+            }} if my else {}),
+            **({} if (pg or my) else {"OptionGroup": {
                 "Type": "AWS::RDS::OptionGroup",
                 "Properties": {
                     "EngineName": engine, "MajorEngineVersion": policy.TARGET_MAJOR,
@@ -348,17 +414,19 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
                     "DBInstanceClass": instance_class,
                     "AllocatedStorage": storage_gb, "StorageType": storage_type,
                     "StorageEncrypted": cfg["storage_encrypted"],
-                    **({} if pg else {"CharacterSetName": cs}),
+                    **({} if (pg or my) else {"CharacterSetName": cs}),
                     **({"NcharCharacterSetName": nchar} if nchar else {}),
-                    "DBName": policy.PG_DB_NAME if pg else cfg["db_name"],
-                    "MasterUsername": policy.PG_MASTER_USERNAME if pg else cfg["master_username"],
+                    **({"DBParameterGroupName": {"Ref": "DbParameterGroup"}} if my else {}),
+                    "DBName": policy.PG_DB_NAME if pg else policy.MYSQL_DB_NAME if my else cfg["db_name"],
+                    "MasterUsername": (policy.PG_MASTER_USERNAME if pg else policy.MYSQL_MASTER_USERNAME
+                                       if my else cfg["master_username"]),
                     "MasterUserPassword": password_ref,
-                    "Port": str(policy.PG_PORT if pg else cfg["port"]),
+                    "Port": str(policy.PG_PORT if pg else policy.MYSQL_PORT if my else cfg["port"]),
                     "MultiAZ": cfg["multi_az"],
                     "PubliclyAccessible": policy.PUBLICLY_ACCESSIBLE,
                     "DBSubnetGroupName": {"Ref": "DbSubnetGroup"},
                     "VPCSecurityGroups": [{"Fn::GetAtt": ["DbSecurityGroup", "GroupId"]}],
-                    **({} if pg else {
+                    **({} if (pg or my) else {
                         "OptionGroupName": {"Ref": "OptionGroup"},
                         "AssociatedRoles": [{"RoleArn": {"Fn::GetAtt": ["S3IntegrationRole", "Arn"]},
                                              "FeatureName": "S3_INTEGRATION"}]}),
@@ -401,13 +469,15 @@ def render(records: dict, facts: dict, *, engine_version: str, stack_name: str, 
             "password_parameter": policy.MASTER_PASSWORD_PARAMETER.format(stack=stack_name),
             "engine": engine, "licence": licence, "instance_class": instance_class,
             "storage_gb": int(storage_gb), "storage_type": storage_type,
-            "target": "POSTGRESQL" if pg else "ORACLE",
+            "target": "POSTGRESQL" if pg else "MYSQL" if my else "ORACLE",
+            "parameters": mysql_params,
             # These four report what was RENDERED, not what policy defaults to,
             # so a caller that echoes them back (the console's tiles, the Phase 10
             # report) cannot show a value the template does not contain.
-            "port": policy.PG_PORT if pg else cfg["port"],
-            "db_name": policy.PG_DB_NAME if pg else cfg["db_name"],
-            "master_username": policy.PG_MASTER_USERNAME if pg else cfg["master_username"],
+            "port": policy.PG_PORT if pg else policy.MYSQL_PORT if my else cfg["port"],
+            "db_name": policy.PG_DB_NAME if pg else policy.MYSQL_DB_NAME if my else cfg["db_name"],
+            "master_username": (policy.PG_MASTER_USERNAME if pg else policy.MYSQL_MASTER_USERNAME
+                                if my else cfg["master_username"]),
             "multi_az": cfg["multi_az"],
             # What a person changed, for the console to show and the record to keep.
             "overrides": {

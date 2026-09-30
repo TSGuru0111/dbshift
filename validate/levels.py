@@ -22,6 +22,7 @@ from collections import Counter, defaultdict
 
 
 from . import crossengine as ce
+from . import mysql as my
 from .context import EXPECTED, MATCH, MISMATCH, NOT_COMPARABLE, Ctx, finding, is_internal
 
 IDENT = re.compile(r"^[A-Z][A-Z0-9_$#]{0,127}$")
@@ -96,7 +97,13 @@ def _cross_engine_objects(ctx: Ctx) -> list[dict]:
     return out
 
 
+def _mysql_source(ctx: Ctx) -> bool:
+    return (ctx.opts.source_engine or "").upper() == "MYSQL"
+
+
 def objects(ctx: Ctx) -> list[dict]:
+    if _mysql_source(ctx):
+        return my.objects(ctx)
     if ctx.cross_engine:
         return _cross_engine_objects(ctx)
     owner = ctx.estate
@@ -168,6 +175,8 @@ def _scalar(result):
 
 
 def structure(ctx: Ctx) -> list[dict]:
+    if _mysql_source(ctx):
+        return my.structure(ctx)
     if ctx.cross_engine:
         # Every query in this level reads dba_tab_columns, dba_constraints and
         # dba_indexes. There is no PostgreSQL equivalent that would answer the
@@ -276,6 +285,8 @@ def structure(ctx: Ctx) -> list[dict]:
 # --------------------------------------------------------------------------- level 3
 
 def row_counts(ctx: Ctx) -> list[dict]:
+    if _mysql_source(ctx):
+        return my.row_counts(ctx)
     owner, out = ctx.estate, []
     matched, differ, unreadable = [], [], []
     for table in _user_tables(ctx):
@@ -334,6 +345,8 @@ def _checksum_sql(owner: str, table: str, cols: list[dict]) -> str:
 
 
 def content(ctx: Ctx) -> list[dict]:
+    if _mysql_source(ctx):
+        return my.content(ctx)
     owner, out = ctx.estate, []
     if not ctx.opts.checksum:
         return [finding(4, "data content", NOT_COMPARABLE, "checksums were switched off for this run")]
@@ -422,6 +435,8 @@ def content(ctx: Ctx) -> list[dict]:
 # --------------------------------------------------------------------------- level 5
 
 def behaviour(ctx: Ctx) -> list[dict]:
+    if _mysql_source(ctx):
+        return my.behaviour(ctx)
     if ctx.cross_engine:
         # invalid objects, grants, sequence values and materialized view
         # staleness are all read from dba_* views. The equivalent questions on

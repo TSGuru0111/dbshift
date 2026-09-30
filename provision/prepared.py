@@ -265,13 +265,24 @@ def summarise(artefacts: dict, estate: str | None = None) -> dict:
     }
 
 
-def check(artefacts: dict, estate: str | None = None) -> dict:
+def check(artefacts: dict, estate: str | None = None, target: str | None = None) -> dict:
     """A preflight-shaped check: does the prepared work describe this estate?
 
     Shaped like `provision/records.consistency` so the preflight can carry it
     beside the others. A mismatch fails; a phase that has not run warns, because
     provisioning an empty target is a choice rather than an error.
+
+    On a homogeneous MySQL target none of it applies: 4b, 4c and 4d produce
+    PostgreSQL, and reporting "all prepared" for an RDS for MySQL instance
+    claimed work that has nothing to do with it. That schema comes from the
+    source itself, in Phase 7.
     """
+    if (target or "").upper() == "MYSQL":
+        return {"name": "prepared_artefacts", "status": "pass",
+                "detail": "not applicable: MySQL to RDS for MySQL converts nothing. Phase 7 "
+                          "copies the schema from the source (mysqldump --no-data, with "
+                          "routines, triggers and events) before DMS loads the rows",
+                "remedy": None}
     s = summarise(artefacts, estate)
     if s["mismatched"]:
         return {"name": "prepared_artefacts", "status": "fail",

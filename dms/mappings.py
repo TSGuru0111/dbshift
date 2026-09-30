@@ -149,7 +149,9 @@ def select_tables(table_rows: list[dict], objects: list[dict], schema: str,
 
 
 def table_mappings(*, schema: str, tables: list[str] | None = None,
-                   lowercase: bool, exclude: list[str] | None = None) -> dict:
+                   lowercase: bool, exclude: list[str] | None = None,
+                   renames: dict | None = None,
+                   remove_columns: list[tuple[str, str]] | None = None) -> dict:
     """Which tables move, and under what names.
 
     `tables` None means every table in the schema -- a % wildcard, which is what
@@ -193,6 +195,28 @@ def table_mappings(*, schema: str, tables: list[str] | None = None,
             add({"rule-type": "transformation", "rule-target": target,
                  "object-locator": locator, "rule-action": "convert-lowercase",
                  "value": None, "old-value": None})
+
+    # After the lower-casing, so a specific rename is the last word on its object.
+    # Phase 4c renamed every TABLE that is a PostgreSQL keyword (`order` ->
+    # `order_tbl`); DMS lower-cases but renames nothing, so without this the load
+    # writes to a table the target does not have. Column renames are supported
+    # here but the planner sends none: on DMS 3.5.4 a column-rename rule loaded
+    # the renamed columns as NULL, so 4c renames keyword columns after the load.
+    for table, new in sorted(((renames or {}).get("tables") or {}).items()):
+        add({"rule-type": "transformation", "rule-target": "table",
+             "object-locator": {"schema-name": schema, "table-name": table},
+             "rule-action": "rename", "value": new, "old-value": None})
+    for (table, column), new in sorted(((renames or {}).get("columns") or {}).items()):
+        add({"rule-type": "transformation", "rule-target": "column",
+             "object-locator": {"schema-name": schema, "table-name": table, "column-name": column},
+             "rule-action": "rename", "value": new, "old-value": None})
+    # A generated column is computed on the target; a load that writes one is
+    # refused by MySQL and, on PostgreSQL, has nowhere to go because Phase 4c
+    # omits it until after the load.
+    for table, column in sorted(remove_columns or []):
+        add({"rule-type": "transformation", "rule-target": "column",
+             "object-locator": {"schema-name": schema, "table-name": table, "column-name": column},
+             "rule-action": "remove-column", "value": None, "old-value": None})
 
     return {"rules": rules}
 

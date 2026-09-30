@@ -45,6 +45,46 @@ def _item(*, kind, name, tier, status, what, why, sql=None, source="rule", detai
 
 # --- the rule tier -----------------------------------------------------------
 
+def _mysql_counters(rows: list[dict], schema: str, target_engine: str) -> list[dict]:
+    """MySQL's "sequences" are AUTO_INCREMENT counters, named `table.column`.
+
+    On PostgreSQL the column is an identity (Phase 4c), which starts at 1 no
+    matter how many rows DMS loads -- the first insert after cutover collides
+    with a migrated key. On MySQL, InnoDB moves the counter past the highest
+    loaded id by itself; but the SOURCE counter can be higher still (deleted
+    rows, rolled-back inserts), and restoring it keeps ids the source already
+    handed out from being issued a second time.
+    """
+    from convert.ddl import ident
+    from convert.ddl_mysql import table_ident
+    out = []
+    for r in rows or []:
+        if r.get("sequence_owner") != schema and r.get("owner") != schema:
+            continue
+        table, column = r.get("table_name"), r.get("column_name")
+        if not table or not column:
+            continue
+        last = r.get("last_number")
+        nxt = int(last) if last is not None else None
+        if target_engine == "POSTGRESQL":
+            sql = (f"ALTER TABLE {ident(schema)}.{table_ident(table)} ALTER COLUMN {ident(column)} "
+                   f"RESTART WITH {nxt};") if nxt else None
+            what = "restart the identity at the source's next AUTO_INCREMENT value"
+            why = ("An identity column starts at 1 however many rows DMS loads into it, so the "
+                   "first insert after cutover reuses a migrated key.")
+        else:
+            sql = f"ALTER TABLE `{schema}`.`{table}` AUTO_INCREMENT = {nxt};" if nxt else None
+            what = "set the AUTO_INCREMENT counter to the source's"
+            why = ("InnoDB moves the counter past the highest loaded id, but the source's counter "
+                   "can be higher (deleted rows, rolled-back inserts); restoring it stops ids the "
+                   "source already issued from being issued again.")
+        out.append(_item(kind="sequence", name=f"{table}.{column}", tier=RULE,
+                         status=READY if sql else MANUAL, what=what, why=why, sql=sql,
+                         detail=f"source AUTO_INCREMENT next value {nxt}" if nxt
+                                else "discovery did not record the counter; read it from the source"))
+    return out
+
+
 def _sequences(rows: list[dict], schema: str, lowercase: bool) -> list[dict]:
     """Sequences are the clearest RULE case, and the most dangerous to skip.
 
@@ -114,7 +154,7 @@ def _materialized_views(rows: list[dict], schema: str) -> list[dict]:
 INTERNAL_VIEW_PREFIXES = ("AQ$", "MVIEW$", "SYS_", "DR$")
 
 
-def _views(rows: list[dict], schema: str) -> list[dict]:
+def _views(rows: list[dict], schema: str, source_engine: str = "ORACLE") -> list[dict]:
     out = []
     for r in rows or []:
         if r.get("owner") != schema:
@@ -127,9 +167,13 @@ def _views(rows: list[dict], schema: str) -> list[dict]:
         out.append(_item(
             kind="view", name=name, tier=MODEL, status=MODEL_REQUIRED,
             what="rewrite the view's SQL for PostgreSQL and create it",
-            why="A view is a stored query, not data. DMS has nothing to copy, and Oracle SQL "
-                "does not always mean the same thing in PostgreSQL -- NVL, DECODE, ROWNUM, "
-                "outer-join syntax and date arithmetic all differ."))
+            why=("A view is a stored query, not data. DMS has nothing to copy, and MySQL SQL "
+                 "does not always mean the same thing in PostgreSQL -- IFNULL, IF(), "
+                 "GROUP_CONCAT, backtick quoting and date functions all differ."
+                 if source_engine == "MYSQL" else
+                 "A view is a stored query, not data. DMS has nothing to copy, and Oracle SQL "
+                 "does not always mean the same thing in PostgreSQL -- NVL, DECODE, ROWNUM, "
+                 "outer-join syntax and date arithmetic all differ.")))
     return out
 
 
@@ -218,10 +262,10 @@ def apply_static(items: list[dict], estate: str) -> list[dict]:
 
 # --- assembly ----------------------------------------------------------------
 
-VIEW_PROMPT = """Rewrite this Oracle view definition for PostgreSQL.
+VIEW_PROMPT = """Rewrite this {source} view definition for PostgreSQL.
 
 OBJECT   {kind} {schema}.{name}
-ORACLE SQL
+{source_upper} SQL
 {sql}
 
 The target schema is `{target_schema}` -- every identifier is lower case there,
@@ -234,8 +278,7 @@ Reply with JSON only, no prose and no code fence:
   "caveat": "what a reviewer must check, or the empty string"}}
 
 Rules:
-- Translate Oracle functions that differ: NVL, DECODE, SYSDATE, TO_DATE, ROWNUM,
-  outer-join (+) syntax.
+- {translate_rule}
 - A materialized view should be created WITH NO DATA and refreshed separately,
   so creating it does not block on a long scan.
 - If you cannot translate it safely, return an empty "sql" and say why. That is
@@ -243,7 +286,8 @@ Rules:
 """
 
 
-def _model_answer(item: dict, source_sql: str, schema: str, client=None) -> dict | None:
+def _model_answer(item: dict, source_sql: str, schema: str, client=None,
+                  source_engine: str = "ORACLE") -> dict | None:
     """Ask the model to rewrite one view. Returns None when it cannot.
 
     Nothing here is applied. The SQL is shown for review alongside the item,
@@ -260,7 +304,15 @@ def _model_answer(item: dict, source_sql: str, schema: str, client=None) -> dict
     try:
         reply = client.complete(
             "reasoning",
-            VIEW_PROMPT.format(kind=item["kind"].replace("_", " "), schema=schema,
+            VIEW_PROMPT.format(
+                source="MySQL" if source_engine == "MYSQL" else "Oracle",
+                source_upper="MYSQL" if source_engine == "MYSQL" else "ORACLE",
+                translate_rule=("Translate MySQL that differs: IFNULL, IF(), GROUP_CONCAT, "
+                                "backtick quoting, DATE_FORMAT, LIMIT a,b."
+                                if source_engine == "MYSQL" else
+                                "Translate Oracle functions that differ: NVL, DECODE, SYSDATE, "
+                                "TO_DATE, ROWNUM,\n  outer-join (+) syntax."),
+                kind=item["kind"].replace("_", " "), schema=schema,
                                name=item["object_name"], sql=source_sql[:6000],
                                target_schema=schema.lower()),
             max_tokens=1200)
@@ -285,7 +337,8 @@ def _model_answer(item: dict, source_sql: str, schema: str, client=None) -> dict
             "caveat": str(parsed.get("caveat") or "").strip()[:500] or None}
 
 
-def apply_model(items: list[dict], schema: str, datasets: dict, client=None) -> list[dict]:
+def apply_model(items: list[dict], schema: str, datasets: dict, client=None,
+                source_engine: str = "ORACLE") -> list[dict]:
     """Answer the MODEL_REQUIRED items with the model, where it can."""
     text_by_name = {}
     for row in (datasets.get("views") or []):
@@ -301,24 +354,48 @@ def apply_model(items: list[dict], schema: str, datasets: dict, client=None) -> 
             out.append(i)
             continue
         answered = _model_answer(i, text_by_name.get((i["object_name"] or "").upper(), ""),
-                                 schema, client=client)
+                                 schema, client=client, source_engine=source_engine)
         out.append(answered or i)
     return out
 
 
 def build(*, schema: str, datasets: dict, lowercase: bool,
           table_stats: list[dict] | None = None, model_available: bool = False,
-          client=None) -> dict:
+          client=None, source_engine: str = "ORACLE", target_engine: str | None = None) -> dict:
     """Everything the DMS run did not finish, routed and counted."""
     items: list[dict] = []
-    items += _sequences(datasets.get("sequences") or [], schema, lowercase)
-    items += _views(datasets.get("views") or [], schema)
+    if source_engine == "MYSQL":
+        items += _mysql_counters(datasets.get("sequences") or [], schema,
+                                 target_engine or "MYSQL")
+        # MySQL -> MySQL: views arrive with the schema copy (dms/schema_mysql),
+        # unconverted, so they are not residue.
+        if target_engine == "POSTGRESQL":
+            view_items = _views(datasets.get("views") or [], schema, source_engine)
+            # A view over a generated column cannot be created until 4c's
+            # post-load step has added that column back.
+            gen = {(c.get("column_name") or "").lower() for c in datasets.get("columns") or []
+                   if c.get("owner") == schema and "generated" in (c.get("extra") or "").lower()
+                   and "default_generated" not in (c.get("extra") or "").lower()}
+            text = {(v.get("view_name") or "").lower(): (v.get("text") or "").lower()
+                    for v in datasets.get("views") or []}
+            for vi in view_items:
+                used = sorted(g for g in gen if g and g in text.get((vi["object_name"] or "").lower(), ""))
+                if used:
+                    # Its own field: a model answer replaces `detail` with its
+                    # explanation, and this ordering constraint must survive that.
+                    vi["create_after"] = (
+                        f"reads generated column(s) {', '.join(used)}: create it only after "
+                        "they are added back on the target (they are omitted for the load)")
+            items += view_items
+    else:
+        items += _sequences(datasets.get("sequences") or [], schema, lowercase)
+        items += _views(datasets.get("views") or [], schema)
     items += _materialized_views(datasets.get("materialized_views") or [], schema)
     items += _external_tables(datasets.get("external_tables") or [], schema)
     items += _suspended(table_stats or [])
 
     if model_available:
-        items = apply_model(items, schema, datasets, client=client)
+        items = apply_model(items, schema, datasets, client=client, source_engine=source_engine)
         # Anything the model could not answer still falls back to a labelled
         # stand-in, so a transient model failure does not lose a known answer.
         items = apply_static(items, schema)

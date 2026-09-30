@@ -30,8 +30,12 @@ TARGET_MAJOR = "19"
 MULTI_AZ = False              # a standby doubles the instance bill; a rehearsal target needs none
 BACKUP_RETENTION_DAYS = 1     # 0 disables backups entirely; 1 day is the cheapest real setting
 DELETION_PROTECTION = False   # the kill switch must be able to remove it without an override
-PUBLICLY_ACCESSIBLE = True    # no bastion is possible (ec2:RunInstances is denied), so the
-                              # endpoint is public and the security group admits one /32 only
+PUBLICLY_ACCESSIBLE = True    # the endpoint is public and the security group admits one /32 only.
+                              # This was originally forced -- ec2:RunInstances was denied account-wide,
+                              # so no bastion was possible. That deny was lifted by 2026-09-28
+                              # (see docs/05-aws-services.md), so the premise no longer holds; the
+                              # setting stays because a single-/32 public endpoint is still the
+                              # cheapest correct answer for a rehearsal target, not because it is forced
 STORAGE_ENCRYPTED = True      # AWS-managed key; kms:CreateKey is denied by the permission set
 AUTO_MINOR_UPGRADE = False    # a pinned version keeps rehearsal and validation reproducible
 MONITORING_INTERVAL = 0       # enhanced monitoring needs its own role and bills CloudWatch
@@ -105,3 +109,63 @@ PG_ENCODING = "UTF8"
 # the database, not an option group. DMS is the data path here anyway, so the
 # exchange bucket carries no dump for this engine -- it stays for the run
 # artefacts the console writes.
+
+
+# --- MySQL target --------------------------------------------------------------
+# The homogeneous MySQL path. No editions, no licence, no option group: the
+# settings that matter live in a DB parameter group, rendered from the SOURCE's
+# own values so the application meets the server it was written against.
+
+MYSQL_ENGINE = "mysql"
+MYSQL_LICENCE = "general-public-license"
+
+# Majors this project renders. Which one is used is decided by preflight from
+# RDS's own lifecycle data (describe-db-major-engine-versions): the source's
+# major while it is in RDS standard support, else the next major that is --
+# because a major past standard support bills RDS Extended Support per vCPU-hour
+# on top of the instance, and a "same version as the source" default would put
+# that charge on a rehearsal target without anyone choosing it. MySQL 8.0's
+# community life ended in April 2026.
+MYSQL_MAJORS = ("8.0", "8.4")
+
+MYSQL_PORT = 3306
+MYSQL_MASTER_USERNAME = "dbshiftadm"
+MYSQL_DB_NAME = "dbshift"
+
+# Server settings copied from the source into the parameter group. Each changes
+# what the application's SQL does, so a target that differs is a behaviour change
+# nobody decided. Read from the collector's `parameters` dataset (SHOW VARIABLES).
+MYSQL_CARRIED = {
+    "sql_mode": "decides what the server accepts: a stricter target rejects writes the "
+                "application makes today, a looser one silently accepts bad data",
+    "character_set_server": "the default for new tables and for columns without their own "
+                            "charset; utf8mb4 keeps 4-byte characters",
+    "collation_server": "decides string equality and ordering -- _ci makes 'A' = 'a' true, "
+                        "which is also what uniqueness is judged by",
+    "event_scheduler": "the estate has scheduled EVENTs; with the scheduler OFF they are "
+                       "created on the target and never fire",
+    "explicit_defaults_for_timestamp": "changes how a TIMESTAMP column with no default behaves "
+                                       "on INSERT",
+    "lower_case_table_names": "can only be set when the instance is created; a mismatch makes "
+                              "table names resolve differently from the source",
+}
+
+# SHOW VARIABLES reports these booleans as ON/OFF, but the RDS parameter group
+# accepts only 0/1 for them (event_scheduler, by contrast, takes ON/OFF). Found by
+# the preflight's live check against describe-engine-default-parameters.
+MYSQL_BOOLEAN_AS_01 = {"explicit_defaults_for_timestamp", "local_infile",
+                       "log_bin_trust_function_creators"}
+
+# Set regardless of the source, because RDS itself requires it.
+MYSQL_FORCED = {
+    "log_bin_trust_function_creators": (
+        "1",
+        "RDS grants no SUPER, and binary logging is on whenever backups are. Without this, "
+        "CREATE FUNCTION and CREATE TRIGGER from the schema load fail with ERROR 1419 -- the "
+        "estate's stored code would not arrive at all"),
+    "local_infile": (
+        "1",
+        "AWS DMS loads a MySQL target with LOAD DATA LOCAL INFILE; with this off the full load "
+        "cannot write a row (AWS DMS user guide, MySQL as a target, prerequisites)"),
+}
+

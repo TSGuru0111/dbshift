@@ -46,6 +46,8 @@ def verify(session, deployed: dict, plan: dict) -> list[dict]:
     """
     if plan["rendered"].get("target") == "POSTGRESQL":
         return _verify_postgres(session, deployed, plan)
+    if plan["rendered"].get("target") == "MYSQL":
+        return _verify_mysql(session, deployed, plan)
     return _verify_oracle(session, deployed, plan)
 
 
@@ -179,6 +181,59 @@ def _verify_postgres(session, deployed: dict, plan: dict) -> list[dict]:
                          "installed" if "plpgsql_check" in exts
                          else "not installed -- the compile gate falls back to "
                               "check_function_bodies, which is what it does locally too"))
+    finally:
+        conn.close()
+    return checks
+
+
+def _verify_mysql(session, deployed: dict, plan: dict) -> list[dict]:
+    """RDS for MySQL: the instance, and the parameter group actually in force.
+
+    The template attaching a parameter group proves nothing about the running
+    server: a static parameter needs a reboot the create does not always get,
+    and a group can be attached while `pending-reboot`. So every carried value
+    is asked of the server itself (SELECT @@name).
+    """
+    import pymysql
+
+    expect = {x["property"]: x["value"] for x in plan["rendered"]["provenance"]}
+    stack = deployed["stack_name"]
+    checks: list[dict] = []
+    rds = session.client("rds", region_name=policy.REGION)
+    db = rds.describe_db_instances(DBInstanceIdentifier=stack)["DBInstances"][0]
+    for prop, actual in [("DBInstanceClass", db["DBInstanceClass"]),
+                         ("EngineVersion", db["EngineVersion"]),
+                         ("LicenseModel", db["LicenseModel"])]:
+        checks.append(_c(prop, PASS if actual == expect.get(prop) else FAIL,
+                         f"{actual} (rendered {expect.get(prop)})"))
+    checks.append(_c("engine", PASS if db["Engine"] == policy.MYSQL_ENGINE else FAIL,
+                     f"{db['Engine']} (rendered {policy.MYSQL_ENGINE})"))
+    for g in db.get("DBParameterGroups", []):
+        checks.append(_c("parameter group", PASS if g.get("ParameterApplyStatus") == "in-sync"
+                         else FAIL, f"{g.get('DBParameterGroupName')}: {g.get('ParameterApplyStatus')}"))
+
+    password = session.client("ssm", region_name=policy.REGION).get_parameter(
+        Name=plan["rendered"]["password_parameter"], WithDecryption=True)["Parameter"]["Value"]
+    try:
+        conn = pymysql.connect(host=deployed["outputs"]["Endpoint"],
+                               port=int(deployed["outputs"]["Port"]),
+                               user=policy.MYSQL_MASTER_USERNAME, password=password,
+                               connect_timeout=20)
+    except Exception as exc:  # noqa: BLE001
+        checks.append(_c("connect", FAIL, str(exc).splitlines()[0]))
+        return checks
+    finally:
+        password = None   # noqa: F841
+    try:
+        cur = conn.cursor()
+        checks.append(_c("connect", PASS, f"logged in as {policy.MYSQL_MASTER_USERNAME}"))
+        for name, want in (plan["rendered"].get("parameters") or {}).items():
+            cur.execute(f"SELECT @@{name}")
+            got = str(cur.fetchone()[0])
+            norm = {"ON": "1", "OFF": "0"}
+            same = (got == want or norm.get(got.upper(), got) == norm.get(want.upper(), want)
+                    or set(got.split(",")) == set(want.split(",")))
+            checks.append(_c(f"@@{name}", PASS if same else FAIL, f"{got} (rendered {want})"))
     finally:
         conn.close()
     return checks

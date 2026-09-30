@@ -44,7 +44,8 @@ def regions_for(session, all_regions: bool, region: str) -> list[str]:
 
 
 def execute(session, *, mode: str | None, confirm: str | None, regions: list[str],
-            include_snapshots: bool = False, force_deletion_protection: bool = False) -> dict:
+            include_snapshots: bool = False, force_deletion_protection: bool = False,
+            include_source_hosts: bool = False, only: str | None = None) -> dict:
     """Shared by the CLI and the console. mode=None means inventory only."""
     account = session.client("sts").get_caller_identity()["Account"]
     if mode and confirm != account:
@@ -56,10 +57,18 @@ def execute(session, *, mode: str | None, confirm: str | None, regions: list[str
     for region in regions:
         clients = scan.clients_for(session, region)
         here = scan.scan(clients, region)
+        if only:
+            # One run's resources, by name: `--only dbmig-mysql-app` tears down
+            # that estate's target, bucket and replication instance and leaves
+            # every other run -- and every source host -- untouched.
+            needle = only.lower()
+            here = [r for r in here
+                    if needle in " ".join(str(r.get(k) or "") for k in ("id", "name", "stack")).lower()]
         found += here
         if mode:
             step = actions.decide(here, mode, include_snapshots=include_snapshots,
-                                  force_deletion_protection=force_deletion_protection)
+                                  force_deletion_protection=force_deletion_protection,
+                                  include_source_hosts=include_source_hosts)
             plan += step
             results += actions.execute(step, clients)
 
@@ -88,6 +97,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--confirm", help="account id; required with --stop or --destroy")
     ap.add_argument("--include-snapshots", action="store_true", help="also delete dbshift manual snapshots")
     ap.add_argument("--force-deletion-protection", action="store_true")
+    ap.add_argument("--include-source-hosts", action="store_true",
+                    help="also TERMINATE dbshift-source-* EC2 hosts (default: stop them)")
+    ap.add_argument("--only", default=None,
+                    help="act only on resources whose id, name or stack contains this text")
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
     ap.add_argument("--region", default=DEFAULT_REGION)
     ap.add_argument("--all-regions", action="store_true", help="scan every region, not just the working one")
@@ -99,7 +112,8 @@ def main(argv: list[str] | None = None) -> int:
         report = execute(session, mode=mode, confirm=args.confirm,
                          regions=regions_for(session, args.all_regions, args.region),
                          include_snapshots=args.include_snapshots,
-                         force_deletion_protection=args.force_deletion_protection)
+                         force_deletion_protection=args.force_deletion_protection,
+                         include_source_hosts=args.include_source_hosts, only=args.only)
     except PermissionError as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return 1

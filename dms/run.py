@@ -58,6 +58,7 @@ def target_from_deployment(session=None) -> dict | None:
     plan = json.loads(plan_path.read_text(encoding="utf-8")) if plan_path.exists() else {}
     rendered = plan.get("rendered") or {}
     pg = rendered.get("target") == "POSTGRESQL"
+    my = rendered.get("target") == "MYSQL"
 
     password = ""
     if session is not None and rendered.get("password_parameter"):
@@ -67,6 +68,17 @@ def target_from_deployment(session=None) -> dict | None:
         except Exception:  # noqa: BLE001 -- fall back to the environment below
             password = ""
 
+    if my:
+        return {
+            "engine": "mysql", "host": host,
+            "port": int(outputs.get("Port") or prov_policy.MYSQL_PORT),
+            "user": prov_policy.MYSQL_MASTER_USERNAME,
+            "password": password or os.environ.get("DBSHIFT_TARGET_PASSWORD", ""),
+            "database": None,
+            "ssl_mode": policy.MYSQL_SSL_MODE,
+            "extra_settings": policy.MYSQL_TARGET_ATTRIBUTES,
+            "stack": deployed.get("stack_name"),
+        }
     return {
         "engine": "postgres" if pg else "oracle",
         "host": host,
@@ -177,6 +189,66 @@ def _read_target_counts(dsn: str, user: str):
         except Exception:                                      # noqa: BLE001
             pass
 
+def _read_mysql_target_counts(dsn: str, user: str):
+    """`_read_target_counts` for an RDS for MySQL target. Same contract."""
+    host, port = dsn.split("/")[0].split(":")
+    pw = os.environ.get("DBSHIFT_TARGET_PASSWORD")
+    if not pw:
+        return None, "DBSHIFT_TARGET_PASSWORD is not set"
+    return mysql_target_counts(host, int(port), user, pw)
+
+
+def mysql_target_counts(host: str, port: int, user: str, password: str):
+    """Every base table on a MySQL target and its row count, or None and why."""
+    try:
+        import pymysql
+        conn = pymysql.connect(host=host, port=int(port), user=user, password=password,
+                               connect_timeout=20)
+    except Exception as exc:                                   # noqa: BLE001
+        return None, str(exc).splitlines()[0][:200]
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT table_schema, table_name FROM information_schema.tables
+                       WHERE table_type = 'BASE TABLE' AND table_schema NOT IN
+                       ('mysql', 'sys', 'information_schema', 'performance_schema',
+                        'awsdms_control')""")
+        counts = {}
+        for schema, name in cur.fetchall():
+            cur.execute(f"SELECT COUNT(*) FROM `{schema}`.`{name}`")
+            counts[name] = cur.fetchone()[0]
+        return counts, None
+    except Exception as exc:                                   # noqa: BLE001
+        return None, str(exc).splitlines()[0][:200]
+    finally:
+        try:
+            conn.close()
+        except Exception:                                      # noqa: BLE001
+            pass
+
+
+def _pg_renames(source_engine: str, schema: str, tables: list[str], columns: list[dict]) -> dict:
+    """The names Phase 4c gave PostgreSQL keywords, so DMS writes to the same ones.
+
+    Computed with 4c's own functions rather than a copy of its rules, so the two
+    cannot drift: a table 4c creates as `order_tbl` is the table DMS loads.
+    """
+    from convert.ddl import ident
+    from convert.ddl_mysql import table_ident
+    t_name = table_ident if source_engine == "MYSQL" else ident
+    out = {"tables": {}, "columns": {}}
+    for t in tables:
+        new = t_name(t)
+        if new != t.lower():
+            out["tables"][t] = new
+    wanted = set(tables)
+    for c in columns:
+        if c.get("owner") == schema and c.get("table_name") in wanted:
+            new = ident(c["column_name"])
+            if new != (c["column_name"] or "").lower():
+                out["columns"][(c["table_name"], c["column_name"])] = new
+    return out
+
+
 def target_counts_from(target) -> tuple[dict | None, str | None]:
     """The same two target facts, read through an already-registered target.
 
@@ -242,8 +314,14 @@ def plan(session=None, *, migration_type: str | None = None,
     facts = {**prov_records.source_facts(recs["sizing"]["collector_run_id"]),
              **{k: v for k, v in (recs["sizing"].get("facts") or {}).items()
                 if k in ("log_mode", "supplemental_logging")}}
+    facts.setdefault("source_engine", "ORACLE")
     d = recs["sizing"]["decision"]
-    heterogeneous = d.get("engine") == "POSTGRESQL"
+    source_engine = str(facts.get("source_engine") or "ORACLE").upper()
+    target_engine = d.get("engine") or "ORACLE"
+    # Lower-case names whenever the target is PostgreSQL. From Oracle that is
+    # the whole difference in folding; from MySQL the names are already lower
+    # case in this estate, and the rule makes a mixed-case one match 4c too.
+    heterogeneous = target_engine == "POSTGRESQL"
 
     checks = [preflight.records_consistent(recs)]
     checks.append(preflight.gate_allows(recs["gate"], migration_type))
@@ -285,13 +363,20 @@ def plan(session=None, *, migration_type: str | None = None,
         external_tables=prov_records._dataset(run_id, "external_tables"),
         queues=prov_records._dataset(run_id, "queues"))
     tables = selection["include"]
+    if source_engine == "MYSQL":
+        from convert.decisions import nullable_for_zero_dates
+        checks.append(preflight.zero_dates(prov_records._dataset(run_id, "mysql_zero_dates"),
+                                           target_engine, nullable_for_zero_dates(estate)))
 
     # Both target checks, here rather than above, because the shape check needs
     # the selection. **"Has the tables" is listed before "is empty"**: an empty
     # target carrying another schema's tables passes the empty check, which is
     # true and useless, so the shape must be established first.
     if target_counts is not None:
-        checks.append(preflight.target_has_the_tables(target_counts, tables))
+        checks.append(preflight.target_has_the_tables(
+            target_counts, tables,
+            (_pg_renames(source_engine, estate, tables, prov_records._dataset(run_id, "columns"))
+             ["tables"] if target_engine == "POSTGRESQL" else None)))
         checks.append(preflight.target_is_empty(target_counts))
     else:
         # **Blocked, not absent.** `target_counts` used to be supplied only by
@@ -322,7 +407,20 @@ def plan(session=None, *, migration_type: str | None = None,
                  "command line. Until then the migration is planned but the target is "
                  "unverified.")))
 
-    tm = mappings.table_mappings(schema=estate, tables=tables, lowercase=heterogeneous)
+    columns = prov_records._dataset(run_id, "columns")
+    renames = (_pg_renames(source_engine, estate, tables, columns)
+               if target_engine == "POSTGRESQL" else None)
+    # Tables only. A DMS column-rename rule delivered the renamed columns as NULL
+    # on the first real MySQL -> PostgreSQL load (2026-09-30); 4c now creates
+    # keyword columns under their source names and renames them after the load.
+    dms_renames = {"tables": (renames or {}).get("tables") or {}, "columns": {}}
+    generated = [(c["table_name"], c["column_name"]) for c in columns
+                 if source_engine == "MYSQL" and c.get("owner") == estate
+                 and c.get("table_name") in set(tables)
+                 and "generated" in (c.get("extra") or "").lower()
+                 and "default_generated" not in (c.get("extra") or "").lower()]
+    tm = mappings.table_mappings(schema=estate, tables=tables, lowercase=heterogeneous,
+                                 renames=dms_renames, remove_columns=generated)
     ts = mappings.task_settings(migration_type=migration_type,
                                 parallel_subtasks=parallel_subtasks)
 
@@ -337,7 +435,17 @@ def plan(session=None, *, migration_type: str | None = None,
         # it is never silent, because the gate judged the other one.
         "migration_type_overridden": overridden,
         "heterogeneous": heterogeneous,
-        "target_engine": d.get("engine") or "ORACLE",
+        "source_engine": source_engine,
+        "target_engine": target_engine,
+        "renamed_for_postgresql": {
+            "tables": (renames or {}).get("tables") or {},
+            "columns": {f"{t}.{c}": v for (t, c), v in ((renames or {}).get("columns") or {}).items()},
+        },
+        "columns_not_loaded": [f"{t}.{c}" for t, c in generated],
+        # MySQL -> MySQL: the schema comes from the source itself, before the load.
+        "schema_copy": ("python -m dms.schema_mysql --plan, then --apply pre before the load "
+                        "and --apply post after it" if source_engine == "MYSQL"
+                        and target_engine == "MYSQL" else None),
         "instance": {"name": policy.instance_name(estate),
                      "class": instance_class or policy.INSTANCE_CLASS,
                      "storage_gb": policy.STORAGE_GB, "engine_version": policy.ENGINE_VERSION,
@@ -362,8 +470,10 @@ def plan(session=None, *, migration_type: str | None = None,
             # invokes, so a live run does not report MODEL_REQUIRED for work
             # the model could have done.
             schema=estate, lowercase=heterogeneous, model_available=_model_live(),
+            source_engine=source_engine, target_engine=target_engine,
             datasets={n: prov_records._dataset(run_id, n)
-                      for n in ("sequences", "views", "materialized_views", "external_tables")}),
+                      for n in ("sequences", "views", "materialized_views", "external_tables",
+                                "columns")}),
         "not_moved_by_dms": mappings.excluded_objects(objects, estate),
         "table_mappings": tm,
         "task_settings": ts,
@@ -395,6 +505,10 @@ def execute(session, *, confirm_account: str, migration_type: str | None = None,
              parallel_subtasks=parallel_subtasks, instance_class=instance_class)
     if not p["ready"]:
         raise ValueError("preflight refused: " + ", ".join(p["refused_because"]))
+    # The type the plan resolved -- Phase 1's declaration when none was passed.
+    # Carrying the caller's None on to the task raised KeyError in
+    # policy.task_name on the first CLI run that relied on the declaration.
+    migration_type = p["migration_type"]
 
     record = {"started_at_utc": datetime.now(timezone.utc).isoformat(), "status": "running",
               "plan": {k: v for k, v in p.items() if k not in ("table_mappings", "task_settings")},
@@ -505,9 +619,17 @@ def status(session) -> dict | None:
         out["tables"] = actions.table_statistics(dms, t["ReplicationTaskArn"])
         return out
     dms = session.client("dms", region_name=policy.REGION)
+    try:
+        progress = actions.task_progress(dms, rec["task_arn"])
+    except Exception as exc:  # noqa: BLE001 -- botocore raises several shapes
+        # The task this console recorded was deleted since -- by the kill
+        # switch, typically. That is "no task running", and the route answers
+        # 409; it was a 500 the Migrate screen showed as a server fault.
+        if "ResourceNotFound" in type(exc).__name__ or "No tasks found" in str(exc):
+            return None
+        raise
     out = {"task_arn": rec["task_arn"], "estate": rec["plan"]["estate"],
-           "migration_type": rec["plan"]["migration_type"],
-           **actions.task_progress(dms, rec["task_arn"])}
+           "migration_type": rec["plan"]["migration_type"], **progress}
     out["tables"] = actions.table_statistics(dms, rec["task_arn"])
     if rec["plan"]["migration_type"] != policy.FULL_LOAD:
         out["cdc"] = actions.cdc_latency(
@@ -532,9 +654,11 @@ def main(argv: list[str] | None = None) -> int:
     # exactly what the Phase 1 network requirements tell a client they need.
     ap.add_argument("--source-host", default=None,
                     help="an address AWS can reach. NOT localhost: DMS runs inside AWS.")
-    ap.add_argument("--source-port", type=int, default=1521)
-    ap.add_argument("--source-user", default=None, help="defaults to the estate owner")
-    ap.add_argument("--source-database", default="XEPDB1")
+    ap.add_argument("--source-port", type=int, default=None,
+                    help="default 1521 for Oracle, 3306 for MySQL")
+    ap.add_argument("--source-user", default=None,
+                    help="defaults to the estate owner (Oracle) or dbmig_collector (MySQL)")
+    ap.add_argument("--source-database", default=None, help="Oracle service; default XEPDB1")
     # The target, so the two target preflight checks can actually run at plan
     # time. Without it they report BLOCKED -- which is honest, but a plan whose
     # target is unverified is not something to act on.
@@ -543,6 +667,9 @@ def main(argv: list[str] | None = None) -> int:
                          "can read its tables and row counts. Password from "
                          "DBSHIFT_PG_PASSWORD.")
     ap.add_argument("--pg-user", default="dbshiftadm", help="master user on the target")
+    ap.add_argument("--target-dsn", default=None,
+                    help="an RDS for MySQL target as host:port (password from "
+                         "DBSHIFT_TARGET_PASSWORD); --pg-dsn is the PostgreSQL form")
     args = ap.parse_args(argv)
 
     session = _session(args.profile)
@@ -570,17 +697,27 @@ def main(argv: list[str] | None = None) -> int:
     # target checks need them, and a failure to connect must not take the plan
     # down: an unreachable target is exactly what they report.
     target_counts = None
-    if args.pg_dsn:
-        target_counts, why = _read_target_counts(args.pg_dsn, args.pg_user)
+    if args.pg_dsn or args.target_dsn:
+        target_counts, why = (_read_mysql_target_counts(args.target_dsn, args.pg_user)
+                              if args.target_dsn else
+                              _read_target_counts(args.pg_dsn, args.pg_user))
         if target_counts is None:
-            print(f"\ncould not read the target at {args.pg_dsn}: {why}\n"
+            print(f"\ncould not read the target at {args.target_dsn or args.pg_dsn}: {why}\n"
                   "the target checks will report blocked.\n")
 
     p = plan(session if args.execute else None, migration_type=args.migration_type,
              target_counts=target_counts)
     print(f"\nestate           : {p['estate']}   run {p['collector_run_id']}")
-    print(f"target           : {p['target_engine']}"
-          + ("  (heterogeneous -- names lowercased)" if p["heterogeneous"] else ""))
+    print(f"source -> target : {p['source_engine']} -> {p['target_engine']}"
+          + ("  (names lowercased)" if p["heterogeneous"] else ""))
+    rn = p["renamed_for_postgresql"]
+    if rn["tables"] or rn["columns"]:
+        print(f"renamed as 4c    : " + ", ".join(f"{k} -> {v}" for k, v in
+                                                {**rn["tables"], **rn["columns"]}.items()))
+    if p["columns_not_loaded"]:
+        print(f"not loaded       : {', '.join(p['columns_not_loaded'])} (generated)")
+    if p.get("schema_copy"):
+        print(f"schema           : {p['schema_copy']}")
     print(f"migration type   : {p['migration_type']}"
           + ("  (OVERRIDES the Phase 1 declaration of "
              f"{p['migration_type_declared_in_phase_1']})"
@@ -622,7 +759,7 @@ def main(argv: list[str] | None = None) -> int:
     # BLOCKED without the counts -- so --execute without --pg-dsn cannot
     # proceed. Said here, before anything is created, rather than as a
     # preflight refusal after the plan has been printed.
-    if args.execute and not args.pg_dsn:
+    if args.execute and not (args.pg_dsn or args.target_dsn):
         print("\n--execute needs --pg-dsn: DMS creates no tables "
               "(TargetTablePrepMode is DO_NOTHING), so the preflight must read the "
               "target's tables and row counts before a load may start. Nothing was created.")
@@ -632,10 +769,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nrefusing --source-host {args.source_host!r}: that address means the\n"
               "  replication instance itself, not your database. Nothing was created.")
         return 2
-    source = {"engine": "oracle", "host": args.source_host, "port": args.source_port,
-              "user": args.source_user or p["estate"],
-              "password": os.environ.get("DBSHIFT_SOURCE_OWNER_PASSWORD", ""),
-              "database": args.source_database}
+    if p["source_engine"] == "MYSQL":
+        source = {"engine": "mysql", "host": args.source_host,
+                  "port": args.source_port or 3306,
+                  "user": args.source_user or "dbmig_collector",
+                  "password": os.environ.get("DBSHIFT_SOURCE_PASSWORD", ""),
+                  "database": None, "ssl_mode": policy.MYSQL_SSL_MODE}
+    else:
+        source = {"engine": "oracle", "host": args.source_host, "port": args.source_port or 1521,
+                  "user": args.source_user or p["estate"],
+                  "password": os.environ.get("DBSHIFT_SOURCE_OWNER_PASSWORD", ""),
+                  "database": args.source_database or "XEPDB1"}
     target = target_from_deployment(session)
     if not target:
         print("\nno provisioned target: run Phase 6 first. Nothing was created.")
@@ -646,7 +790,9 @@ def main(argv: list[str] | None = None) -> int:
               "Nothing was created.")
         return 2
     if not source["password"] or not target["password"]:
-        print("\nset DBSHIFT_SOURCE_OWNER_PASSWORD and DBSHIFT_PG_PASSWORD. Nothing was created.")
+        print("\nset the source password (DBSHIFT_SOURCE_OWNER_PASSWORD for Oracle, "
+              "DBSHIFT_SOURCE_PASSWORD for MySQL) and the target's (read from SSM, or "
+              "DBSHIFT_PG_PASSWORD / DBSHIFT_TARGET_PASSWORD). Nothing was created.")
         return 2
 
     # The counts read above, forwarded. `execute()` refuses on any BLOCKED
@@ -654,8 +800,15 @@ def main(argv: list[str] | None = None) -> int:
     # absent -- so not passing them here made execution impossible rather than
     # merely unverified. The guardrail caught it on the first real attempt:
     # "preflight refused: target_has_tables, target_empty", nothing created.
+    # The group Phase 6's stack made for the replication instance and already
+    # admits on the target's listener. The console passed it; the CLI did not,
+    # so a CLI run made its own group and the target endpoint test timed out.
+    deployed_path = prov_run.OUTPUT / "deployed.json"
+    dms_group_id = (json.loads(deployed_path.read_text(encoding="utf-8")).get("outputs") or {}
+                    ).get("DmsSecurityGroupId") if deployed_path.exists() else None
     rec = execute(session, confirm_account=args.confirm, migration_type=args.migration_type,
                   source=source, target=target, target_counts=target_counts,
+                  dms_group_id=dms_group_id,
                   on_event=lambda e: print("  " + (e.get("detail") or e.get("message") or "")))
     print(f"\nstatus: {rec['status']}")
     print(f"record: {RECORD}")

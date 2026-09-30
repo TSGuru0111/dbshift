@@ -90,6 +90,20 @@ TTL_HOURS = 8
 TARGET_SSL_MODE = "require"
 SOURCE_SSL_MODE = "none"
 
+# MySQL endpoints take none / verify-ca / verify-full -- there is no `require`,
+# and create-endpoint rejects it. RDS for MySQL 8.4 does not force TLS
+# (require_secure_transport is off by default, unlike Aurora MySQL 8.4), and the
+# replication instance reaches both the EC2 source and the RDS target inside the
+# VPC, so `none` is what works without distributing a CA bundle. `verify-full`
+# with the RDS bundle imported is the production setting.
+MYSQL_SSL_MODE = "none"
+
+# A MySQL target during the full load. AWS's own prerequisite: foreign keys are
+# checked row by row otherwise, and DMS's load order does not follow them, so a
+# child row arriving before its parent fails. The schema copy (dms/schema_mysql)
+# creates the keys before the load, so this is what lets them exist at all.
+MYSQL_TARGET_ATTRIBUTES = "Initstmt=SET FOREIGN_KEY_CHECKS=0;"
+
 # --- task settings -----------------------------------------------------------
 
 # DMS migration types, in its own vocabulary.

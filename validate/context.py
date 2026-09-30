@@ -43,7 +43,11 @@ class Options:
     # it decides how every comparison is built, because "the same data" is not
     # the same bytes across engines.
     target_engine: str = "ORACLE"
-    target_password: str | None = None     # PostgreSQL master password, memory only
+    # And which engine the source runs. From the collector run's manifest via
+    # the Phase 6 plan: a MySQL source is compared by validate/mysql.py, whose
+    # levels read information_schema instead of Oracle's dba_* views.
+    source_engine: str = "ORACLE"
+    target_password: str | None = None     # target master password, memory only
     # A PostgreSQL target that is not an RDS instance: host:port/dbname.
     #
     # Every path here otherwise reads the target's endpoint from RDS and the
@@ -145,6 +149,8 @@ class Ctx:
     def target(self):
         if self.cross_engine:
             return self._postgres_target()
+        if self.opts.target_engine == "MYSQL":
+            return self._mysql_target()
         if self._target is None:
             import oracledb
             pw = self.session.client("ssm", region_name=prov_policy.REGION).get_parameter(
@@ -201,11 +207,49 @@ class Ctx:
             # The same reason the Oracle side normalises: a session-level
             # format difference would make identical data hash differently.
             cur.execute("SET TIME ZONE 'UTC'")
-            cur.execute("SET extra_float_digits = 0")
+            # 0 matches Oracle's rendering of a float. MySQL renders the shortest
+            # exact form, which is PostgreSQL's at 1.
+            cur.execute("SET extra_float_digits = "
+                        + ("1" if self.opts.source_engine == "MYSQL" else "0"))
             cur.close()
         return self._target
 
+    def _mysql_target(self):
+        """RDS for MySQL: the master login, from SSM unless given."""
+        if self._target is None:
+            out = self.state["outputs"]
+            pw = self.opts.target_password
+            if not pw:
+                pw = self.session.client("ssm", region_name=prov_policy.REGION).get_parameter(
+                    Name=self.plan["rendered"]["password_parameter"],
+                    WithDecryption=True)["Parameter"]["Value"]
+            self._target = self._mysql_connect(out["Endpoint"], int(out["Port"]),
+                                               self.opts.target_user or prov_policy.MYSQL_MASTER_USERNAME,
+                                               pw)
+        return self._target
+
+    @staticmethod
+    def _mysql_connect(host, port, user, password):
+        import pymysql
+        conn = pymysql.connect(host=host, port=int(port), user=user, password=password,
+                               charset="utf8mb4", connect_timeout=20, read_timeout=3600)
+        cur = conn.cursor()
+        # TIMESTAMP renders in the session zone: UTC on both sides, or equal
+        # instants hash differently. information_schema's counters are cached
+        # statistics by default; 0 reads the live AUTO_INCREMENT value.
+        cur.execute("SET time_zone = '+00:00'")
+        cur.execute("SET SESSION information_schema_stats_expiry = 0")
+        cur.execute("SET NAMES utf8mb4")
+        cur.close()
+        return conn
+
     def source(self):
+        if self._source is None and self.opts.source_engine == "MYSQL":
+            if not self.opts.collector_password:
+                raise RuntimeError("the read-only collector login is needed to read the source")
+            host, port = self.opts.source_dsn.split("/")[0].split(":")
+            self._source = self._mysql_connect(host, int(port), self.opts.collector_user,
+                                               self.opts.collector_password)
         if self._source is None:
             import oracledb
             if not self.opts.collector_password:
@@ -227,7 +271,13 @@ class Ctx:
         if not quiet:
             self.log("SQL> " + " ".join(sql.split())[:400])
         cur = conn.cursor()
-        cur.execute(sql, binds or {})
+        # No binds means no parameter argument at all: pymysql interpolates `%`
+        # whenever one is passed, even an empty one, and DATE_FORMAT('%Y') then
+        # fails as a bad format string.
+        if binds:
+            cur.execute(sql, binds)
+        else:
+            cur.execute(sql)
         return cur.fetchall()
 
     def one(self, conn, sql: str, binds: dict | None = None, *, quiet: bool = True):
@@ -245,7 +295,7 @@ class Ctx:
         """
         if target_sql is None and self.cross_engine:
             raise ValueError(
-                "a cross-engine comparison needs target_sql: Oracle SQL cannot be sent to "
+                "a cross-engine comparison needs target_sql: source SQL cannot be sent to "
                 "PostgreSQL, and a syntax error there is not evidence about the data")
         out = []
         for conn, text in ((self.source, sql), (self.target, target_sql or sql)):

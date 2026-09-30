@@ -33,8 +33,17 @@ def _a(res, action, why):
     return {**res, "action": action, "why": why}
 
 
+# A source host holds the estate being migrated -- it is the system of record
+# for the migration, not an artefact of it. Terminating one destroys the data the
+# next run reads (on 2026-09-30 a --destroy would have terminated both
+# dbshift-source-oracle and dbshift-source-mysql). Destroy STOPS it instead, which
+# ends compute billing, unless include_source_hosts says otherwise.
+SOURCE_HOST_PREFIX = "dbshift-source-"
+
+
 def decide(found: list[dict], mode: str, *, include_snapshots: bool = False,
-           force_deletion_protection: bool = False) -> list[dict]:
+           force_deletion_protection: bool = False,
+           include_source_hosts: bool = False) -> list[dict]:
     if mode not in ("stop", "destroy"):
         raise ValueError("mode must be 'stop' or 'destroy'")
 
@@ -56,6 +65,14 @@ def decide(found: list[dict], mode: str, *, include_snapshots: bool = False,
             elif kind == "rds_instance" and status == "stopped":
                 plan.append(_a(r, LEAVE, "already stopped -- but it restarts itself 7 days after "
                                          "it was stopped"))
+            elif kind == "ec2_instance" and status in ("running", "pending"):
+                # Unlike RDS, a stopped EC2 instance stays stopped -- there is no
+                # 7-day auto-restart to warn about. The root volume still bills.
+                plan.append(_a(r, STOP, "stops compute billing; the EBS volume still bills, "
+                                        "and unlike RDS it will not restart itself"))
+            elif kind == "ec2_instance" and status == "stopped":
+                plan.append(_a(r, LEAVE, "already stopped -- its EBS volume still bills, "
+                                         "so destroy it to stop paying entirely"))
             elif kind in ("dms_replication_instance", "nat_gateway", "s3_bucket"):
                 plan.append(_a(r, LEAVE, "cannot be stopped, only deleted -- use destroy"))
             else:
@@ -72,6 +89,28 @@ def decide(found: list[dict], mode: str, *, include_snapshots: bool = False,
             plan.append(_a(r, EMPTY, f"emptied first so its stack {r['stack']} can delete it"))
         elif r.get("stack") in live_stacks:
             plan.append(_a(r, LEAVE, f"deleted with its stack {r['stack']}"))
+        elif kind == "ec2_instance" and status in ("shutting-down", "terminated"):
+            plan.append(_a(r, LEAVE, "already terminating"))
+
+        elif (kind == "ec2_instance" and not include_source_hosts
+              and (r.get("name") or "").lower().startswith(SOURCE_HOST_PREFIX)):
+            if status in ("running", "pending"):
+                plan.append(_a(r, STOP, "a source host holds the estate being migrated, so it is "
+                                        "stopped, not terminated -- compute billing ends, the data "
+                                        "stays (include_source_hosts to terminate)"))
+            else:
+                plan.append(_a(r, LEAVE, "a source host, already stopped; kept because it holds "
+                                         "the estate (include_source_hosts to terminate)"))
+
+        elif kind == "ec2_instance":
+            # Terminating takes the root volume with it, because every instance
+            # this project creates sets DeleteOnTermination -- see
+            # scripts/mysql-source/EC2-HOST.md. An instance created by hand
+            # without it would leave an orphaned volume, which the scan would not
+            # report; that is a known limit rather than a silent one.
+            plan.append(_a(r, DELETE, "terminates the instance and, with "
+                                      "DeleteOnTermination set, its root volume"))
+
         elif kind == "rds_snapshot" and not include_snapshots:
             plan.append(_a(r, LEAVE, "kept -- a snapshot is a backup and deleting it is permanent; "
                                      "storage bills while it exists (include_snapshots to delete)"))
@@ -109,7 +148,16 @@ def _do(step: dict, clients: dict) -> None:
             clients["s3"].delete_bucket(Bucket=rid)
         return
     if step["action"] == STOP:
-        clients["rds"].stop_db_instance(DBInstanceIdentifier=rid)
+        # Dispatch on KIND, not just on the action. This branch used to call
+        # rds.stop_db_instance for any STOP, which was correct while RDS was the
+        # only stoppable thing -- and would have stopped an EC2 instance by
+        # calling the wrong API entirely once `ec2_instance` was added
+        # (2026-09-29). The failure would have been an RDS "DBInstance not found"
+        # naming an EC2 instance id, which is a confusing way to learn this.
+        if kind == "ec2_instance":
+            clients["ec2"].stop_instances(InstanceIds=[rid])
+        else:
+            clients["rds"].stop_db_instance(DBInstanceIdentifier=rid)
         return
     if kind == "cloudformation_stack":
         # Phase 7 grants the replication instance's security group on the
@@ -140,6 +188,10 @@ def _do(step: dict, clients: dict) -> None:
         # task in 'deleting' just as much as to a running one.
         _delete_tasks_on(clients["dms"], step["arn"])
         clients["dms"].delete_replication_instance(ReplicationInstanceArn=step["arn"])
+    elif kind == "ec2_instance":
+        # STOP already returned above; reaching here means DELETE.
+        clients["ec2"].terminate_instances(InstanceIds=[rid])
+
     elif kind == "nat_gateway":
         clients["ec2"].delete_nat_gateway(NatGatewayId=rid)
     else:

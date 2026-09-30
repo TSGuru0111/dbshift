@@ -42,7 +42,15 @@ def _c(name, status, detail, remedy=None, **extra):
 
 
 def records_consistent(records: dict) -> dict:
-    ids = {k: (v or {}).get("collector_run_id") for k, v in records.items() if v}
+    # Same run is not enough: the SCT gate and plan are judged for a target, and
+    # DMS must not load a PostgreSQL target on the strength of a MySQL-target gate.
+    from provision.records import target_mismatches
+    wrong = target_mismatches(records)
+    if wrong:
+        return _c("records_consistent", FAIL, "; ".join(wrong),
+                  "Re-run the SCT gate and plan for the target Phase 3 chose.")
+    ids = {k: (v or {}).get("collector_run_id") for k, v in records.items()
+           if v and not k.startswith("_")}
     distinct = {v for v in ids.values() if v}
     if len(distinct) > 1:
         return _c("records_consistent", FAIL,
@@ -54,6 +62,51 @@ def records_consistent(records: dict) -> dict:
                   "Run discovery first.")
     return _c("records_consistent", PASS,
               f"every record comes from collector run {distinct.pop()}")
+
+
+def zero_dates(rows: list[dict], target_engine: str, decided: dict | None = None) -> dict:
+    """MySQL zero dates ('0000-00-00', or a zero month or day), counted by discovery.
+
+    On PostgreSQL there is no such date. In a nullable column it arrives as
+    NULL, which is data loss Phase 8 then reports; in a NOT NULL column there is
+    nothing it can become, and DMS suspends the whole table partway through a
+    load that bills by the hour. Found on the local rehearsal of DBMIG_MYSQL_APP,
+    2026-09-30: contract_term's NOT NULL date columns stopped the load.
+    """
+    rows = [r for r in rows or [] if (r.get("zero_date_count") or 0) + (r.get("zero_in_date_count") or 0)]
+    if not rows:
+        return _c("zero_dates", PASS, "no zero dates in the source's date columns")
+    listed = ", ".join(f"{r['table_name']}.{r['column_name']} "
+                       f"({(r.get('zero_date_count') or 0) + (r.get('zero_in_date_count') or 0)}"
+                       f"{', NOT NULL' if str(r.get('nullable')).upper() in ('NO', 'N') else ''})"
+                       for r in rows)
+    fix = ("Correct them on the source before the load -- a real date, or NULL after making "
+           "the column nullable -- and re-run discovery. Which date is right is the data "
+           "owner's decision, not this tool's.")
+    if target_engine == "POSTGRESQL":
+        # A column a person decided to make nullable (convert/decisions.py) no
+        # longer stops the load; it becomes reported loss instead.
+        blocking = [r for r in rows if str(r.get("nullable")).upper() in ("NO", "N")
+                    and f"{r['table_name']}.{r['column_name']}" not in (decided or {})]
+        covered = [k for k in (decided or {})]
+        if not blocking and covered:
+            who = next(iter(decided.values()))["decided_by"]
+            return _c("zero_dates", WARN,
+                      f"zero dates arrive as NULL in {', '.join(sorted(covered))}, made nullable on the "
+                      f"target by decision of {who}. That is data loss, and Phase 8 reports it.",
+                      "Recorded in convert/output/decisions.json; to undo, correct the source rows "
+                      "instead and re-run discovery.")
+        if blocking:
+            return _c("zero_dates", FAIL,
+                      f"zero dates PostgreSQL cannot store, in NOT NULL columns: {listed}. "
+                      "The load of those tables cannot finish.", fix)
+        return _c("zero_dates", WARN,
+                  f"zero dates arrive as NULL: {listed}. That is data loss, and Phase 8 reports "
+                  "it as a mismatch.", fix)
+    return _c("zero_dates", WARN,
+              f"zero dates on the source: {listed}. The target carries the source's sql_mode, "
+              "which refuses them for new writes (NO_ZERO_DATE, strict), so a load session that "
+              "does not relax it rejects these rows.", fix)
 
 
 def gate_allows(gate: dict, migration_type: str) -> dict:
@@ -135,7 +188,8 @@ def cdc_possible(facts: dict, findings: list[dict], migration_type: str) -> list
     return checks
 
 
-def target_has_the_tables(counts: dict | None, include: list[str] | None) -> dict:
+def target_has_the_tables(counts: dict | None, include: list[str] | None,
+                          renamed: dict | None = None) -> dict:
     """Every table DMS is about to load exists on the target, under the right name.
 
     `TargetTablePrepMode` is DO_NOTHING, so DMS creates nothing: the tables must
@@ -175,7 +229,10 @@ def target_has_the_tables(counts: dict | None, include: list[str] | None) -> dic
     from validate import crossengine
 
     present = {str(t).lower() for t in counts}
-    wanted = {crossengine.target_name(t): t for t in include}
+    # `renamed` is what the DMS mapping renames a table to (Phase 4c's name for a
+    # PostgreSQL keyword -- `order` is `order_tbl`). Checking the source name
+    # reported a table missing that was sitting there under the name DMS writes to.
+    wanted = {(renamed or {}).get(t) or crossengine.target_name(t): t for t in include}
     missing = sorted(src for pg, src in wanted.items() if pg not in present)
 
     if missing:

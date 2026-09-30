@@ -53,6 +53,10 @@ def lookup(price_file: Path, *, region: str, engine: str, licence: str, instance
         if engine == "postgres":
             matches_engine = (a.get("databaseEngine") == "PostgreSQL"
                               and not a.get("databaseEdition"))
+        elif engine == "mysql":
+            # Same shape as PostgreSQL: no edition, "No license required".
+            matches_engine = (a.get("databaseEngine") == "MySQL"
+                              and not a.get("databaseEdition"))
         else:
             matches_engine = (a.get("databaseEngine") == "Oracle"
                               and a.get("databaseEdition") == EDITION[engine]
@@ -61,7 +65,7 @@ def lookup(price_file: Path, *, region: str, engine: str, licence: str, instance
                 and a.get("instanceType") == instance_class and matches_engine):
             instance += [{**x, "sku": sku, "operation": a.get("operation")} for x in _on_demand(terms, sku)]
         elif (p.get("productFamily") == "Database Storage" and a.get("volumeType") == VOLUME[storage_type]
-              and a.get("databaseEngine") in ("Oracle", "PostgreSQL", "Any")):
+              and a.get("databaseEngine") in ("Oracle", "PostgreSQL", "MySQL", "Any")):
             storage += [{**x, "sku": sku, "operation": a.get("operation")} for x in _on_demand(terms, sku)]
 
     # Storage is listed once per engine code. Keep the line for the same engine

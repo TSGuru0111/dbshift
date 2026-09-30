@@ -71,6 +71,24 @@ def _stub_scan(stubs):
         {"ReplicationInstanceIdentifier": "dbshift-repl", "ReplicationInstanceStatus": "available",
          "ReplicationInstanceClass": "dms.t3.micro", "ReplicationInstanceArn": REPL_ARN},
     ]})
+    # Three instances, covering what the EC2 branch has to get right: one of ours
+    # running (billable), one of ours stopped (not billable for compute, but its
+    # volume still bills), and one belonging to another team on this shared
+    # account -- which must be REPORTED and never acted on.
+    stubs["ec2"].add_response("describe_instances", {"Reservations": [
+        {"Instances": [
+            {"InstanceId": "i-0bd32544c1577b5ed", "InstanceType": "t3.medium",
+             "State": {"Name": "running"},
+             "Tags": [{"Key": "Name", "Value": "dbshift-source-mysql"},
+                      {"Key": "Purpose", "Value": "DMA"}]},
+            {"InstanceId": "i-07b0d1acfe31edc1a", "InstanceType": "t3.large",
+             "State": {"Name": "stopped"},
+             "Tags": [{"Key": "Name", "Value": "dbshift-source-oracle"}]},
+            {"InstanceId": "i-05396917d05279fa1", "InstanceType": "m5.large",
+             "State": {"Name": "running"},
+             "Tags": [{"Key": "Name", "Value": "LHW-test"}]},
+        ]},
+    ]}, None)
     stubs["ec2"].add_response("describe_nat_gateways", {"NatGateways": []}, None)
     stubs["s3"].add_response("list_buckets", {"Buckets": [
         {"Name": "dbshift-target-exchange", "CreationDate": NOW},
@@ -122,11 +140,15 @@ def main() -> int:
             failures.append(label)
 
     print("scan")
-    found, _, _ = _run("stop", [
+    found, stop_plan, _ = _run("stop", [
         ("rds", "stop_db_instance", {"DBInstanceIdentifier": "dbshift-target-db"}),
         ("rds", "stop_db_instance", {"DBInstanceIdentifier": "dbshift-orphan-db"}),
         ("rds", "stop_db_instance", {"DBInstanceIdentifier": "dbshift-guarded-db"}),
         ("rds", "stop_db_instance", {"DBInstanceIdentifier": "tagged-db"}),
+        # Our running EC2 instance. Declared here so the Stubber FAILS if the
+        # kill switch calls the wrong API for it -- which it would have, before
+        # `_do` learned to dispatch STOP on kind rather than assuming RDS.
+        ("ec2", "stop_instances", {"InstanceIds": ["i-0bd32544c1577b5ed"]}),
     ])
     ids = {r["id"]: r for r in found}
     check("deleted stack is not reported", "dbshift-old" not in ids)
@@ -136,6 +158,16 @@ def main() -> int:
 
     print("stop  -- the stub raises if finance-prod-db is ever stopped")
     check("four of ours stopped, foreign untouched (enforced by stub)", True)
+
+    stop_by = {p["id"]: p for p in stop_plan}
+    check("stop: our running EC2 instance is stopped, via the EC2 API and not RDS's",
+          stop_by["i-0bd32544c1577b5ed"]["action"] == actions.STOP)
+    check("stop: an already-stopped EC2 instance is left, and the reason says its "
+          "volume still bills",
+          stop_by["i-07b0d1acfe31edc1a"]["action"] == actions.LEAVE
+          and "volume still bills" in stop_by["i-07b0d1acfe31edc1a"]["why"])
+    check("stop: another team's instance is never touched",
+          stop_by["i-05396917d05279fa1"]["action"] == actions.LEAVE)
 
     check("foreign bucket found but marked NOT ours", ids["finance-reports"]["ours"] is False)
 
@@ -153,6 +185,9 @@ def main() -> int:
          {"Filters": [{"Name": "replication-instance-arn", "Values": [REPL_ARN]}],
           "WithoutSettings": True}, {"ReplicationTasks": []}),
         ("dms", "delete_replication_instance", {"ReplicationInstanceArn": REPL_ARN}),
+        # Source hosts are STOPPED, never terminated, by a plain destroy: they
+        # hold the estate being migrated (2026-09-30).
+        ("ec2", "stop_instances", {"InstanceIds": ["i-0bd32544c1577b5ed"]}),
     ])
     by = {p["id"]: p for p in plan}
     check("stack-owned instance left for its stack to delete",
@@ -168,6 +203,13 @@ def main() -> int:
           [r["id"] for r in results].index("dbshift-target-exchange")
           < [r["id"] for r in results].index("dbshift-target"))
     check("foreign bucket left", by["finance-reports"]["action"] == actions.LEAVE)
+    check("a running SOURCE host is stopped, not terminated -- it holds the estate",
+          by["i-0bd32544c1577b5ed"]["action"] == actions.STOP)
+    check("a stopped source host is left, with the reason",
+          by["i-07b0d1acfe31edc1a"]["action"] == actions.LEAVE
+          and "source host" in by["i-07b0d1acfe31edc1a"]["why"])
+    check("another team's running instance is LEFT ALONE on this shared account",
+          by["i-05396917d05279fa1"]["action"] == actions.LEAVE)
     check("every requested action succeeded", all(r["outcome"] == "requested" for r in results))
 
     print("destroy --include-snapshots --force-deletion-protection")
@@ -189,7 +231,12 @@ def main() -> int:
          {"Filters": [{"Name": "replication-instance-arn", "Values": [REPL_ARN]}],
           "WithoutSettings": True}, {"ReplicationTasks": []}),
         ("dms", "delete_replication_instance", {"ReplicationInstanceArn": REPL_ARN}),
-    ], include_snapshots=True, force_deletion_protection=True)
+        ("ec2", "terminate_instances", {"InstanceIds": ["i-0bd32544c1577b5ed"]}),
+        ("ec2", "terminate_instances", {"InstanceIds": ["i-07b0d1acfe31edc1a"]}),
+    ], include_snapshots=True, force_deletion_protection=True, include_source_hosts=True)
+    check("include_source_hosts terminates the source hosts, running and stopped",
+          {p["id"]: p for p in plan}["i-0bd32544c1577b5ed"]["action"] == actions.DELETE
+          and {p["id"]: p for p in plan}["i-07b0d1acfe31edc1a"]["action"] == actions.DELETE)
     check("with both overrides, foreign still left",
           {p["id"]: p for p in plan}["finance-prod-db"]["action"] == actions.LEAVE)
 

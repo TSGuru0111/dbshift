@@ -178,8 +178,42 @@ def create_instance(dms, ec2, *, estate: str, run_id: str, emit,
     existing = [i for i in dms.describe_replication_instances()["ReplicationInstances"]
                 if i["ReplicationInstanceIdentifier"] == name]
     if existing:
+        ri = existing[0]
+        groups = [g["VpcSecurityGroupId"] for g in ri.get("VpcSecurityGroups", [])]
+        active_now = {g["VpcSecurityGroupId"] for g in ri.get("VpcSecurityGroups", [])
+                      if g.get("Status") == "active"}
+        if dms_group_id and (dms_group_id not in active_now
+                             or ri["ReplicationInstanceStatus"] != "available"):
+            # Reused, but outside the group the target trusts: Phase 6's stack
+            # admits `DmsSecurityGroupId` on the listener, and an instance made
+            # without it (the CLI did not pass it before 2026-09-30) times out on
+            # the target endpoint test -- "ODBC timeout expired", which reads as
+            # a network fault rather than a missing group membership.
+            emit({"event": "step",
+                  "detail": f"{name} already exists but is not in the target's trusted group "
+                            f"{dms_group_id}; adding it"})
+            if dms_group_id not in groups:
+                dms.modify_replication_instance(
+                    ReplicationInstanceArn=ri["ReplicationInstanceArn"],
+                    VpcSecurityGroupIds=groups + [dms_group_id], ApplyImmediately=True)
+            # Not wait_for_instance: the status stays "available" for a few
+            # seconds before it turns "modifying", so that returned at once and
+            # the endpoint test then hit "instance is not Active". Done means the
+            # group is listed as active AND the instance is available.
+            deadline = time.time() + 20 * 60
+            while time.time() < deadline:
+                time.sleep(15)
+                cur = dms.describe_replication_instances(Filters=[{
+                    "Name": "replication-instance-arn",
+                    "Values": [ri["ReplicationInstanceArn"]]}])["ReplicationInstances"][0]
+                active = {g["VpcSecurityGroupId"] for g in cur.get("VpcSecurityGroups", [])
+                          if g.get("Status") == "active"}
+                if dms_group_id in active and cur["ReplicationInstanceStatus"] == "available":
+                    emit({"event": "step", "detail": f"{name} is in {dms_group_id} and available"})
+                    return cur
+            raise DmsError(f"{name} did not join {dms_group_id} within 20 minutes")
         emit({"event": "step", "detail": f"{name} already exists; reusing it"})
-        return existing[0]
+        return ri
 
     emit({"event": "step",
           "detail": f"creating {name} ({klass}, {policy.STORAGE_GB} GB) -- "
@@ -254,7 +288,7 @@ def create_endpoints(dms, *, estate: str, run_id: str, source: dict, target: dic
             drift = {k: (e.get(a), v) for k, a, v in (
                 ("host", "ServerName", spec["host"]),
                 ("port", "Port", int(spec["port"])),
-                ("database", "DatabaseName", spec["database"]),
+                ("database", "DatabaseName", spec.get("database")),
                 ("user", "Username", spec["user"]),
                 ("settings", "ExtraConnectionAttributes", spec.get("extra_settings") or None),
             ) if (e.get(a) or None) != v}
@@ -264,7 +298,8 @@ def create_endpoints(dms, *, estate: str, run_id: str, source: dict, target: dic
                                 + ", ".join(f"{k} {was} -> {now}" for k, (was, now) in drift.items())})
                 e = dms.modify_endpoint(
                     EndpointArn=e["EndpointArn"], ServerName=spec["host"], Port=int(spec["port"]),
-                    DatabaseName=spec["database"], Username=spec["user"],
+                    **({"DatabaseName": spec["database"]} if spec.get("database") else {}),
+                    Username=spec["user"],
                     Password=spec["password"],
                     **({"ExtraConnectionAttributes": spec["extra_settings"]}
                        if spec.get("extra_settings") else {}))["Endpoint"]
@@ -288,7 +323,11 @@ def create_endpoints(dms, *, estate: str, run_id: str, source: dict, target: dic
             Port=int(spec["port"]),
             Username=spec["user"],
             Password=spec["password"],
-            DatabaseName=spec["database"],
+            # A MySQL endpoint names no database: the source is read schema by
+            # schema from the table mappings, and the target writes each schema
+            # to the database of the same name (TargetDbType MULTIPLE_DATABASES),
+            # which the schema copy has already created.
+            **({"DatabaseName": spec["database"]} if spec.get("database") else {}),
             SslMode=ssl_mode,
             Tags=_tags(estate, run_id, expiry()),
         )

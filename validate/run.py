@@ -143,7 +143,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="DBShift Phase 8 -- validate. Read-only.")
     ap.add_argument("--no-checksum", action="store_true", help="skip level 4")
     ap.add_argument("--profile", default=provision_run.DEFAULT_PROFILE)
-    ap.add_argument("--target-engine", default="oracle", choices=["oracle", "postgresql"],
+    ap.add_argument("--source-engine", default=None, choices=["oracle", "mysql"],
+                    help="default: what the Phase 6 plan's source facts record")
+    ap.add_argument("--target-engine", default="oracle", choices=["oracle", "postgresql", "mysql"],
                     help="which engine the target runs. Must match the Phase 3 decision: it "
                          "decides how every comparison is built.")
     # A PostgreSQL target that is not an RDS instance. For a demo or a
@@ -168,12 +170,19 @@ def main(argv: list[str] | None = None) -> int:
                  "cannot say what it is comparing")
 
     import boto3
+    source_engine = (args.source_engine or ((C.load_plan().get("source") or {})
+                                            .get("source_engine")) or "ORACLE").upper()
+    mysql = source_engine == "MYSQL"
     opts = C.Options(collector_password=os.environ.get("DBSHIFT_COLLECTOR_PASSWORD"),
                      collector_user=os.environ.get("DBSHIFT_COLLECTOR_USER", "dbmig_collector"),
-                     source_dsn=os.environ.get("DBSHIFT_DSN", "localhost:1521/XEPDB1"),
+                     source_dsn=os.environ.get("DBSHIFT_DSN",
+                                               "3.108.190.1:3306" if mysql else "localhost:1521/XEPDB1"),
                      checksum=not args.no_checksum,
+                     source_engine=source_engine,
                      target_engine=args.target_engine.upper(),
-                     target_password=os.environ.get("DBSHIFT_PG_PASSWORD"),
+                     target_password=(os.environ.get("DBSHIFT_TARGET_PASSWORD")
+                                      if args.target_engine == "mysql"
+                                      else os.environ.get("DBSHIFT_PG_PASSWORD")),
                      target_dsn=args.target_dsn,
                      target_estate=args.target_estate,
                      target_run_id=args.target_run,

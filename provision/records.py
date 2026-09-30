@@ -112,6 +112,16 @@ def consistency(records: dict) -> dict:
     sct = (records.get("_source") or {}).get("sct") or []
     via = f" (via AWS SCT: {', '.join(sct)})" if sct else ""
     distinct = set(ids.values())
+    # Same estate is not enough: the SCT gate and plan are judged FOR A TARGET.
+    # A gate for RDS for MySQL beside a sizing that chose PostgreSQL shares the
+    # collector run and still describes a different migration -- found
+    # 2026-09-30, when Phase 6 rendered a PostgreSQL target on a MySQL-target gate.
+    wrong = target_mismatches(records)
+    if wrong:
+        return {"name": "records_consistent", "status": "fail",
+                "detail": "; ".join(wrong) + via,
+                "remedy": "Re-run the SCT gate and plan for the target Phase 3 chose "
+                          "(blocker.sct_run --target ..., or the console's Gate for that path)."}
     if len(distinct) == 1 and None not in distinct:
         return {"name": "records_consistent", "status": "pass",
                 "detail": f"all four records come from collector run {ids['assessment']}{via}",
@@ -125,12 +135,53 @@ def consistency(records: dict) -> dict:
     }
 
 
-def estate_of(assessment: dict) -> str:
-    """The schema the findings are about -- read from the data, never assumed."""
+# Which SCT target ids belong to which Phase 3 engine.
+_TARGET_ENGINE = {"rds-oracle": "ORACLE", "rds-postgresql": "POSTGRESQL",
+                  "aurora-postgresql": "POSTGRESQL", "rds-mysql": "MYSQL",
+                  "aurora-mysql": "MYSQL"}
+
+
+def target_mismatches(records: dict) -> list[str]:
+    """Records judged for a different target than the one Phase 3 chose."""
+    engine = ((records.get("sizing") or {}).get("decision") or {}).get("engine") or "ORACLE"
+    out = []
+    for name in ("gate", "remediation"):
+        tid = (records.get(name) or {}).get("target")
+        tid = tid.get("id") if isinstance(tid, dict) else tid
+        if not tid:
+            continue          # the 50-rule records carry no target
+        judged = _TARGET_ENGINE.get(str(tid).lower())
+        if judged and judged != engine.upper():
+            out.append(f"the {name} was judged for {tid}, but Phase 3 chose {engine}")
+    return out
+
+
+def estate_of(assessment: dict, collector_output: Path | None = None) -> str:
+    """The schema the findings are about -- read from the data, never assumed.
+
+    When there are no findings to read it from -- MySQL to RDS for MySQL, where
+    SCT has nothing to convert and reports zero items -- the collector run's own
+    manifest names the schema that was configured. One configured schema is an
+    answer; several are not, and the error says so rather than picking one.
+    """
     owners = Counter(f["owner"] for f in assessment["findings"] if f.get("owner"))
-    if not owners:
-        raise RecordError("the assessment names no owning schema; cannot name the target")
-    return owners.most_common(1)[0][0]
+    if owners:
+        return owners.most_common(1)[0][0]
+    run_id = assessment.get("collector_run_id")
+    if run_id:
+        manifest = (collector_output or COLLECTOR_OUTPUT) / run_id / "manifest.json"
+        try:
+            schemas = json.loads(manifest.read_text(encoding="utf-8")).get("schemas") or {}
+        except (OSError, ValueError):
+            schemas = {}
+        configured = (schemas.get("configured") or schemas.get("present") or []
+                      if isinstance(schemas, dict) else list(schemas))
+        if len(configured) == 1:
+            return configured[0]
+        if configured:
+            raise RecordError(f"the assessment names no owning schema and discovery configured "
+                              f"{len(configured)} ({', '.join(configured)}); name one")
+    raise RecordError("the assessment names no owning schema; cannot name the target")
 
 
 def _dataset(run_id: str, name: str, collector_output: Path = COLLECTOR_OUTPUT) -> list[dict]:
@@ -143,7 +194,21 @@ def _dataset(run_id: str, name: str, collector_output: Path = COLLECTOR_OUTPUT) 
 def source_facts(run_id: str, collector_output: Path = COLLECTOR_OUTPUT) -> dict:
     nls = {r["parameter"]: r["value"] for r in _dataset(run_id, "nls_parameters", collector_output)}
     db = (_dataset(run_id, "database", collector_output) or [{}])[0]
+    try:
+        manifest = json.loads((collector_output / run_id / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        manifest = {}
+    source_engine = str((manifest.get("source") or {}).get("source_engine") or "ORACLE").upper()
+    mysql_parameters = {}
+    if source_engine == "MYSQL":
+        from . import policy
+        wanted = set(policy.MYSQL_CARRIED) | set(policy.MYSQL_FORCED) | {"time_zone", "system_time_zone"}
+        mysql_parameters = {r["name"]: r.get("value")
+                            for r in _dataset(run_id, "parameters", collector_output)
+                            if r.get("name") in wanted}
     return {
+        "source_engine": source_engine,
+        "mysql_parameters": mysql_parameters,
         "nls_characterset": nls.get("NLS_CHARACTERSET"),
         "nls_nchar_characterset": nls.get("NLS_NCHAR_CHARACTERSET"),
         "version": db.get("version"),

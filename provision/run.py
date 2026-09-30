@@ -64,13 +64,16 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
 
     run_id = recs["sizing"]["collector_run_id"]
     facts = records.source_facts(run_id)
-    estate = records.estate_of(recs["assessment"])
+    estate = records.estate_of({**recs["assessment"],
+                                "collector_run_id": recs["assessment"].get("collector_run_id") or run_id})
     # stack name needs the engine, which is decided just below
     d = recs["sizing"]["decision"]
     # Phase 3 decides the path. On PostgreSQL there is no edition to map, so the
     # engine and licence come from policy directly rather than from an edition.
     if d.get("engine") == "POSTGRESQL":
         engine, licence = policy.PG_ENGINE, policy.PG_LICENCE
+    elif d.get("engine") == "MYSQL":
+        engine, licence = policy.MYSQL_ENGINE, policy.MYSQL_LICENCE
     else:
         engine, licence = policy.ENGINE[d["edition"]]
     stack = render.stack_name_for(estate, engine)
@@ -83,18 +86,25 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
     instance_class = (instance_override or {}).get("chosen") or d["instance_class"]
 
     checks.append(preflight.gate_allows(recs["gate"]))
-    checks.append(preflight.version_direction(facts, engine))
-    emit("gate", checks[-2]["detail"])
+    # On MySQL the direction depends on the major preflight resolves below, so
+    # it is judged after the AWS checks rather than against a policy constant.
+    if engine != policy.MYSQL_ENGINE:
+        checks.append(preflight.version_direction(facts, engine))
+    emit("gate", checks[1]["detail"])
 
     resolved = {}
     if session is not None:
         emit("aws", "read-only checks against the account")
         aws, resolved = preflight.aws_checks(session, engine=engine, licence=licence,
                                              instance_class=instance_class,
-                                             storage_type=d["storage_type"], stack_name=stack)
+                                             storage_type=d["storage_type"], stack_name=stack,
+                                             source_version=facts.get("version"))
         checks += aws
     else:
         checks.append(preflight._c("aws_identity", preflight.BLOCKED, "no AWS session supplied"))
+
+    if engine == policy.MYSQL_ENGINE:
+        checks.append(preflight.version_direction(facts, engine, resolved.get("engine_version")))
 
     ip = ({"name": "operator_ip", "status": preflight.PASS, "detail": "supplied", "cidr": operator_cidr}
           if operator_cidr else preflight.operator_cidr())
@@ -109,6 +119,9 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
                                  instance_override=instance_override,
                                  config_override=config_override)
         checks.append(preflight.validate_template(session, rendered["template"]))
+        if engine == policy.MYSQL_ENGINE and session is not None:
+            family = rendered["template"]["Resources"]["DbParameterGroup"]["Properties"]["Family"]
+            checks.append(preflight.mysql_parameters_valid(session, family, rendered["parameters"]))
 
     cost = None
     if price_file and rendered:
@@ -117,7 +130,7 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
                                 multi_az=(rendered or {}).get("multi_az", policy.MULTI_AZ))
         cost = {"prices": prices,
                 "estimate": pricing.estimate(prices, d["storage_gb"],
-                                             oracle=engine != policy.PG_ENGINE)}
+                                             oracle=engine.startswith("oracle"))}
     elif rendered:
         cost = {"prices": None, "estimate": None,
                 "unavailable": "No price file was supplied, so no estimate is shown. A deploy is "
@@ -129,7 +142,7 @@ def execute(*, session=None, price_file: Path | None = None, operator_cidr: str 
     # instance is a legitimate choice, and a phase that has not run warns
     # rather than failing.
     artefacts = prepared.load()
-    prepared_check = prepared.check(artefacts, estate)
+    prepared_check = prepared.check(artefacts, estate, d.get("engine"))
     checks.append(prepared_check)
     prepared_summary = prepared.summarise(artefacts, estate)
 

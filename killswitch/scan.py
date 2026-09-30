@@ -13,7 +13,7 @@ from __future__ import annotations
 PREFIX = "dbshift"
 
 KINDS = ("cloudformation_stack", "rds_instance", "rds_snapshot",
-         "dms_replication_instance", "nat_gateway", "s3_bucket")
+         "dms_replication_instance", "ec2_instance", "nat_gateway", "s3_bucket")
 
 
 def _tags(tag_list) -> dict:
@@ -79,6 +79,41 @@ def scan(clients: dict, region: str) -> list[dict]:
                 detail=ri.get("ReplicationInstanceClass", ""),
                 arn=ri.get("ReplicationInstanceArn"),
             ))
+
+    # EC2 instances. Added 2026-09-29 with `dbshift-source-mysql`.
+    #
+    # This scan had no EC2 branch because `ec2:RunInstances` was denied
+    # account-wide when the kill switch was written -- there could be no
+    # instance to find. That deny was lifted, a t3.medium now runs as the MySQL
+    # source, and a running instance this tool cannot see is precisely what its
+    # own docstring warns about: "a scan that hides a running instance is lying
+    # about the bill".
+    #
+    # `terminated` is excluded because a terminated instance costs nothing and
+    # lingers in the API for an hour; `stopped` is INCLUDED and marked not
+    # billable for compute, because its EBS volume still bills and an operator
+    # deciding what to destroy needs to see it.
+    for page in clients["ec2"].get_paginator("describe_instances").paginate(
+        Filters=[{"Name": "instance-state-name",
+                  "Values": ["pending", "running", "stopping", "stopped"]}]
+    ):
+        for res in page.get("Reservations", []):
+            for inst in res.get("Instances", []):
+                tags = _tags(inst.get("Tags"))
+                state = (inst.get("State") or {}).get("Name")
+                found.append(_item(
+                    "ec2_instance", inst["InstanceId"], state, region,
+                    ours=is_ours(tags.get("name"), tags),
+                    # Compute bills only while running; the root volume bills
+                    # either way, which the detail line says out loud.
+                    billable=state in ("pending", "running"),
+                    stack=tags.get("aws:cloudformation:stack-name"),
+                    name=tags.get("name"),
+                    detail=(f"{inst.get('InstanceType', '?')} "
+                            f"{tags.get('name') or '(unnamed)'}"
+                            + ("" if state in ("pending", "running")
+                               else " -- stopped, but its EBS volume still bills")),
+                ))
 
     nat = clients["ec2"].describe_nat_gateways(
         Filter=[{"Name": "state", "Values": ["pending", "available"]}])
