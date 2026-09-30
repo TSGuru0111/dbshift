@@ -55,13 +55,17 @@ def _plan(compiled=True, estate="DBMIG_APP"):
 class _Cur:
     """A cursor that records statements and can be told to fail on one."""
 
-    def __init__(self, fail_on=None, existing=()):
+    def __init__(self, fail_on=None, existing=(), keys=()):
         self.ran, self.fail_on, self.existing = [], fail_on, list(existing)
+        self.keys = list(keys)
 
     def execute(self, sql, params=None):
         self.ran.append(sql)
         if "information_schema.tables" in sql:
             self._rows = [(t,) for t in self.existing]
+            return
+        if "pg_constraint" in sql:
+            self._rows = [(k,) for k in self.keys]
             return
         if self.fail_on and self.fail_on in sql:
             raise Exception({"S": "ERROR", "C": "42P07",
@@ -72,8 +76,8 @@ class _Cur:
 
 
 class _Target:
-    def __init__(self, fail_on=None, existing=()):
-        self.cur = _Cur(fail_on, existing)
+    def __init__(self, fail_on=None, existing=(), keys=()):
+        self.cur = _Cur(fail_on, existing, keys)
         self.closed = 0
 
     def connect(self, *, timeout: int = 10):  # noqa: ARG002 -- signature parity with PgTarget
@@ -217,6 +221,25 @@ def main() -> int:
     c("it does not re-check for existing tables",
       not any("information_schema" in s for s in t3.cur.ran))
     c("it says the schema is complete", "complete" in r3["what_is_left"])
+
+    print("\na second post-load press")
+    # Found in the console on 2026-09-30: the repeat re-ran the renames first,
+    # failed "column does not exist", and its record replaced the success.
+    t4 = _Target(keys=("fk_loan_cust", "ix_loan"))
+    try:
+        ddl_apply.apply(p, t4, approved_by="dba@client.example", post_load=True)
+        c("a repeat after a full pass is refused", False, "it ran")
+    except ddl_apply.ApplyRefused as exc:
+        c("a repeat after a full pass is refused", "already been applied" in str(exc), str(exc))
+    c("nothing is run on a refused repeat", "BEGIN" not in t4.cur.ran, str(t4.cur.ran))
+    t5 = _Target(keys=("ix_loan",))
+    try:
+        ddl_apply.apply(p, t5, approved_by="dba@client.example", post_load=True)
+        c("a partly-applied pass is refused, naming what is there", False, "it ran")
+    except ddl_apply.ApplyRefused as exc:
+        c("a partly-applied pass is refused, naming what is there",
+          "1 of the 2" in str(exc) and "ix_loan" in str(exc), str(exc))
+    c("the index name is read", ddl_apply.index_name("CREATE UNIQUE INDEX Ix_A ON s.t (a)") == "ix_a")
 
     print(f"\n{c.ok}/{c.n} checks passed")
     return 0 if c.ok == c.n else 1

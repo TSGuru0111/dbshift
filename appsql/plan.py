@@ -110,7 +110,8 @@ def _status(conv: dict, found: list[dict], gate_results: list[dict]) -> str:
 
 def build(root: Path, model_mode: str = "off", target=None,
           comparisons: dict | None = None, approved_by: str | None = None,
-          client=None, ddl_plan: dict | None = None) -> dict:
+          client=None, ddl_plan: dict | None = None,
+          source_engine: str | None = None) -> dict:
     """Extract, convert and gate every statement under `root`.
 
     `comparisons` maps a statement id to a result comparison, when one is
@@ -125,6 +126,11 @@ def build(root: Path, model_mode: str = "off", target=None,
     `relation "customer" does not exist` says nothing about a rewrite.
     """
     extracted = extract.from_dir(root)
+    engine = classify.engine_of(source_engine)
+    # The engine rides on each statement, so every stage -- classify, the
+    # rules, the model prompt, the parity gate -- reads the same one.
+    for stmt in extracted["statements"]:
+        stmt["source_engine"] = engine
     comparisons = comparisons or {}
     entries: list[dict] = []
     shadow_state: dict | None = None
@@ -139,7 +145,7 @@ def build(root: Path, model_mode: str = "off", target=None,
 
     try:
         for stmt in extracted["statements"]:
-            found = classify.scan(stmt["sql"])
+            found = classify.scan(stmt["sql"], engine)
             conv = transform.transform(stmt, model_mode=model_mode, client=client)
             gate_results: list[dict] = []
             if conv.get("source"):
@@ -176,6 +182,7 @@ def build(root: Path, model_mode: str = "off", target=None,
     return {
         "phase": "4d",
         "name": "Application SQL",
+        "source_engine": engine,
         "generated_at": _now(),
         "root": str(root),
         "model_mode": model_mode,

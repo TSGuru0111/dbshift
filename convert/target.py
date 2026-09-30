@@ -112,7 +112,18 @@ def check_target(t: PgTarget) -> dict:
 
 # ---------------------------------------------------------------- shadow schema
 
-def _column_type(col: dict, owner: str, known_types: set[str]) -> tuple[str, str | None]:
+def _column_type(col: dict, owner: str, known_types: set[str],
+                 fk_columns: set[str] | None = None) -> tuple[str, str | None]:
+    if "extra" in col:
+        # A MySQL column (`extra` exists only in MySQL's catalogue; Oracle's
+        # dba_tab_cols has data_type_mod too, so that alone would misfire): its
+        # full declared type is in data_type_mod, and the
+        # Oracle branches below would read `BIGINT` as an unknown scalar.
+        from . import typemap_mysql
+        try:
+            return typemap_mysql.map_column(col, fk_columns=fk_columns)
+        except Unmappable as exc:
+            return "TEXT", f"{exc}; TEXT placeholder"
     dt = (col.get("data_type") or "").upper()
     if col.get("data_type_owner"):
         if col["data_type_owner"].upper() == owner.upper() and dt in known_types:
@@ -159,20 +170,28 @@ def shadow_statements(inv: dict, owner: str, tables: set[str], type_statements: 
     stmts = [f"CREATE SCHEMA IF NOT EXISTS {schema}"]
     stmts += type_statements
     notes: list[str] = []
+    mysql = (inv.get("source_engine") or "").upper() == "MYSQL"
+    fk_by_table: dict = {}
+    if mysql:
+        from . import ddl_mysql
+        fk_by_table = ddl_mysql._fk_columns(owner, inv.get("constraints") or [],
+                                            inv.get("constraint_columns") or [])
     for tbl in sorted(tables):
         cols = inventory.columns_of(inv, owner, tbl)
         if not cols:
             notes.append(f"{tbl}: no columns in discovery; not shadowed")
             continue
         defs = []
+        fk_cols = {n for t, ns in fk_by_table.items() if t.upper() == tbl.upper() for n in ns}
         for c in cols:
-            pg, note = _column_type(c, owner, known_types)
+            pg, note = _column_type(c, owner, known_types, fk_cols)
             # Only what a reader must know about the shadow: a column stood in
             # for by a placeholder. Routine type notes belong to the real
             # conversion, not to a compile scaffold that is rolled back.
             if note and "placeholder" in note:
                 notes.append(f"{tbl}.{c['column_name']}: {note}")
-            null = "" if (c.get("nullable") or "Y") == "Y" else " NOT NULL"
+            # Oracle says Y/N, MySQL YES/NO.
+            null = " NOT NULL" if str(c.get("nullable") or "Y").upper() in ("N", "NO") else ""
             defs.append(f"  {c['column_name'].lower()} {pg}{null}")
         stmts.append(f"CREATE TABLE {schema}.{tbl.lower()} (\n" + ",\n".join(defs) + "\n)")
     return stmts, notes

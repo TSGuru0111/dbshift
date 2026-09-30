@@ -52,9 +52,10 @@ def policy_check(conv: dict, obj: dict) -> dict:
     return _gate("policy", PASS, "only CREATEs of the converted object; no privilege or data statements")
 
 
-def parity_check(conv: dict, obj: dict, found: list[dict]) -> dict:
-    """Every construct in the source is accounted for, and none of Oracle's forms survive."""
-    catalogue = classify.by_id()
+def parity_check(conv: dict, obj: dict, found: list[dict], source_engine: str | None = None) -> dict:
+    """Every construct in the source is accounted for, and none of the source's forms survive."""
+    mysql = (source_engine or "").upper() == "MYSQL"
+    catalogue = classify.by_id(source_engine)
     ddl = conv.get("ddl") or "\n".join(conv.get("statements") or [])
     code = classify.code_only(ddl)
     handled = {c.get("oracle"): c for c in conv.get("constructs") or []}
@@ -80,9 +81,13 @@ def parity_check(conv: dict, obj: dict, found: list[dict]) -> dict:
             problems.append(f"{c['name']} has no valid handling")
 
     for entry in catalogue.values():
-        if entry.get("residue") and entry["tier"] == "rule":
+        # Oracle checks residue on rule-tier constructs only. MySQL has no rule
+        # tier -- everything is model-drafted -- so every flagged construct is
+        # checked, or a model that left IFNULL or a backtick in place would pass.
+        if entry.get("residue") and (entry["tier"] == "rule" or mysql):
             if re.search(entry["pattern"], code, re.IGNORECASE | re.MULTILINE):
-                problems.append(f"Oracle form of {entry['name']} still present in the output")
+                problems.append(f"{'MySQL' if mysql else 'Oracle'} form of {entry['name']} "
+                                "still present in the output")
 
     fn_bodies = re.findall(r"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION[\s\S]*?\$\$([\s\S]*?)\$\$", ddl, re.IGNORECASE)
     for body in fn_bodies:
@@ -100,7 +105,7 @@ def parity_check(conv: dict, obj: dict, found: list[dict]) -> dict:
                      "not_translated (with a reason). Behaviour is never dropped silently.")
     n = sum(1 for c in found if c["tier"] in ("rule", "model"))
     not_tr = [h["oracle"] for h in handled.values() if h.get("handling") == "not_translated"]
-    detail = f"{n} construct(s) accounted for, no Oracle residue"
+    detail = f"{n} construct(s) accounted for, no {'MySQL' if mysql else 'Oracle'} residue"
     if not_tr:
         detail += f"; declared not translated: {', '.join(not_tr)}"
     return _gate("parity", PASS, detail)

@@ -72,7 +72,11 @@ TEMPLATES = {
 }
 
 
-def template_fix(item: dict) -> dict | None:
+def template_fix(item: dict, source_engine: str | None = None) -> dict | None:
+    # The templates are written for Oracle's codes. SCT's codes are per source
+    # vendor, so a MySQL item sharing a number must never pick one up.
+    if (source_engine or "ORACLE").upper() != "ORACLE":
+        return None
     builder = TEMPLATES.get(str(item.get("issue_code")))
     return builder(item) if builder else None
 
@@ -126,9 +130,9 @@ one wastes the attempt.
 """ + _COMMON_RULES
 
 TARGET_PROMPT = """You are proposing a fix to an **Amazon RDS for PostgreSQL**
-target that is being built to receive an Oracle migration. AWS Schema Conversion
-Tool raised this action item, and it is the target that must absorb it -- the
-Oracle source is not at fault and must not be changed.
+target that is being built to receive a {source_label} migration. AWS Schema
+Conversion Tool raised this action item, and it is the target that must absorb
+it -- the {source_label} source is not at fault and must not be changed.
 
 SCT ACTION ITEM
 {item}
@@ -139,7 +143,7 @@ WHY THIS IS A TARGET-SIDE FIX
 WHAT CLEARS IT
 {clears_when}
 
-Write **PostgreSQL**, not Oracle. You may write only:
+Write **PostgreSQL**, not {source_label}. You may write only:
   CREATE EXTENSION
   CREATE TABLE / SEQUENCE / TYPE / INDEX
   CREATE OR REPLACE VIEW
@@ -171,7 +175,8 @@ def _item_for_prompt(item: dict) -> dict:
     }
 
 
-def bedrock_fix(item: dict, route_row: dict, client=None) -> dict:
+def bedrock_fix(item: dict, route_row: dict, client=None,
+                source_engine: str | None = None) -> dict:
     """Ask the model to draft a fix for one SCT action item.
 
     Raises GenerationUnavailable when the model cannot answer or answers with
@@ -179,11 +184,18 @@ def bedrock_fix(item: dict, route_row: dict, client=None) -> dict:
     """
     from bedrock.client import BedrockClient, BedrockError
 
+    engine = (source_engine or "ORACLE").upper()
     is_source = route_row["where"] == sct_route.SOURCE
+    if is_source and engine != "ORACLE":
+        # SOURCE_PROMPT and the gates behind it are Oracle's allow-list. There is
+        # no MySQL source-side policy, so nothing is drafted for one.
+        raise GenerationUnavailable(
+            f"no source-side fix policy exists for a {engine} source")
     prompt = (SOURCE_PROMPT if is_source else TARGET_PROMPT).format(
         item=json.dumps(_item_for_prompt(item), indent=2),
         route_why=route_row["why"],
         clears_when=route_row["clears_when"],
+        source_label="MySQL" if engine == "MYSQL" else "Oracle",
     )
 
     client = client or BedrockClient()
@@ -235,14 +247,15 @@ def bedrock_fix(item: dict, route_row: dict, client=None) -> dict:
 # ------------------------------------------------------------------ dispatch
 
 
-def build_fix(item: dict, route_row: dict, model_mode: str = "off") -> tuple[dict | None, str]:
+def build_fix(item: dict, route_row: dict, model_mode: str = "off",
+              source_engine: str | None = None) -> tuple[dict | None, str]:
     """A fix for one SCT item, and where it came from.
 
     Returns `(None, source)` when nothing could be drafted -- the caller routes
     the item to a person. A template always wins: free, instant, identical every
     run, and incapable of hallucinating.
     """
-    templated = template_fix(item)
+    templated = template_fix(item, source_engine)
     if templated is not None:
         return {**templated, "model_id": None}, "template"
 
@@ -251,7 +264,7 @@ def build_fix(item: dict, route_row: dict, model_mode: str = "off") -> tuple[dic
 
     if model_mode in ("live", "on"):
         try:
-            return bedrock_fix(item, route_row), "bedrock"
+            return bedrock_fix(item, route_row, source_engine=source_engine), "bedrock"
         except GenerationUnavailable as exc:
             log.info("SCT %s: no model fix (%s)", item.get("issue_code"), exc)
             return None, "none"

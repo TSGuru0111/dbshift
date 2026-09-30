@@ -30,6 +30,7 @@ def build(inv: dict, *, model_mode: str = "static", pg_target: target_mod.PgTarg
     if model_mode not in ("off", "static", "live"):
         raise ValueError(f"model_mode must be off, static or live, not {model_mode!r}")
     emit = on_event or (lambda evt: None)
+    source_engine = (inv.get("source_engine") or "ORACLE").upper()
 
     objects = sorted(inv["objects"], key=lambda o: (ORDER.get(o["object_type"], 9), o["object_name"]))
     total = len(objects)
@@ -92,7 +93,8 @@ def build(inv: dict, *, model_mode: str = "static", pg_target: target_mod.PgTarg
                 else:
                     try:
                         col_types = _column_types(inv, owner, obj)
-                        conv, source = model.live_convert(obj, r["constructs"], col_types, client=client)
+                        conv, source = model.live_convert(obj, r["constructs"], col_types, client=client,
+                                                          source_engine=source_engine)
                     except Exception as exc:  # noqa: BLE001 -- the reason belongs in the plan
                         entry["status"], entry["reason"] = "MODEL_REQUIRED", f"{reason}; model: {exc}"
 
@@ -103,7 +105,7 @@ def build(inv: dict, *, model_mode: str = "static", pg_target: target_mod.PgTarg
                 expected = rules.expected_names(obj)
                 results = [gates.static_check(conv, obj, expected), gates.policy_check(conv, obj)]
                 if all(g["status"] == gates.PASS for g in results):
-                    results.append(gates.parity_check(conv, obj, r["constructs"]))
+                    results.append(gates.parity_check(conv, obj, r["constructs"], source_engine))
                 entry["gates"] = results
                 if any(g["status"] == gates.FAIL for g in results):
                     entry["status"] = "REJECTED"
@@ -134,7 +136,7 @@ def build(inv: dict, *, model_mode: str = "static", pg_target: target_mod.PgTarg
                 referenced: set[str] = set()
                 for e in group:
                     obj = next(o for o in objects if _key(o) == _key(e))
-                    referenced |= rules.referenced_tables(obj["source_text"], tables)
+                    referenced |= rules.referenced_tables(_plain(obj["source_text"]), tables)
                     trig = inv["triggers"].get((owner, e["object_name"]))
                     if trig and trig.get("table_name"):
                         referenced.add(trig["table_name"].upper())
@@ -239,6 +241,7 @@ def build(inv: dict, *, model_mode: str = "static", pg_target: target_mod.PgTarg
     return {
         "phase": "4b-convert",
         "collector_run_id": inv["collector_run_id"],
+        "source_engine": source_engine,
         "estate": inv["estate"],
         "target_engine": "postgresql",
         "model_mode": model_mode,
@@ -259,8 +262,14 @@ def build(inv: dict, *, model_mode: str = "static", pg_target: target_mod.PgTarg
     }
 
 
+def _plain(text: str) -> str:
+    """MySQL backtick quoting as double quotes, so the shared table-reference
+    scan (which knows Oracle's quoting) finds `customer_order`."""
+    return (text or "").replace("`", '"')
+
+
 def _column_types(inv: dict, owner: str, obj: dict) -> dict[str, list[str]]:
-    tables = rules.referenced_tables(obj["source_text"], inventory.table_names(inv, owner))
+    tables = rules.referenced_tables(_plain(obj["source_text"]), inventory.table_names(inv, owner))
     known = {n for (o, n) in inv["types"] if o == owner}
     out = {}
     for tbl in sorted(tables):

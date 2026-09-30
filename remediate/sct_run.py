@@ -38,8 +38,21 @@ from . import sct_plan
 OUTPUT = Path(__file__).resolve().parent / "output"
 
 
-def newest_sct_record(target: str = "") -> tuple[dict, Path] | tuple[None, None]:
-    """The most recent SCT assessment on disk, optionally for one target."""
+def _record_engine(record_path: Path) -> str:
+    """The source engine an SCT record is about. Records before 2026-09-29 carry
+    none and are all Oracle."""
+    try:
+        rec = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    return str(rec.get("source_engine") or "ORACLE").upper()
+
+
+def newest_sct_record(target: str = "", source_engine: str = ""
+                      ) -> tuple[dict, Path] | tuple[None, None]:
+    """The most recent SCT assessment on disk, optionally for one target and one
+    source engine. Without the engine filter the newest record wins whatever it
+    assessed -- a MySQL report planned as though it were the Oracle estate."""
     if not sct_runner.OUTPUT.is_dir():
         return None, None
     candidates = []
@@ -49,6 +62,8 @@ def newest_sct_record(target: str = "") -> tuple[dict, Path] | tuple[None, None]
             continue
         if target and not d.name.endswith(target):
             continue
+        if source_engine and _record_engine(record) != source_engine.upper():
+            continue
         candidates.append(record)
     if not candidates:
         return None, None
@@ -57,6 +72,27 @@ def newest_sct_record(target: str = "") -> tuple[dict, Path] | tuple[None, None]
         return json.loads(newest.read_text(encoding="utf-8")), newest
     except (OSError, json.JSONDecodeError):
         return None, None
+
+
+def bind_to_run(record: dict, run_id: str) -> str:
+    """Tie an SCT record to a discovery run of the same estate, or refuse.
+
+    SCT reads the source directly, so its record carries whichever discovery
+    run was current when it ran; a later discovery of the same schema is the
+    same estate. Checked by schema, never assumed -- binding one estate's SCT
+    report to another's discovery is exactly the mismatch Phase 6 refuses.
+    """
+    manifest = Path(__file__).resolve().parent.parent / "collector" / "output" / run_id / "manifest.json"
+    try:
+        schemas = (json.loads(manifest.read_text(encoding="utf-8")).get("schemas") or {})
+    except (OSError, ValueError):
+        raise SystemExit(f"collector run {run_id} has no manifest")
+    present = {str(s).lower() for s in (schemas.get("present") or schemas.get("configured") or [])}
+    wanted = {str(s).lower() for s in ((record.get("source") or {}).get("schemas") or [])}
+    if wanted and not wanted <= present:
+        raise SystemExit(f"collector run {run_id} discovered {sorted(present)}, but this SCT record "
+                         f"assessed {sorted(wanted)}; refusing to bind them")
+    return run_id
 
 
 def _rehearsal_target():
@@ -80,6 +116,10 @@ def _pg_target():
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--target", default="", help="SCT target id, e.g. rds-postgresql")
+    ap.add_argument("--source-engine", default="",
+                    help="ORACLE or MYSQL; only records for that source are considered")
+    ap.add_argument("--collector-run", default="",
+                    help="bind the SCT record to this discovery run of the same estate")
     ap.add_argument("--model", default="off", choices=["off", "live"],
                     help="whether the model drafts fixes for items with no template")
     ap.add_argument("--approve", default="", metavar="EMAIL",
@@ -87,7 +127,7 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true", help="print the plan as JSON")
     args = ap.parse_args(argv)
 
-    record, path = newest_sct_record(args.target)
+    record, path = newest_sct_record(args.target, args.source_engine)
     if record is None:
         print("No AWS SCT assessment on disk. Run `python -m sct.run` first.",
               file=sys.stderr)
@@ -100,9 +140,13 @@ def main(argv=None) -> int:
         return 2
 
     parsed = sct_parse.parse_csv_file(csvs[0])
+    engine = str(record.get("source_engine") or "ORACLE").upper()
     assessment = {
-        "issues": sct_route.annotate(parsed["issues"]),
+        "issues": sct_route.annotate(parsed["issues"], engine),
         "target": record.get("target") or {},
+        "source_engine": engine,
+        "collector_run_id": (bind_to_run(record, args.collector_run) if args.collector_run
+                             else record.get("collector_run_id")),
     }
 
     rehearsal_target, pg_target = _rehearsal_target(), _pg_target()
@@ -129,7 +173,8 @@ def main(argv=None) -> int:
         return 0
 
     t = plan["totals"]
-    print(f"AWS SCT remediation plan -- {plan['target'] or 'unknown target'}")
+    print(f"AWS SCT remediation plan -- {plan['source_engine']} -> "
+          f"{plan['target'] or 'unknown target'}")
     print(f"from {path}")
     print(f"model tier: {args.model}"
           f" | rehearsal: {'configured' if rehearsal_target else 'not configured'}"

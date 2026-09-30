@@ -38,7 +38,9 @@ PROHIBITED = [
      "drops a target object that may hold migrated data"),
     (r"\bTRUNCATE\b", "truncates data"),
     (r"\bDELETE\s+FROM\b", "deletes rows"),
-    (r"\bUPDATE\s+\w", "rewrites data; a schema fix must not change rows"),
+    # `[\w"]`, not `\w`: `UPDATE "customer" SET ...` is an UPDATE too, and the
+    # first version let a quoted table name through.
+    (r"\bUPDATE\s+[\w\"]", "rewrites data; a schema fix must not change rows"),
     (r"\bGRANT\b", "alters privileges"),
     (r"\bREVOKE\b", "alters privileges"),
     (r"\bALTER\s+(ROLE|USER|SYSTEM)\b", "changes an account or the instance"),
@@ -125,13 +127,33 @@ def _statements(sql: str) -> list[str]:
     return [s.strip() for s in re.split(r";\s*", sql or "") if s.strip()]
 
 
+# Two places the word UPDATE appears in a statement that changes no rows. Found
+# 2026-09-29 on the first MySQL run: a drafted COMMENT ON COLUMN whose text
+# explained "ON UPDATE CURRENT_TIMESTAMP needs a trigger" was rejected as
+# "rewrites data", and the same rule would refuse every foreign key declared
+# ON UPDATE CASCADE. Both are neutralised for the prohibition scan ONLY, and
+# only in these exact shapes: the text of a COMMENT ... IS '...' (a comment
+# cannot execute), and ON UPDATE followed by a referential action. A string
+# literal anywhere else -- a function body in single quotes, say -- is still
+# scanned, because that one can execute.
+_COMMENT_TEXT = re.compile(r"(\bCOMMENT\s+ON\b[^;']*?\bIS\s+)'(?:[^']|'')*'", re.IGNORECASE)
+_FK_ON_UPDATE = re.compile(
+    r"\bON\s+UPDATE\s+(CASCADE|RESTRICT|NO\s+ACTION|SET\s+NULL|SET\s+DEFAULT)\b",
+    re.IGNORECASE)
+
+
+def _prohibition_scan(flat: str) -> str:
+    scan = _COMMENT_TEXT.sub(r"\1''", flat)
+    return _FK_ON_UPDATE.sub(r"ON REFERENTIAL_ACTION \1", scan)
+
+
 def check_statement(sql: str) -> list[str]:
     """Every reason this statement may not run against the target. Empty is a pass."""
     problems = []
     flat = re.sub(r"\s+", " ", sql or "")
 
     for pattern, why in PROHIBITED:
-        if re.search(pattern, flat, re.IGNORECASE):
+        if re.search(pattern, _prohibition_scan(flat), re.IGNORECASE):
             problems.append(why)
 
     parts = _statements(flat)

@@ -18,11 +18,14 @@ migration. Everything else is reported as work. That is deliberately narrow:
 SCT raises 14 items on `DBMIG_APP` and two of them block anything. A gate that
 halted on all 14 would be ignored, which is worse than one that halts on two.
 
-**CDC readiness does not come from SCT.** SCT never reads redo configuration,
-so ARCHIVELOG and supplemental logging -- which the rules engine raised as
-`OPS-001` and `OPS-002` -- are taken from the **Connect preflight's** own
+**CDC readiness does not come from SCT.** SCT never reads redo or binlog
+configuration, so ARCHIVELOG and supplemental logging on Oracle -- which the
+rules engine raised as `OPS-001` and `OPS-002` -- and log_bin / binlog_format /
+binlog_row_image on MySQL are taken from the **Connect preflight's** own
 evidence via `collector.mode.readiness`. That is a better source than either:
-it is measured at connect time from `v$database`, not inferred from a rule.
+it is measured at connect time, not inferred from a rule. The words come from
+`collector.mode.CDC_WORDING`, so a MySQL source is never told to ALTER DATABASE
+ARCHIVELOG.
 
 Nothing here is computed by a model, and nothing here consults one.
 """
@@ -51,7 +54,8 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def cdc_requirements(facts: dict | None, mode: str) -> dict:
+def cdc_requirements(facts: dict | None, mode: str,
+                     source_engine: str | None = None) -> dict:
     """Whether the source is configured for the migration that was declared.
 
     SCT cannot answer this -- it never looks at redo. The evidence is the
@@ -63,7 +67,9 @@ def cdc_requirements(facts: dict | None, mode: str) -> dict:
     facts = facts or {}
     readiness = migration_mode.readiness(
         facts.get("log_mode"), facts.get("supplemental_logging"),
+        source_engine=source_engine, native=facts,
     )
+    words = migration_mode.wording(source_engine)
 
     if not wants_cdc:
         return {
@@ -71,11 +77,11 @@ def cdc_requirements(facts: dict | None, mode: str) -> dict:
             "status": "not_in_scope",
             "readiness": readiness,
             "detail": (
-                f"A {mode} migration does not read redo, so ARCHIVELOG and supplemental "
-                "logging are not requirements of it. Reported because the source's "
+                f"A {mode} migration does not read {words['reads']}, so it does not "
+                f"require {words['requirements']}. Reported because the source's "
                 "configuration is still worth knowing: "
                 + (", ".join(readiness["unmet"]) if readiness["unmet"]
-                   else "both are already in place.")
+                   else "all of it is already in place.")
             ),
         }
 
@@ -84,8 +90,8 @@ def cdc_requirements(facts: dict | None, mode: str) -> dict:
             "applies": True,
             "status": "clear",
             "readiness": readiness,
-            "detail": ("ARCHIVELOG and supplemental logging are both in place, so change "
-                       "data capture can read redo."),
+            "detail": (f"{words['requirements'][0].upper()}{words['requirements'][1:]}: "
+                       f"in place, so change data capture can read {words['reads']}."),
         }
 
     return {
@@ -97,15 +103,11 @@ def cdc_requirements(facts: dict | None, mode: str) -> dict:
             "Change data capture was declared but the source is not configured for it: "
             + "; ".join(readiness["unmet"]) + "."
         ),
-        "clears_when": (
-            "ALTER DATABASE ARCHIVELOG (which needs a restart, so a maintenance window) "
-            "and ALTER DATABASE ADD SUPPLEMENTAL LOG DATA. Neither is something this "
-            "project applies to a client's source -- both are a DBA's scheduled change."
-        ),
+        "clears_when": words["clears_when"],
         "why_not_from_sct": (
-            "AWS SCT assesses schema and stored-code conversion and never reads redo "
-            "configuration, so this requirement cannot come from it. The evidence is the "
-            "Connect preflight's own reading of v$database."
+            "AWS SCT assesses schema and stored-code conversion and never reads "
+            f"{words['reads']} configuration, so this requirement cannot come from it. "
+            f"The evidence is {words['evidence']}."
         ),
     }
 
@@ -117,10 +119,12 @@ def evaluate(
     migration_mode_record: dict | None = None,
     remediation: dict | None = None,
     waivers: list[dict] | None = None,
+    source_engine: str | None = None,
 ) -> dict:
     """Decide whether the run may continue, and say who must fix what."""
     waivers = waivers or []
-    issues = sct_route.annotate(sct_assessment.get("issues") or [])
+    source_engine = source_engine or sct_assessment.get("source_engine")
+    issues = sct_route.annotate(sct_assessment.get("issues") or [], source_engine)
 
     mode_record = migration_mode_record or migration_mode.decide(None, declared=False)
     mode = mode_record["mode"]
@@ -198,7 +202,7 @@ def evaluate(
             blockers.append(entry)
 
     # CDC readiness, from the preflight rather than from SCT.
-    cdc_check = cdc_requirements(facts, mode)
+    cdc_check = cdc_requirements(facts, mode, source_engine)
     cdc_blocks = cdc_check.get("blocks") if cdc_check["status"] == "blocked" else []
 
     by_phase = {}
@@ -246,6 +250,7 @@ def evaluate(
         "evaluated_at_utc": _now(),
         "source_of_findings": "aws-sct",
         "collector_run_id": sct_assessment.get("collector_run_id"),
+        "source_engine": (source_engine or "ORACLE").upper(),
         "target": (sct_assessment.get("target") or {}).get("id"),
         "migration_mode": mode_record,
         "verdict": verdict,
@@ -261,14 +266,34 @@ def evaluate(
         "groups": groups,
         "unrouted": [e for e in (blockers + work) if not e["routed"]],
         "summary": _summarise(verdict, blockers, waived, cdc_check, groups, mode,
-                              out_of_scope_blockers),
+                              out_of_scope_blockers,
+                              no_conversion=_no_conversion(sct_assessment, issues)),
     }
 
 
+def _no_conversion(sct_assessment: dict, issues: list) -> str | None:
+    """The reason zero action items is CLEAR rather than missing evidence.
+
+    On a homogeneous pair SCT has nothing to convert -- MySQL to RDS for MySQL,
+    Oracle to RDS for Oracle -- so an empty list is the correct answer, and the
+    gate says why instead of letting "0 items" read as "not looked at".
+    """
+    target = sct_assessment.get("target") or {}
+    if issues or target.get("sct_conversion", True):
+        return None
+    label = target.get("label") or target.get("id") or "this target"
+    return (f"{label} is the same engine as the source, so AWS SCT has no conversion "
+            "to assess and reports no action items. That is the expected result for a "
+            "homogeneous path, not missing evidence: the schema and stored code move "
+            "unchanged.")
+
+
 def _summarise(verdict, blockers, waived, cdc_check, groups, mode,
-               out_of_scope_blockers) -> str:
+               out_of_scope_blockers, no_conversion=None) -> str:
     """One paragraph a client can read without the JSON."""
     parts = [f"Judged for a {mode} migration, from AWS SCT's action items."]
+    if no_conversion:
+        parts.append(no_conversion)
 
     counts = ", ".join(
         f"{g['item_count']} {g['label'].lower()}" for g in groups if g["item_count"]

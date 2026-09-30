@@ -145,7 +145,9 @@ def parity_check(conv: dict, stmt: dict) -> dict:
     sql = conv.get("sql") or ""
     scanned = classify.code_only(sql)
     accounting = {a.get("id"): a for a in (conv.get("constructs") or [])}
-    found = {c["id"]: c for c in classify.scan(stmt["sql"])}
+    engine = stmt.get("source_engine")
+    src = "MySQL" if classify.engine_of(engine) == "MYSQL" else "Oracle"
+    found = {c["id"]: c for c in classify.scan(stmt["sql"], engine)}
 
     problems: list[str] = []
     notes: list[str] = []
@@ -186,7 +188,7 @@ def parity_check(conv: dict, stmt: dict) -> dict:
     # was the correct PostgreSQL form, and exactly what the marker asks for.
     # Flagging a correct conversion is worse than missing a wrong one here,
     # because it teaches a reader to ignore the gate.
-    catalogue = classify.by_id()
+    catalogue = classify.by_id(engine)
     for cid, con in found.items():
         if not con.get("residue"):
             continue
@@ -202,8 +204,8 @@ def parity_check(conv: dict, stmt: dict) -> dict:
         return _gate("parity", FAIL, "; ".join(problems),
                      "Every construct detected in the source is either translated -- with its "
                      "PostgreSQL form actually present -- or recorded as not_translated with a "
-                     "reason. No Oracle form whose replacement is required may survive.")
-    detail = f"{len(found)} construct(s) accounted for, no Oracle residue"
+                     f"reason. No {src} form whose replacement is required may survive.")
+    detail = f"{len(found)} construct(s) accounted for, no {src} residue"
     return _gate("parity", PASS, detail + ("; " + "; ".join(notes) if notes else ""))
 
 
@@ -383,8 +385,9 @@ def result_check(conv: dict, stmt: dict, comparison=None) -> dict:
     rows, which is a Phase 8 capability. Blocked when absent.
     """
     if comparison is None:
+        src = "MySQL" if classify.engine_of(stmt.get("source_engine")) == "MYSQL" else "Oracle"
         return _gate("result", BLOCKED,
-                     "not compared: needs the Oracle source and the PostgreSQL target, over "
+                     f"not compared: needs the {src} source and the PostgreSQL target, over "
                      "the same rows",
                      "Result equivalence is the only check that catches a rewrite which "
                      "parses and returns different rows. Until it runs, a converted "

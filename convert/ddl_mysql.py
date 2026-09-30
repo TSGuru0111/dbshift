@@ -1,0 +1,383 @@
+"""Phase 4c for a MySQL source: table, key, index and check DDL for PostgreSQL.
+
+`ddl.py` is the Oracle builder, and the emission order, the notes and the
+identifier rules are shared from it unchanged. What differs is how MySQL's
+catalogue has to be READ, and each difference below is a way the Oracle
+reading goes silently wrong:
+
+  - **Every primary key is called `PRIMARY`.** MySQL names constraints per
+    table, so the name identifies nothing on its own. Resolving a foreign key's
+    parent by `r_constraint_name` -- as the Oracle builder does -- matches the
+    first `PRIMARY` in the schema, i.e. the wrong table. The referenced table
+    and columns are read from `constraint_columns` instead, which records them.
+    For the same reason a key's columns are looked up by (table, name), and a
+    primary key is named `<table>_pkey` on PostgreSQL, where constraint indexes
+    share one namespace per schema.
+  - **Nullability is YES/NO, not Y/N.** Reading Oracle's 'N' made every column
+    nullable.
+  - **Literal defaults are unquoted** in `information_schema` (`GB`, `new`).
+  - **`DEFAULT_GENERATED` is not a generated column** -- it marks an expression
+    default such as CURRENT_TIMESTAMP.
+  - **Index names are per table** in MySQL and per schema in PostgreSQL, so a
+    repeated name is made unique and the rename is reported.
+"""
+
+from __future__ import annotations
+
+import re
+
+from . import typemap_mysql as tm
+from .ddl import DdlNote, ident
+from .typemap import Unmappable
+
+# MySQL-only functions a CHECK may use that PostgreSQL spells differently or
+# lacks. A check translated wrongly rejects valid data or admits invalid data,
+# so these are declined rather than guessed.
+_MYSQL_ONLY_IN_CHECK = r"\b(IFNULL|REGEXP|RLIKE|DATE_FORMAT|STR_TO_DATE|CURDATE|JSON_\w+)\b"
+
+
+_TABLE_NOTED: set = set()
+
+
+def table_ident(name: str, notes: list[DdlNote] | None = None) -> str:
+    """A table name as PostgreSQL holds it.
+
+    `ident()` suffixes a reserved COLUMN name with `_col`; a table called
+    `order` renamed `order_col` reads as a mistake, so tables take `_tbl`.
+    Every reference to the table -- CREATE, ALTER, REFERENCES, CREATE INDEX --
+    goes through here so they cannot disagree.
+    """
+    from .ddl import PG_RESERVED
+    low = (name or "").lower()
+    if low not in PG_RESERVED:
+        return ident(name)
+    renamed = f"{low}_tbl"
+    if notes is not None and low not in _TABLE_NOTED:
+        _TABLE_NOTED.add(low)
+        notes.append(DdlNote(
+            "reserved_word", f"table {name}",
+            f"`{low}` is reserved in PostgreSQL, so the table is created as `{renamed}`. "
+            "Phase 7's DMS table mapping must rename it the same way (DMS lower-cases names "
+            "but does not rename reserved words), and application SQL must change.", "warn"))
+    return renamed
+
+
+def _fk_columns(owner: str, constraints: list[dict], constraint_columns: list[dict]) -> dict[str, set]:
+    """{table: {column, ...}} of every foreign-key column, lower case."""
+    fk_names = {(c.get("table_name"), c.get("constraint_name")) for c in constraints
+                if c.get("owner") == owner and c.get("constraint_type") == "R"}
+    out: dict[str, set] = {}
+    for r in constraint_columns:
+        if r.get("owner") == owner and (r.get("table_name"), r.get("constraint_name")) in fk_names:
+            out.setdefault(r["table_name"], set()).add((r.get("column_name") or "").lower())
+    return out
+
+
+def column_ddl(col: dict, notes: list[DdlNote], *, table: str,
+               fk_columns: set[str], made_nullable: dict | None = None) -> tuple[str | None, str | None]:
+    """(column definition, CHECK condition or None). Definition None = not mappable.
+
+    A column whose name is a PostgreSQL keyword is CREATED under its source name,
+    quoted, and renamed after the load (`renames_after_load`). Found on the first
+    real DMS run, 2026-09-30: a DMS column-rename rule delivered the renamed
+    columns as NULL -- `order` arrived as (1, NULL, NULL, NULL) and the NOT NULL
+    `group_col` refused it. Without the rule the values arrive intact, and a
+    rename after the load is metadata only.
+    """
+    name = ident(col["column_name"], notes, context=f"{table}.")
+    source_name = (col["column_name"] or "").lower()
+    create_name = f'"{source_name}"' if name != source_name else name
+    try:
+        pg_type, note = tm.map_column(col, fk_columns=fk_columns)
+    except Unmappable as exc:
+        notes.append(DdlNote("unmappable_type", f"{table}.{col['column_name']}",
+                             f"{exc}. The column is omitted, so this table is incomplete until "
+                             "somebody decides what it should be.", "error"))
+        return None, None
+    if note:
+        notes.append(DdlNote("type_mapping", f"{table}.{col['column_name']}",
+                             f"{tm.column_type(col)} -> {pg_type}: {note}"))
+
+    parts = [f"  {create_name} {pg_type}"]
+    if tm.is_identity(col):
+        parts.append("GENERATED BY DEFAULT AS IDENTITY")
+    else:
+        default, why = tm.default_expr(col, pg_type)
+        if default:
+            parts.append(f"DEFAULT {default}")
+        elif why:
+            notes.append(DdlNote("default_not_carried", f"{table}.{col['column_name']}", why, "warn"))
+
+    if tm.on_update_now(col):
+        notes.append(DdlNote(
+            "on_update_timestamp", f"{table}.{col['column_name']}",
+            "ON UPDATE CURRENT_TIMESTAMP has no column-level form in PostgreSQL. Without a "
+            "BEFORE UPDATE trigger that sets it and RETURNS NEW, the value silently stops "
+            "changing after cutover (SCT 8825; the trigger function is Phase 4b's).", "warn"))
+
+    decided = (made_nullable or {}).get(f"{table}.{col['column_name']}")
+    if tm.is_not_null(col) and decided:
+        # A person's recorded decision (convert/decisions.py), never inferred.
+        notes.append(DdlNote(
+            "nullable_by_decision", f"{table}.{col['column_name']}",
+            f"NOT NULL on the source, nullable here by decision of {decided['decided_by']} "
+            f"({decided['decided_at_utc'][:10]}): its zero dates have no PostgreSQL value and "
+            "arrive as NULL. That is data loss, and Phase 8 reports it.", "warn"))
+    elif tm.is_not_null(col):
+        parts.append("NOT NULL")
+    return " ".join(parts), tm.check_for(col, name)
+
+
+def renames_after_load(owner: str, table: str, columns: list[dict]) -> list[str]:
+    """RENAME COLUMN for every column created under a PostgreSQL keyword."""
+    out = []
+    for c in sorted(columns, key=lambda c: c.get("column_id") or 0):
+        if tm.is_generated(c):
+            continue
+        final = ident(c["column_name"])
+        src = (c["column_name"] or "").lower()
+        if final != src:
+            out.append(f'ALTER TABLE {ident(owner)}.{table_ident(table)} RENAME COLUMN "{src}" TO {final};')
+    return out
+
+
+def table_ddl(*, owner: str, table: str, columns: list[dict], notes: list[DdlNote],
+              fk_columns: set[str], made_nullable: dict | None = None
+              ) -> tuple[str | None, list[tuple[str, str]]]:
+    """CREATE TABLE plus the ENUM/SET checks it needs, as (name, condition)."""
+    defs, checks = [], []
+    for c in sorted(columns, key=lambda c: c.get("column_id") or 0):
+        if tm.is_generated(c):
+            expr = (c.get("generation_expression") or "").strip()
+            notes.append(DdlNote(
+                "generated_column", f"{table}.{c['column_name']}",
+                "a generated column is computed, not loaded. It is omitted here; the Phase 7 "
+                "table mapping must not carry it, and it is added after the load as "
+                "GENERATED ALWAYS AS (...) STORED once its expression is translated"
+                + (f" -- MySQL expression: {expr}" if expr else "") + ".", "warn"))
+            continue
+        d, check = column_ddl(c, notes, table=table, fk_columns=fk_columns,
+                              made_nullable=made_nullable)
+        if d:
+            defs.append(d)
+            if check:
+                checks.append((ident(f"ck_{table}_{c['column_name']}"), check))
+    if not defs:
+        notes.append(DdlNote("empty_table", table,
+                             "no column could be mapped; no table is emitted", "error"))
+        return None, []
+    ddl = (f"CREATE TABLE {ident(owner)}.{table_ident(table, notes)} (\n" + ",\n".join(defs) + "\n);")
+    return ddl, checks
+
+
+def _cols(constraint_columns: list[dict], owner: str, table: str, constraint: str,
+          notes: list[DdlNote]) -> list[dict]:
+    rows = [r for r in constraint_columns
+            if r.get("owner") == owner and r.get("table_name") == table
+            and r.get("constraint_name") == constraint]
+    return sorted(rows, key=lambda r: r.get("position") or 0)
+
+
+def _unique_name(name: str, table: str, used: set[str], notes: list[DdlNote], kind: str) -> str:
+    """A schema-unique PostgreSQL name for something MySQL names per table."""
+    if name not in used:
+        used.add(name)
+        return name
+    renamed = ident(f"{table}_{name}")
+    notes.append(DdlNote(
+        "renamed_for_uniqueness", f"{table}.{name}",
+        f"MySQL names {kind}s per table; PostgreSQL needs them unique per schema, and "
+        f"`{name}` is already used. Renamed to `{renamed}`."))
+    used.add(renamed)
+    return renamed
+
+
+def translate_check(condition: str) -> tuple[str | None, str | None]:
+    if not condition:
+        return None, "the condition is empty"
+    c = condition.strip()
+    if re.search(_MYSQL_ONLY_IN_CHECK, c, re.IGNORECASE):
+        return None, "the condition uses a MySQL-only function"
+    # Backtick-quoted identifiers become the lower-case names the DDL created.
+    c = re.sub(r"`([^`]+)`", lambda m: m.group(1).lower(), c)
+    return c, None
+
+
+def constraint_ddl(*, owner: str, constraints: list[dict], constraint_columns: list[dict],
+                   notes: list[DdlNote], used: set[str]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {"primary_unique": [], "foreign": [], "check": []}
+    for c in sorted(constraints, key=lambda c: (c.get("table_name") or "", c.get("constraint_name") or "")):
+        if c.get("owner") != owner:
+            continue
+        kind, table, cname = c.get("constraint_type"), c.get("table_name"), c.get("constraint_name")
+        qualified = f"{ident(owner)}.{table_ident(table, notes)}"
+
+        if kind in ("P", "U"):
+            rows = _cols(constraint_columns, owner, table, cname, notes)
+            if not rows:
+                notes.append(DdlNote("constraint_no_columns", f"{table}.{cname}",
+                                     "discovery recorded no columns for this key; not emitted", "warn"))
+                continue
+            name = (ident(f"{table}_pkey") if kind == "P"
+                    else _unique_name(ident(cname), table, used, notes, "unique key"))
+            if kind == "P":
+                used.add(name)
+            cols = ", ".join(ident(r["column_name"]) for r in rows)
+            word = "PRIMARY KEY" if kind == "P" else "UNIQUE"
+            out["primary_unique"].append(
+                f"ALTER TABLE {qualified} ADD CONSTRAINT {name} {word} ({cols});")
+
+        elif kind == "R":
+            rows = _cols(constraint_columns, owner, table, cname, notes)
+            parents = {r.get("referenced_table_name") for r in rows}
+            if not rows or None in parents or len(parents) != 1:
+                notes.append(DdlNote("foreign_key_unresolved", f"{table}.{cname}",
+                                     "the referenced table was not recorded; not emitted", "warn"))
+                continue
+            p_schema = rows[0].get("referenced_table_schema") or owner
+            cols = ", ".join(ident(r["column_name"]) for r in rows)
+            pcols = ", ".join(ident(r["referenced_column_name"]) for r in rows)
+            rule = ""
+            for word, value in (("DELETE", c.get("delete_rule")), ("UPDATE", c.get("update_rule"))):
+                v = (value or "NO ACTION").upper()
+                if v in ("CASCADE", "SET NULL", "SET DEFAULT", "RESTRICT"):
+                    rule += f" ON {word} {v}"
+            # FK and CHECK names create no relation, so they never collide with an
+            # index; MySQL already keeps them unique per schema.
+            name = ident(cname)
+            out["foreign"].append(
+                f"ALTER TABLE {qualified} ADD CONSTRAINT {name} FOREIGN KEY ({cols}) "
+                f"REFERENCES {ident(p_schema)}.{table_ident(parents.pop(), notes)} ({pcols}){rule};")
+
+        elif kind == "C":
+            translated, why = translate_check(c.get("search_condition_vc") or "")
+            if translated is None:
+                notes.append(DdlNote("check_not_translated", f"{table}.{cname}",
+                                     f"{why}. The rule is not enforced on the target until "
+                                     "somebody writes it.", "warn"))
+                continue
+            name = ident(cname)
+            out["check"].append(f"ALTER TABLE {qualified} ADD CONSTRAINT {name} CHECK ({translated});")
+    return out
+
+
+def index_ddl(*, owner: str, indexes: list[dict], index_columns: list[dict],
+              constraints: list[dict], notes: list[DdlNote], used: set[str]) -> list[str]:
+    # Keyed by (table, name): MySQL index names are per table, so the name alone
+    # would skip an unrelated index that happens to share a key's name.
+    constraint_indexes = {(c.get("table_name"), c.get("index_name") or c.get("constraint_name"))
+                          for c in constraints
+                          if c.get("owner") == owner and c.get("constraint_type") in ("P", "U")}
+    out = []
+    for ix in sorted(indexes, key=lambda i: (i.get("table_name") or "", i.get("index_name") or "")):
+        if ix.get("owner") != owner:
+            continue
+        name, table = ix["index_name"], ix["table_name"]
+        if (table, name) in constraint_indexes:
+            continue
+        itype = (ix.get("index_type") or "").upper()
+        if itype == "FULLTEXT":
+            notes.append(DdlNote("index_type", f"{table}.{name}",
+                                 "a FULLTEXT index becomes a GIN index over to_tsvector(...) on "
+                                 "PostgreSQL, and MATCH ... AGAINST queries are rewritten with it. "
+                                 "Not emitted: the text-search configuration is a decision.", "warn"))
+            continue
+        if itype not in ("NORMAL", ""):
+            notes.append(DdlNote("index_type", f"{table}.{name}",
+                                 f"{itype} has no direct PostgreSQL equivalent; not emitted", "warn"))
+            continue
+        cols = sorted((r for r in index_columns
+                       if r.get("index_owner") == owner and r.get("index_name") == name
+                       and r.get("table_name") == table),
+                      key=lambda r: r.get("column_position") or 0)
+        if not cols:
+            continue
+        if any(r.get("prefix_length") for r in cols):
+            notes.append(DdlNote("index_prefix", f"{table}.{name}",
+                                 "a MySQL prefix index covers only the first N characters; "
+                                 "PostgreSQL indexes the whole value here, which is larger but "
+                                 "answers the same queries."))
+        col_list = ", ".join(ident(r["column_name"])
+                             + (" DESC" if (r.get("descend") or "ASC").upper() == "DESC" else "")
+                             for r in cols)
+        unique = "UNIQUE " if (ix.get("uniqueness") or "").upper() == "UNIQUE" else ""
+        pg_name = _unique_name(ident(name), table, used, notes, "index")
+        out.append(f"CREATE {unique}INDEX {pg_name} ON {ident(owner)}.{table_ident(table, notes)} ({col_list});")
+    return out
+
+
+def build(*, owner: str, datasets: dict) -> dict:
+    """Every statement needed to create this MySQL schema on PostgreSQL, in order."""
+    notes: list[DdlNote] = []
+    _TABLE_NOTED.clear()
+    # Views appear in information_schema.columns; only base tables are built.
+    tables = sorted({t["table_name"] for t in datasets.get("tables", [])
+                     if t.get("owner") == owner
+                     and (t.get("table_type") or "TABLE").upper() in ("TABLE", "BASE TABLE")})
+    view_names = {o.get("object_name") for o in datasets.get("objects", [])
+                  if o.get("owner") == owner and (o.get("object_type") or "").upper() == "VIEW"}
+    tables = [t for t in tables if t not in view_names]
+    by_table: dict[str, list[dict]] = {}
+    for c in datasets.get("columns", []):
+        if c.get("owner") == owner and c.get("table_name") in tables:
+            by_table.setdefault(c["table_name"], []).append(c)
+
+    constraints = [c for c in datasets.get("constraints", []) if c.get("table_name") in tables]
+    fk_cols = _fk_columns(owner, constraints, datasets.get("constraint_columns", []))
+
+    from .decisions import nullable_for_zero_dates
+    made_nullable = nullable_for_zero_dates(owner)
+    table_stmts, enum_checks, renames = [], [], []
+    for t in tables:
+        ddl, checks = table_ddl(owner=owner, table=t, columns=by_table.get(t, []), notes=notes,
+                                fk_columns=fk_cols.get(t, set()), made_nullable=made_nullable)
+        if ddl:
+            table_stmts.append(ddl)
+            renames += renames_after_load(owner, t, by_table.get(t, []))
+            enum_checks += [f"ALTER TABLE {ident(owner)}.{table_ident(t)} ADD CONSTRAINT {n} CHECK ({cond});"
+                            for n, cond in checks]
+
+    used: set[str] = set()
+    cons = constraint_ddl(owner=owner, constraints=constraints,
+                          constraint_columns=datasets.get("constraint_columns", []),
+                          notes=notes, used=used)
+    idx = index_ddl(owner=owner,
+                    indexes=[i for i in datasets.get("indexes", []) if i.get("table_name") in tables],
+                    index_columns=datasets.get("index_columns", []),
+                    constraints=constraints, notes=notes, used=used)
+
+    if any(tm.is_identity(c) for cols in by_table.values() for c in cols):
+        notes.append(DdlNote(
+            "identity_restart", owner,
+            "AUTO_INCREMENT columns become identities starting at 1. DMS loads the existing "
+            "values explicitly, so after the load each identity must be restarted past the "
+            "highest loaded value, or the first new insert collides with a migrated row."))
+
+    checks = cons["check"] + enum_checks
+    return {
+        "source_engine": "MYSQL",
+        "schema": f"CREATE SCHEMA IF NOT EXISTS {ident(owner)};",
+        "depends_on_types": [],
+        "tables": table_stmts,
+        "renames": renames,
+        "primary_unique": cons["primary_unique"],
+        "foreign": cons["foreign"],
+        "check": checks,
+        "indexes": idx,
+        "notes": [n.as_dict() for n in notes],
+        "order": [
+            ("schema", "the schema itself"),
+            ("tables", "tables, columns only -- so the load has somewhere to go"),
+            ("renames", "keyword columns renamed AFTER the load, before the keys that name them"),
+            ("primary_unique", "primary and unique keys, AFTER the load"),
+            ("foreign", "foreign keys, after the keys they reference exist"),
+            ("check", "check constraints, including each ENUM/SET column's declared members"),
+            ("indexes", "indexes last: building one during a bulk load is the slowest way"),
+        ],
+        "counts": {"tables": len(table_stmts), "renames": len(renames),
+                   "primary_unique": len(cons["primary_unique"]),
+                   "foreign": len(cons["foreign"]), "check": len(checks), "indexes": len(idx),
+                   "notes_error": sum(1 for n in notes if n.severity == "error"),
+                   "notes_warn": sum(1 for n in notes if n.severity == "warn")},
+        "nothing_applied": True,
+    }

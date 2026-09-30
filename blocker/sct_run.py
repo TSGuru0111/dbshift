@@ -34,12 +34,20 @@ ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = Path(__file__).resolve().parent / "output"
 
 
-def _newest_sct(target: str = "") -> tuple[dict | None, Path | None]:
+def _newest_sct(target: str = "", source_engine: str = ""
+                ) -> tuple[dict | None, Path | None]:
     if not sct_runner.OUTPUT.is_dir():
         return None, None
+
+    def engine_of(p: Path) -> str:
+        rec = _load(p) or {}
+        return str(rec.get("source_engine") or "ORACLE").upper()
+
     found = [d / "sct_assessment.json" for d in sct_runner.OUTPUT.iterdir()
              if (d / "sct_assessment.json").exists()
-             and (not target or d.name.endswith(target))]
+             and (not target or d.name.endswith(target))
+             and (not source_engine
+                  or engine_of(d / "sct_assessment.json") == source_engine.upper())]
     if not found:
         return None, None
     newest = max(found, key=lambda p: p.stat().st_mtime)
@@ -49,6 +57,27 @@ def _newest_sct(target: str = "") -> tuple[dict | None, Path | None]:
         return None, None
 
 
+def bind_to_run(record: dict, run_id: str) -> str:
+    """Tie an SCT record to a discovery run of the same estate, or refuse.
+
+    SCT reads the source directly, so its record carries whichever discovery
+    run was current when it ran; a later discovery of the same schema is the
+    same estate. Checked by schema, never assumed -- binding one estate's SCT
+    report to another's discovery is exactly the mismatch Phase 6 refuses.
+    """
+    manifest = Path(__file__).resolve().parent.parent / "collector" / "output" / run_id / "manifest.json"
+    try:
+        schemas = (json.loads(manifest.read_text(encoding="utf-8")).get("schemas") or {})
+    except (OSError, ValueError):
+        raise SystemExit(f"collector run {run_id} has no manifest")
+    present = {str(s).lower() for s in (schemas.get("present") or schemas.get("configured") or [])}
+    wanted = {str(s).lower() for s in ((record.get("source") or {}).get("schemas") or [])}
+    if wanted and not wanted <= present:
+        raise SystemExit(f"collector run {run_id} discovered {sorted(present)}, but this SCT record "
+                         f"assessed {sorted(wanted)}; refusing to bind them")
+    return run_id
+
+
 def _load(path: Path) -> dict | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -56,7 +85,8 @@ def _load(path: Path) -> dict | None:
         return None
 
 
-def _facts_and_mode(estate_schemas: list[str] | None = None
+def _facts_and_mode(estate_schemas: list[str] | None = None,
+                    source_engine: str | None = None
                     ) -> tuple[dict, dict | None, str | None]:
     """CDC evidence and the declared mode, from the collector run for this estate.
 
@@ -78,7 +108,13 @@ def _facts_and_mode(estate_schemas: list[str] | None = None
     runs = sorted((d for d in out.iterdir() if d.is_dir()),
                   key=lambda p: p.stat().st_mtime, reverse=True)
 
-    wanted = {s.upper() for s in (estate_schemas or [])}
+    # Oracle folds unquoted names to upper case; MySQL schema names are
+    # case-sensitive on Linux and are compared exactly. Upper-casing both sides
+    # would still match, but would also match `App` to `APP` -- two different
+    # MySQL databases.
+    fold = (str.upper if (source_engine or "ORACLE").upper() == "ORACLE"
+            else (lambda x: x))
+    wanted = {fold(s) for s in (estate_schemas or [])}
     fallback = None
     for run in runs:
         manifest = _load(run / "manifest.json") or {}
@@ -91,6 +127,9 @@ def _facts_and_mode(estate_schemas: list[str] | None = None
         facts = {
             "log_mode": readiness.get("log_mode"),
             "supplemental_logging": readiness.get("supplemental_log_data_min"),
+            # MySQL's native readings, when the run recorded them.
+            "binlog_format": readiness.get("binlog_format"),
+            "binlog_row_image": readiness.get("binlog_row_image"),
         } if readiness else {}
 
         # `manifest["schemas"]` is a dict -- {configured, present, missing,
@@ -103,7 +142,7 @@ def _facts_and_mode(estate_schemas: list[str] | None = None
             collected = schema_record.get("present") or schema_record.get("configured") or []
         else:
             collected = schema_record or []
-        schemas = {str(s).upper() for s in collected}
+        schemas = {fold(str(s)) for s in collected}
         if wanted and schemas and (wanted & schemas):
             return facts, mode, run.name
         if fallback is None:
@@ -119,12 +158,16 @@ def _facts_and_mode(estate_schemas: list[str] | None = None
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--target", default="", help="SCT target id")
+    ap.add_argument("--source-engine", default="",
+                    help="ORACLE or MYSQL; only records for that source are considered")
+    ap.add_argument("--collector-run", default="",
+                    help="bind the SCT record to this discovery run of the same estate")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--compare", action="store_true",
                     help="show the rules-engine gate's verdict alongside")
     args = ap.parse_args(argv)
 
-    record, path = _newest_sct(args.target)
+    record, path = _newest_sct(args.target, args.source_engine)
     if record is None:
         print("No AWS SCT assessment on disk. Run `python -m sct.run` first.",
               file=sys.stderr)
@@ -136,14 +179,17 @@ def main(argv=None) -> int:
         return 2
 
     parsed = sct_parse.parse_csv_file(csvs[0])
+    engine = str(record.get("source_engine") or "ORACLE").upper()
     assessment = {
-        "issues": sct_route.annotate(parsed["issues"]),
+        "issues": sct_route.annotate(parsed["issues"], engine),
         "target": record.get("target") or {},
-        "collector_run_id": record.get("collector_run_id"),
+        "collector_run_id": (bind_to_run(record, args.collector_run) if args.collector_run
+                             else record.get("collector_run_id")),
+        "source_engine": engine,
     }
 
     estate_schemas = (record.get("source") or {}).get("schemas") or []
-    facts, mode_record, discovery_run = _facts_and_mode(estate_schemas)
+    facts, mode_record, discovery_run = _facts_and_mode(estate_schemas, engine)
     if estate_schemas and discovery_run is None:
         print(f"NOTE: no discovery run found for {', '.join(estate_schemas)}, so CDC "
               f"readiness has no evidence and is reported as unknown, not as clear.\n")
@@ -151,7 +197,7 @@ def main(argv=None) -> int:
 
     decision = sct_gate.evaluate(
         assessment, facts=facts, migration_mode_record=mode_record,
-        remediation=remediation,
+        remediation=remediation, source_engine=engine,
     )
 
     OUTPUT.mkdir(parents=True, exist_ok=True)

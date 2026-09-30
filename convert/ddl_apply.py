@@ -44,7 +44,8 @@ from datetime import datetime, timezone
 
 # Phase 4c's own ordering, split at the data load. The keys are the plan's.
 PRE_LOAD = ("schema", "tables")
-POST_LOAD = ("primary_unique", "foreign", "check", "indexes")
+# `renames` first: keys, checks and indexes name the renamed columns.
+POST_LOAD = ("renames", "primary_unique", "foreign", "check", "indexes")
 
 # What a statement in this path may do. Narrower than `pg_policy`'s target
 # allow-list because 4c produces exactly these shapes, and anything else in the
@@ -118,6 +119,30 @@ def check_statements(statements: list[str]) -> list[str]:
     return bad
 
 
+def index_name(statement: str) -> str | None:
+    """The index a statement creates, if it creates one."""
+    m = re.search(r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][\w$]*)",
+                  statement or "", re.IGNORECASE)
+    return m.group(1).lower() if m else None
+
+
+def existing_keys_and_indexes(target, schema: str) -> set[str]:
+    """Constraint and index names the target already has in this schema."""
+    conn = target.connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT conname FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace "
+            "WHERE n.nspname = %s UNION SELECT indexname FROM pg_indexes WHERE schemaname = %s",
+            (schema, schema))
+        return {r[0].lower() for r in cur.fetchall()}
+    finally:
+        try:
+            conn.close()
+        except Exception:                                      # noqa: BLE001
+            pass
+
+
 def existing_tables(target, schema: str) -> set[str]:
     """What the target already has in this schema."""
     conn = target.connect()
@@ -179,6 +204,25 @@ def apply(plan: dict, target, *, approved_by: str, post_load: bool = False,
                 f"{schema}: {', '.join(clash[:6])}. Applying again would fail on the first "
                 "CREATE. Drop them, or pass allow_existing if they are known-empty and "
                 "you intend to add the rest.")
+    else:
+        # The post-load twin of rule 4. A second press after a successful pass
+        # re-ran the renames first, found `"group"` already renamed, and failed
+        # with "column does not exist" -- a correct rollback that read as a
+        # broken schema, and whose record replaced the one saying it had worked.
+        # A key or index already present means this pass (or part of it by
+        # hand) has run: say so and touch nothing.
+        wanted = {n for x in statements for n in (constraint_name(x), index_name(x)) if n}
+        present = sorted(wanted & existing_keys_and_indexes(target, schema)) if wanted else []
+        if present:
+            whole = len(present) == len(wanted)
+            raise ApplyRefused(
+                (f"the post-load pass has already been applied: all {len(wanted)} keys, "
+                 "checks and indexes are on the target. Nothing was run; the target is "
+                 "unchanged." if whole else
+                 f"{len(present)} of the {len(wanted)} keys, checks and indexes this pass "
+                 f"creates are already on the target ({', '.join(present[:6])}). Applying "
+                 "again would fail on the first of them. Nothing was run.")
+                + " Continue with Phase 7's residue and Phase 8.")
 
     attempted: list[dict] = []
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")

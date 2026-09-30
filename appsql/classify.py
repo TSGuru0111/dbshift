@@ -32,7 +32,13 @@ import re
 from pathlib import Path
 
 CATALOGUE_PATH = Path(__file__).resolve().parent / "constructs.json"
-_CATALOGUE: list[dict] | None = None
+# One catalogue per source engine: MySQL application SQL shares almost nothing
+# with Oracle's, and a MySQL statement must never be scanned for ROWNUM.
+CATALOGUE_PATHS = {
+    "ORACLE": CATALOGUE_PATH,
+    "MYSQL": Path(__file__).resolve().parent / "constructs_mysql.json",
+}
+_CATALOGUES: dict[str, list[dict]] = {}
 
 RULE, MODEL, MANUAL, INCOMPLETE = "RULE", "MODEL", "MANUAL", "INCOMPLETE"
 
@@ -43,15 +49,20 @@ HINT = re.compile(r"/\*\+[\s\S]*?\*/")
 _HINT_TOKEN = "/*+HINT*/"
 
 
-def catalogue() -> list[dict]:
-    global _CATALOGUE
-    if _CATALOGUE is None:
-        _CATALOGUE = json.loads(CATALOGUE_PATH.read_text(encoding="utf-8"))["constructs"]
-    return _CATALOGUE
+def engine_of(source_engine: str | None) -> str:
+    return "MYSQL" if (source_engine or "").upper() == "MYSQL" else "ORACLE"
 
 
-def by_id() -> dict[str, dict]:
-    return {c["id"]: c for c in catalogue()}
+def catalogue(source_engine: str | None = None) -> list[dict]:
+    engine = engine_of(source_engine)
+    if engine not in _CATALOGUES:
+        _CATALOGUES[engine] = json.loads(
+            CATALOGUE_PATHS[engine].read_text(encoding="utf-8"))["constructs"]
+    return _CATALOGUES[engine]
+
+
+def by_id(source_engine: str | None = None) -> dict[str, dict]:
+    return {c["id"]: c for c in catalogue(source_engine)}
 
 
 def code_only(text: str) -> str:
@@ -119,11 +130,11 @@ def code_only(text: str) -> str:
     return text_out
 
 
-def scan(sql: str) -> list[dict]:
+def scan(sql: str, source_engine: str | None = None) -> list[dict]:
     """Every catalogued construct present in this statement, with a count."""
     code = code_only(sql)
     found = []
-    for c in catalogue():
+    for c in catalogue(source_engine):
         hits = re.findall(c["pattern"], code, re.IGNORECASE | re.MULTILINE)
         if hits:
             found.append({
@@ -137,7 +148,7 @@ def scan(sql: str) -> list[dict]:
 
 def route(stmt: dict) -> dict:
     """Where one extracted statement goes, and why."""
-    constructs = scan(stmt["sql"])
+    constructs = scan(stmt["sql"], stmt.get("source_engine"))
     base = {"constructs": constructs}
 
     # Incompleteness is decided before Oracle constructs are weighed: a
@@ -162,7 +173,8 @@ def route(stmt: dict) -> dict:
 
     if not constructs:
         return {**base, "route": RULE,
-                "reason": "no Oracle-specific construct found; the statement may port unchanged"}
+                "reason": f"no {'MySQL' if engine_of(stmt.get('source_engine')) == 'MYSQL' else 'Oracle'}"
+                          "-specific construct found; the statement may port unchanged"}
 
     return {**base, "route": RULE,
             "reason": "every construct is in the deterministic tier"}

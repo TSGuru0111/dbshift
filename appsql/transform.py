@@ -69,11 +69,11 @@ NEVER_DRAFTED = {
 }
 
 
-PROMPT = """You are rewriting one **Oracle** SQL statement so it runs on \
+PROMPT = """You are rewriting one **{source}** SQL statement so it runs on \
 **PostgreSQL 16**. The statement is embedded in a MyBatis mapper file in a Java \
 application, and the application will send your version instead of the original.
 
-THE ORACLE STATEMENT
+THE {source_upper} STATEMENT
 {sql}
 
 THE CONSTRUCTS THAT MUST CHANGE
@@ -147,7 +147,7 @@ def bedrock_transform(stmt: dict, found: list[dict], client=None) -> dict:
     """
     from bedrock.client import BedrockClient, BedrockError
 
-    drafted = [c for c in found if c["id"] not in NEVER_DRAFTED]
+    drafted = [c for c in found if c["id"] not in _never_drafted(stmt.get("source_engine"))]
     if not drafted:
         raise TransformUnavailable(
             "every construct in this statement is one no model is asked about: "
@@ -157,10 +157,13 @@ def bedrock_transform(stmt: dict, found: list[dict], client=None) -> dict:
     if stmt.get("dynamic"):
         dynamic_note = _DYNAMIC_NOTE.format(tags=", ".join(stmt["dynamic_tags"]))
 
+    mysql = classify.engine_of(stmt.get("source_engine")) == "MYSQL"
     prompt = PROMPT.format(
         sql=stmt["sql"],
         constructs=_constructs_for_prompt(found),
         dynamic_note=dynamic_note,
+        source="MySQL" if mysql else "Oracle",
+        source_upper="MYSQL" if mysql else "ORACLE",
     )
 
     client = client or BedrockClient()
@@ -213,18 +216,36 @@ def bedrock_transform(stmt: dict, found: list[dict], client=None) -> dict:
     }
 
 
-def manual_note(found: list[dict]) -> dict | None:
+def _never_drafted(source_engine: str | None = None) -> dict:
+    """The constructs no model is asked about, with the reason.
+
+    Oracle's list is written out above. MySQL's is every manual-tier row of its
+    catalogue, reason and all -- so a manual construct added to the catalogue
+    can never reach the model by being forgotten here.
+    """
+    if classify.engine_of(source_engine) != "MYSQL":
+        return NEVER_DRAFTED
+    # The catalogue's own note first. Oracle's text used to win for the ids both
+    # engines share, so a MySQL run told the reader that 4c renamed "its Oracle
+    # name" and that DBMIG_APP.ORDER becomes order_col -- 4c's MySQL mapping is
+    # order -> order_tbl, so the name a person was pointed at did not exist.
+    return {c["id"]: c["note"] or NEVER_DRAFTED.get(c["id"])
+            for c in classify.catalogue("MYSQL") if c["tier"] == "manual"}
+
+
+def manual_note(found: list[dict], source_engine: str | None = None) -> dict | None:
     """What a person is told about a statement no model is asked about.
 
     Returns the reason and the construct that caused it, or None when nothing
     in this statement is in the never-drafted set.
     """
+    never = _never_drafted(source_engine)
     for con in found:
-        if con["id"] in NEVER_DRAFTED:
+        if con["id"] in never:
             return {
                 "construct_id": con["id"],
                 "construct": con["name"],
-                "why_no_draft": NEVER_DRAFTED[con["id"]],
+                "why_no_draft": never[con["id"]],
                 "postgres": con["postgres"],
             }
     return None
@@ -241,12 +262,13 @@ def transform(stmt: dict, model_mode: str = "off", client=None) -> dict:
     `source: None` and the reason, because a phase that dies on an
     unconvertible statement cannot report on the ones it did convert.
     """
-    found = classify.scan(stmt["sql"])
+    engine = stmt.get("source_engine")
+    found = classify.scan(stmt["sql"], engine)
 
     # A construct no model is asked about short-circuits everything, including
     # the rules -- the rules would decline it anyway, and this gives the
     # specific reason rather than a generic one.
-    manual = manual_note(found)
+    manual = manual_note(found, engine)
     if manual:
         return {
             "sql": None, "constructs": [], "source": None,
@@ -256,7 +278,11 @@ def transform(stmt: dict, model_mode: str = "off", client=None) -> dict:
         }
 
     try:
-        conv = rules.convert(stmt["sql"], found)
+        if classify.engine_of(engine) == "MYSQL":
+            from . import rules_mysql
+            conv = rules_mysql.convert(stmt["sql"], found)
+        else:
+            conv = rules.convert(stmt["sql"], found)
         conv["probe_sql"] = conv["sql"]
         return conv
     except rules.Declined as exc:

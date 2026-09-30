@@ -285,7 +285,8 @@ def test_model_call_contract():
     for name, prompt in (("source", sct_generate.SOURCE_PROMPT),
                          ("target", sct_generate.TARGET_PROMPT)):
         try:
-            out = prompt.format(item="{}", route_why="w", clears_when="c")
+            out = prompt.format(item="{}", route_why="w", clears_when="c",
+                                source_label="Oracle")
             check(f"the {name} prompt formats without KeyError", True, True)
             check("...and leaks no doubled braces", "{{" in out or "}}" in out, False)
             truthy("...and still shows the JSON shape", '"rollback_sql"' in out)

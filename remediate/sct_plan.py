@@ -96,6 +96,17 @@ def pg_policy_check(fix: dict) -> dict:
                  "what the fix creates")
 
 
+def _sqlstate(exc: Exception) -> str | None:
+    """The SQLSTATE of a driver error, from pg8000's dict or psycopg's attribute."""
+    code = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+    if code:
+        return str(code)
+    for arg in getattr(exc, "args", ()) or ():
+        if isinstance(arg, dict) and arg.get("C"):
+            return str(arg["C"])
+    return None
+
+
 def pg_dry_run(fix: dict, pg_target=None) -> dict:
     """Run the statement on the real PostgreSQL and roll it back.
 
@@ -139,6 +150,20 @@ def pg_dry_run(fix: dict, pg_target=None) -> dict:
             conn.rollback()
         except Exception:  # noqa: BLE001 -- already failing; do not mask the cause
             pass
+        if _sqlstate(exc) == "3F000":
+            # invalid_schema_name: the fix names a schema the target does not
+            # have YET. That is not evidence the statement is wrong -- the
+            # target's DDL (Phase 4c) has not been applied -- so it is unproven,
+            # not rejected. A wrong TABLE in an existing schema is 42P01 and
+            # still fails below, so a hallucinated name is not excused by this.
+            return _gate(
+                "pg_dry_run", BLOCKED_GATE,
+                "the target does not have this schema yet, so the statement could not "
+                f"be proven -- {str(exc).strip()[:160]}",
+                "Apply the converted schema DDL (Phase 4c) to the PostgreSQL target, "
+                "then re-plan. Until it runs against the real tables it may not be "
+                "applied.",
+            )
         return _gate(
             "pg_dry_run", FAIL,
             f"the statement failed on the PostgreSQL target -- {type(exc).__name__}: "
@@ -220,13 +245,15 @@ def plan_item(
     rehearsal_target=None,
     pg_target=None,
     approvals: dict | None = None,
+    source_engine: str | None = None,
 ) -> dict:
     """Plan one SCT action item. Returns a record; touches nothing."""
     approvals = approvals or {}
     fix_id = _fix_id(item)
+    engine = (source_engine or "ORACLE").upper()
 
     # The route is read, never computed here.
-    r = sct_route.route(item.get("issue_code"))
+    r = sct_route.route(item.get("issue_code"), engine)
 
     entry = {
         "fix_id": fix_id,
@@ -306,6 +333,19 @@ def plan_item(
         )
         return entry
 
+    if r["where"] == sct_route.SOURCE and engine != "ORACLE":
+        # The source-side gates -- the allow-list, the rehearsal dry run, the
+        # named approver -- are built for Oracle. A MySQL statement must never be
+        # judged by them, so a source fix on another engine is a person's.
+        entry["status"] = HUMAN_AUTHORED
+        entry["advice"] = r["why"]
+        entry["reason"] = (
+            f"A fix to the {engine} source. This project's source-side gates are "
+            "Oracle's, so nothing is drafted or gated for another engine; a person "
+            "makes this change on the source."
+        )
+        return entry
+
     if r["who"] == sct_route.PERSON:
         entry["status"] = HUMAN_AUTHORED
         entry["advice"] = r["why"]
@@ -318,9 +358,10 @@ def plan_item(
     # ---- a statement may exist: draft it ------------------------------------
     from . import sct_generate
 
-    fix, generated_by = sct_generate.build_fix(item, r, model_mode=model_mode)
+    fix, generated_by = sct_generate.build_fix(item, r, model_mode=model_mode,
+                                               source_engine=engine)
     entry["generated_by"] = generated_by
-    entry["engine"] = "oracle" if r["where"] == sct_route.SOURCE else "postgresql"
+    entry["engine"] = engine.lower() if r["where"] == sct_route.SOURCE else "postgresql"
 
     if fix is None:
         entry["status"] = HUMAN_AUTHORED
@@ -370,12 +411,14 @@ def build(
     rehearsal_target=None,
     pg_target=None,
     approvals: dict | None = None,
+    source_engine: str | None = None,
 ) -> dict:
     """A remediation plan over an SCT assessment, grouped by where the work lands."""
     issues = sct_assessment.get("issues") or []
+    engine = (source_engine or sct_assessment.get("source_engine") or "ORACLE").upper()
     entries = [
         plan_item(i, model_mode=model_mode, rehearsal_target=rehearsal_target,
-                  pg_target=pg_target, approvals=approvals)
+                  pg_target=pg_target, approvals=approvals, source_engine=engine)
         for i in issues
     ]
 
@@ -395,6 +438,7 @@ def build(
         # Phase 6 refuses to provision from records that disagree -- so a plan
         # without one read as a mismatch and blocked a consistent pipeline.
         "collector_run_id": sct_assessment.get("collector_run_id"),
+        "source_engine": engine,
         "target": (sct_assessment.get("target") or {}).get("id"),
         "model_mode": model_mode,
         "entries": entries,

@@ -70,7 +70,20 @@ def load(run_dir: Path) -> dict:
     owners = Counter(o["owner"] for o in objects) or Counter(t["owner"] for t in tables)
     estate = owners.most_common(1)[0][0] if owners else None
 
+    # The engine is read from the run, never assumed: it decides which construct
+    # catalogue, prompt, and column map apply. Runs before 2026-09-28 are Oracle.
+    try:
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        manifest = {}
+    source_engine = str((manifest.get("source") or {}).get("source_engine") or "ORACLE").upper()
+
     return {
+        "source_engine": source_engine,
+        # Foreign keys, so the shadow schema types a MySQL `bigint unsigned`
+        # foreign key as bigint -- the same as Phase 4c does -- not numeric.
+        "constraints": dataset(run_dir, "constraints")["rows"],
+        "constraint_columns": dataset(run_dir, "constraint_columns")["rows"],
         "collector_run_id": src.get("collector_run_id") or dataset(run_dir, "tables").get("collector_run_id"),
         "run_dir": run_dir,
         "estate": estate,

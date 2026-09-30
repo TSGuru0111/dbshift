@@ -75,7 +75,7 @@ def ident(name: str, notes: list[DdlNote] | None = None, *, context: str = "") -
         if notes is not None:
             notes.append(DdlNote(
                 "reserved_word", f"{context}{name}",
-                f"`{out}` is reserved in PostgreSQL but not in Oracle, so it is renamed to "
+                f"`{out}` is reserved in PostgreSQL, so it is renamed to "
                 f"`{renamed}`. Quoting it instead would work, but then every hand-written query "
                 "would have to quote it forever. Application SQL referencing this name must change.",
                 "warn"))
@@ -356,8 +356,13 @@ def index_ddl(*, owner: str, indexes: list[dict], index_columns: list[dict],
     return out
 
 
-def build(*, owner: str, datasets: dict) -> dict:
+def build(*, owner: str, datasets: dict, source_engine: str | None = None) -> dict:
     """Every statement needed to create this schema on PostgreSQL, in order."""
+    if (source_engine or "").upper() == "MYSQL":
+        # MySQL's catalogue is read differently (see ddl_mysql's docstring); the
+        # emission order and the notes are the same.
+        from . import ddl_mysql
+        return ddl_mysql.build(owner=owner, datasets=datasets)
     notes: list[DdlNote] = []
     columns = [c for c in datasets.get("columns", []) if c.get("owner") == owner]
     by_table: dict[str, list[dict]] = {}

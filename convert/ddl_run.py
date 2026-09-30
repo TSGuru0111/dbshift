@@ -44,9 +44,19 @@ def _latest_run() -> str:
     return runs[-1].name
 
 
+def source_engine_of(run_id: str) -> str:
+    """The source engine a collector run recorded; runs before 2026-09-28 are Oracle."""
+    path = Path(__file__).resolve().parent.parent / "collector" / "output" / run_id / "manifest.json"
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "ORACLE"
+    return str((manifest.get("source") or {}).get("source_engine") or "ORACLE").upper()
+
+
 def build(run_id: str, owner: str) -> dict:
     datasets = {n: prov_records._dataset(run_id, n) for n in DATASETS}
-    plan = ddl.build(owner=owner, datasets=datasets)
+    plan = ddl.build(owner=owner, datasets=datasets, source_engine=source_engine_of(run_id))
     plan["collector_run_id"] = run_id
     plan["estate"] = owner
     plan["generated_at_utc"] = datetime.now(timezone.utc).isoformat()
@@ -136,7 +146,10 @@ def main(argv: list[str] | None = None) -> int:
     plan = build(run_id, owner)
     seqs = [ddl.ident(s["sequence_name"]) for s in prov_records._dataset(run_id, "sequences")
             if s.get("sequence_owner") == owner or s.get("owner") == owner]
-    plan["sequences_needed"] = seqs
+    # MySQL's `sequences` rows are AUTO_INCREMENT counters (`table.column`), which
+    # the DDL already emits as identity columns. Scaffolding them as sequences
+    # tried to create `schema.table.column` and failed the whole compile.
+    plan["sequences_needed"] = [] if plan.get("source_engine") == "MYSQL" else seqs
 
     print(f"\nestate    : {owner}   run {run_id}")
     print(f"tables    : {plan['counts']['tables']}")

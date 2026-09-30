@@ -100,6 +100,21 @@ Rules that are not negotiable:
 - If you are not confident a construct has a faithful translation, mark it not_translated and explain; do not guess.
 """
 
+SYSTEM_PROMPT_MYSQL = """You convert one MySQL stored program (SQL/PSM) to PostgreSQL PL/pgSQL.
+Rules that are not negotiable:
+- Output ONLY a JSON object matching the schema you are given. No prose, no markdown fences.
+- Create only the object(s) that correspond to the source object. Never DROP, GRANT, ALTER, or create tables.
+- Never add SECURITY DEFINER. MySQL's DEFINER= is dropped; if the caller relied on the definer's rights, record it as not_translated.
+- Names are unquoted lower-case. No backticks anywhere. Tables are referenced unqualified; the search_path resolves them.
+- SELECT ... INTO: do NOT add STRICT where the code tests the variable for NULL afterwards. MySQL leaves the variable NULL on zero rows and the code relies on it; STRICT would turn that check into an unhandled exception. Say in the construct note what happens on more than one row.
+- A trigger becomes <name>_fn() RETURNS trigger plus CREATE TRIGGER <name>. A BEFORE trigger must RETURN NEW; an AFTER trigger RETURNs NULL.
+- Do not COMMIT or ROLLBACK inside a function, nor inside any block that has an EXCEPTION clause. Remove START TRANSACTION / COMMIT / ROLLBACK and let the caller's transaction make the work atomic, recording that in the construct note.
+- UNSIGNED integer parameters and variables use the widened type: int unsigned -> bigint, bigint unsigned -> bigint. Where the unsigned type refused negatives, add an explicit check.
+- DETERMINISTIC does not make a function IMMUTABLE: one that reads tables is STABLE at most.
+- Every construct in the list you are given must appear in "constructs" as translated (with the PostgreSQL form) or not_translated (with a reason). Do not silently drop behaviour.
+- If you are not confident a construct has a faithful translation, mark it not_translated and explain; do not guess.
+"""
+
 OUTPUT_SCHEMA = {
     "statements": ["CREATE ... ;", "..."],
     "constructs": [{"oracle": "<construct id from the list>", "handling": "translated|not_translated",
@@ -111,7 +126,9 @@ OUTPUT_SCHEMA = {
 }
 
 
-def build_prompt(obj: dict, constructs: list[dict], column_types: dict[str, list[str]]) -> str:
+def build_prompt(obj: dict, constructs: list[dict], column_types: dict[str, list[str]],
+                 source_engine: str | None = None) -> str:
+    mysql = (source_engine or "").upper() == "MYSQL"
     lines = [
         f"Source object: {obj['owner']}.{obj['object_name']} ({obj['object_type']}), SHA-256 {obj['source_sha256']}",
         "",
@@ -127,18 +144,22 @@ def build_prompt(obj: dict, constructs: list[dict], column_types: dict[str, list
     lines += [
         "",
         "Target schema name: " + obj["owner"].lower(),
-        "Naming: package members become <package>$<member>; a trigger becomes <name>_fn() plus CREATE TRIGGER <name>.",
+        ("Naming: a trigger becomes <name>_fn() plus CREATE TRIGGER <name>. The \"oracle\" key in "
+         "each construct holds the construct id from the list, whatever the source engine."
+         if mysql else
+         "Naming: package members become <package>$<member>; a trigger becomes <name>_fn() plus CREATE TRIGGER <name>."),
         "",
         "Return JSON with exactly this shape:",
         json.dumps(OUTPUT_SCHEMA, indent=2),
         "",
-        "Oracle source:",
+        "MySQL source:" if mysql else "Oracle source:",
         obj["source_text"],
     ]
     return "\n".join(lines)
 
 
-def validate_output(text: str, obj: dict, constructs: list[dict]) -> dict:
+def validate_output(text: str, obj: dict, constructs: list[dict],
+                    source_engine: str | None = None) -> dict:
     raw = text.strip()
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE)
     # **An empty reply is not a malformed reply.** `json.loads("")` raises
@@ -164,7 +185,7 @@ def validate_output(text: str, obj: dict, constructs: list[dict]) -> dict:
     cs = payload.get("constructs")
     if not isinstance(cs, list):
         raise ModelOutputInvalid("constructs must be a list")
-    known = set(classify.by_id())
+    known = set(classify.by_id(source_engine))
     for c in cs:
         if not isinstance(c, dict) or c.get("oracle") not in known:
             raise ModelOutputInvalid(f"unknown construct in output: {c!r}")
@@ -198,7 +219,8 @@ def _audit(row: dict, path: Path) -> None:
 
 
 def live_convert(obj: dict, constructs: list[dict], column_types: dict, *, client=None,
-                 tier: str = "reasoning", audit_path: Path = AUDIT_PATH) -> tuple[dict, str]:
+                 tier: str = "reasoning", audit_path: Path = AUDIT_PATH,
+                 source_engine: str | None = None) -> tuple[dict, str]:
     """Ask the reasoning tier. Raises on transport failure or invalid output.
 
     `client` is anything with .complete(tier, prompt, system=..., max_tokens=...)
@@ -207,18 +229,21 @@ def live_convert(obj: dict, constructs: list[dict], column_types: dict, *, clien
     if client is None:
         from bedrock.client import BedrockClient
         client = BedrockClient()
-    prompt = build_prompt(obj, constructs, column_types)
+    mysql = (source_engine or "").upper() == "MYSQL"
+    prompt = build_prompt(obj, constructs, column_types, source_engine)
     input_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-    response = client.complete(tier, prompt, system=SYSTEM_PROMPT, max_tokens=4096, temperature=0)
+    response = client.complete(tier, prompt, system=SYSTEM_PROMPT_MYSQL if mysql else SYSTEM_PROMPT,
+                               max_tokens=4096, temperature=0)
     verdict, error, conv = "accepted", None, None
     try:
-        conv = validate_output(response["text"], obj, constructs)
+        conv = validate_output(response["text"], obj, constructs, source_engine)
     except ModelOutputInvalid as exc:
         verdict, error = "rejected", str(exc)
     _audit(
         {
             "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "phase": "convert",
+            "source_engine": "MYSQL" if mysql else "ORACLE",
             "object": f"{obj['owner']}.{obj['object_name']} ({obj['object_type']})",
             "source_sha256": obj["source_sha256"],
             "model_id": response.get("model_id"),
