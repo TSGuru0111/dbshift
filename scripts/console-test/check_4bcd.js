@@ -69,12 +69,15 @@ async function geometry(page, selector) {
     n: e.querySelector('.dot').textContent.trim(),
   })));
   const labels = rail.map(r => r.label);
-  for (const [n, label] of [['4b', 'Convert PL/SQL'], ['4c', 'Schema DDL'],
+  // 4b is named for what it converts: PL/SQL on Oracle, routines on MySQL,
+  // which has no PL/SQL. The server's source engine decides which to expect.
+  const conv4b = (await page.evaluate(() => SRC)) === 'MYSQL' ? 'Convert routines' : 'Convert PL/SQL';
+  for (const [n, label] of [['4b', conv4b], ['4c', 'Schema DDL'],
                             ['4d', 'Application SQL']]) {
     log(`the rail carries ${n} ${label}`,
         rail.some(r => r.n === n && r.label === label), labels.join(' | '));
   }
-  const i4b = labels.indexOf('Convert PL/SQL');
+  const i4b = labels.indexOf(conv4b);
   const i4c = labels.indexOf('Schema DDL');
   const i4d = labels.indexOf('Application SQL');
   log('they are in order 4b -> 4c -> 4d', i4b < i4c && i4c < i4d,

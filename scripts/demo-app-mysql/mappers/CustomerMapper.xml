@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  SEEDED APPLICATION SQL - not a real application.
+
+  MySQL SQL that a PostgreSQL target will not accept, or will accept and
+  behave differently. Each construct is catalogued in
+  `appsql/constructs_mysql.json` and listed in
+  `scripts/demo-app-mysql/answer_key.json`, which Phase 4d is measured against.
+
+  The tables and columns are real: dbmig_mysql_app.customer, customer_order,
+  order_line, product, product_category, product_daily_sales and `order`, as
+  Phase 1 discovered them on the EC2 MySQL source.
+-->
+<mapper namespace="com.dbmig.mysqlapp.dao.CustomerMapper">
+
+  <!-- MYAPP-001 MY_BACKTICK, MYAPP-002 MY_IFNULL (rule) -->
+  <select id="findCustomerByRef" resultType="map">
+    SELECT `customer_id`, `full_name`, IFNULL(`phone`, '') AS phone
+      FROM `customer`
+     WHERE `customer_ref` = #{customerRef}
+  </select>
+
+  <!-- MYAPP-003 MY_LIMIT_OFFSET (rule): MySQL's first LIMIT argument is the OFFSET. -->
+  <select id="pageCustomers" resultType="map">
+    SELECT customer_id, full_name, email
+      FROM customer
+     WHERE country_code = #{country}
+     ORDER BY customer_id
+     LIMIT #{offset}, #{pageSize}
+  </select>
+
+  <!-- MYAPP-003 again, inside dynamic SQL: the tags must survive the rewrite. -->
+  <select id="findCustomers" resultType="map">
+    SELECT customer_id, full_name, loyalty_points
+      FROM customer
+    <where>
+      <if test="country != null">AND country_code = #{country}</if>
+      <if test="minPoints != null">AND loyalty_points &gt;= #{minPoints}</if>
+    </where>
+     ORDER BY customer_id
+     LIMIT #{offset}, #{pageSize}
+  </select>
+
+  <!-- MYAPP-004 MY_CURDATE (rule) -->
+  <select id="countJoinedToday" resultType="long">
+    SELECT count(*) FROM customer WHERE created_at &gt;= CURDATE()
+  </select>
+
+  <!-- MYAPP-005 MY_NOW (rule): NOW() is a zone-less DATETIME - LOCALTIMESTAMP. -->
+  <update id="markVerified">
+    UPDATE customer
+       SET is_verified = 1
+     WHERE customer_id = #{customerId}
+       AND created_at &lt;= NOW()
+  </update>
+
+  <!-- MYAPP-006 MY_LIKE_CI, MYAPP-007 MY_CONCAT (model):
+       'smi%' matches 'Smith' under utf8mb4_0900_ai_ci and not under PostgreSQL LIKE. -->
+  <select id="searchByNamePrefix" resultType="map">
+    SELECT customer_id, full_name
+      FROM customer
+     WHERE full_name LIKE CONCAT(#{prefix}, '%')
+  </select>
+
+  <!-- MYAPP-008 MY_IF_FN, MYAPP-007 MY_CONCAT (model) -->
+  <select id="displayName" resultType="string">
+    SELECT IF(is_verified = 1, CONCAT(full_name, ' (verified)'), full_name) AS display_name
+      FROM customer
+     WHERE customer_id = #{customerId}
+  </select>
+
+  <!-- MYAPP-009 MY_INSERT_IGNORE (model): IGNORE also swallows non-duplicate errors. -->
+  <insert id="insertCustomerIfAbsent">
+    INSERT IGNORE INTO customer (customer_ref, full_name, email, country_code)
+    VALUES (#{customerRef}, #{fullName}, #{email}, #{countryCode})
+  </insert>
+
+  <!-- MYAPP-010 MY_FOUND_ROWS (manual): the count lives in the session between two statements. -->
+  <select id="pageWithTotal" resultType="map">
+    SELECT SQL_CALC_FOUND_ROWS customer_id, full_name
+      FROM customer
+     ORDER BY customer_id
+     LIMIT 20
+  </select>
+
+  <select id="lastPageTotal" resultType="long">
+    SELECT FOUND_ROWS()
+  </select>
+
+  <!-- MYAPP-011 MY_USER_VARIABLE (manual): the intent is row_number() OVER (...). -->
+  <select id="rankByLoyalty" resultType="map">
+    SELECT customer_id, @rnk := @rnk + 1 AS loyalty_rank
+      FROM customer, (SELECT @rnk := 0) init
+     ORDER BY loyalty_points DESC
+  </select>
+
+  <!-- MYAPP-012 MYBATIS_INTERPOLATION (manual): ${} must stay ${}. -->
+  <select id="customersSortedBy" resultType="map">
+    SELECT customer_id, full_name FROM customer ORDER BY ${sortColumn}
+  </select>
+
+</mapper>

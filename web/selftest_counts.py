@@ -135,8 +135,36 @@ def main() -> int:
             check(f"{label.lower()}: the console agrees with Phase 2's {view}",
                   _tile(datasets, label)["value"], want)
         raw = conn.execute("SELECT COUNT(*) FROM tables").fetchone()[0]
-        check("and the raw count really was different (the bug was real)",
-              _tile(datasets, "Tables")["value"] != raw, True)
+        # **This assertion is Oracle-specific, and saying so is the point.**
+        #
+        # The original bug was the console reporting DBA_TABLES raw -- 21 tables
+        # on an estate with 9 -- because Oracle manages Text indexes, queue
+        # tables, mview logs and an mview container on the user's behalf. So on
+        # Oracle, raw MUST differ from the user count, or the exclusion is not
+        # doing anything and the fix has regressed.
+        #
+        # On MySQL it must NOT differ: MySQL generates no such internals, so raw
+        # == user is the correct result. Asserting a difference there fails on
+        # working code -- which is what happened on 2026-09-29, when a MySQL run
+        # became the newest on disk and this check reported a bug that was not
+        # one. The engine comes from the run's own manifest, not from the
+        # environment, so the assertion follows the data it is judging.
+        engine = "ORACLE"
+        try:
+            manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+            engine = (manifest.get("source", {}).get("source_engine")
+                      or manifest.get("collector", {}).get("connection", {})
+                                 .get("source_engine") or "ORACLE").upper()
+        except (OSError, ValueError, KeyError):
+            pass
+        user_count = _tile(datasets, "Tables")["value"]
+        if engine == "ORACLE":
+            check("and the raw count really was different (the bug was real)",
+                  user_count != raw, True)
+        else:
+            check(f"{engine}: raw equals the user count, because this engine "
+                  "generates no internals to exclude",
+                  user_count == raw, True)
         conn.close()
 
     print(f"\n{PASS}/{PASS + FAIL} checks passed")

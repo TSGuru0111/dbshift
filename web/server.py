@@ -79,6 +79,9 @@ from sizing import utilization as sizing_utilization
 from sct import export as sct_export
 from sct import parse as sct_parse
 from sct import route as sct_route
+import engines
+from engines import spec as engine_spec
+
 from sct import runner as sct_runner
 from sct import targets as sct_targets_mod
 from sct import toolchain as sct_toolchain
@@ -114,6 +117,13 @@ class State:
     sizing: dict | None = None
     engine: str = sizing_target.ORACLE   # which target every later phase acts on
     engine_chosen_by: str | None = None
+    # Which engine the SOURCE runs -- distinct from `engine` above, which is the
+    # target. Declared at Connect, because it changes the connection form itself:
+    # Oracle takes host:port/service on 1521, MySQL host:port/database on 3306.
+    # Defaults to Oracle so a console that never touches the picker behaves
+    # exactly as it did before the flag existed.
+    source_engine: str = engines.DEFAULT
+    source_engine_chosen_by: str | None = None
     # Full load or full load + CDC, asked in Phase 1. Decides whether the
     # CDC-only findings are blockers -- see collector/mode.py.
     migration_mode: str = migration_mode.DEFAULT
@@ -155,9 +165,39 @@ class State:
     # decision came from.
     sct_remediation: dict | None = None
     sct_gate: dict | None = None
+    # MySQL -> RDS for MySQL: the source's own schema, read for Phase 7.
+    schema_copy: dict | None = None
 
 
 STATE = State()
+
+
+def _preflight():
+    """The preflight module for the declared source engine.
+
+    One accessor rather than two `if` statements, because `/api/state` and
+    `/api/connect` must never disagree about which engine's checks and network
+    requirements are in force -- an Oracle preflight against MySQL fails with
+    `DPY-6005`, which reads as a credentials problem rather than a wrong-module
+    one. Measured 2026-09-29, before this existed.
+    """
+    if engines.is_mysql(STATE.source_engine):
+        from web import preflight_mysql
+
+        return preflight_mysql
+    return preflight
+
+
+def _default_dsn() -> str:
+    """The DSN default for the declared source engine.
+
+    `localhost:1521/XEPDB1` means nothing to MySQL, and handing it to the MySQL
+    dialect fails in DSN parsing rather than at connect -- so the default follows
+    the engine rather than being a single constant.
+    """
+    if engines.is_mysql(STATE.source_engine):
+        return collector_config.DEFAULT_MYSQL_DSN
+    return collector_config.DEFAULT_DSN
 
 PROBE_DESCRIPTIONS = {
     "identity": "Version, container, character set, log mode, supplemental logging",
@@ -318,6 +358,26 @@ def get_state():
         "has_sct_gate": STATE.sct_gate is not None,
         "model_mode": _model_mode(),
         "has_sizing": STATE.sizing is not None,
+        # The SOURCE engine, and what it implies for the Connect form. Sent on
+        # every state read so a page reload restores the right form and the right
+        # target list without a second call.
+        "source_engine": STATE.source_engine,
+        "source_engine_label": engines.LABEL[STATE.source_engine],
+        "source_engine_chosen_by": STATE.source_engine_chosen_by,
+        # The whole spec each picker option needs, so the Connect form can
+        # rewire itself without a second round trip. cdc_requirements and
+        # collector_privileges are here because the note beside the picker states
+        # them, and a note that renders "0 grants" is worse than no note.
+        "source_engines": [
+            {"id": e, "label": engines.LABEL[e],
+             "dsn_shape": engine_spec.spec(e)["dsn_shape"],
+             "dsn_example": engine_spec.spec(e)["dsn_example"],
+             "default_port": engine_spec.spec(e)["default_port"],
+             "cdc_requirements": list(engine_spec.spec(e)["cdc_requirements"]),
+             "collector_privileges": list(engine_spec.spec(e)["collector_privileges"])}
+            for e in engines.SOURCE_ENGINES
+        ],
+        "legal_targets": list(engine_spec.targets_for(STATE.source_engine)),
         "engine": STATE.engine,
         "engine_label": sizing_target.LABEL[STATE.engine],
         "engine_chosen_by": STATE.engine_chosen_by,
@@ -328,12 +388,14 @@ def get_state():
         "migration_modes": [
             {"mode": m, "label": migration_mode.LABEL[m],
              "description": migration_mode.DESCRIPTION[m],
-             "detail": migration_mode.DETAIL[m]}
+             "detail": migration_mode.detail(m, STATE.source_engine)}
             for m in migration_mode.MODES
         ],
         "cdc_readiness": migration_mode.readiness(
-            STATE.facts.get("log_mode"), STATE.facts.get("supplemental_logging")
+            STATE.facts.get("log_mode"), STATE.facts.get("supplemental_logging"),
+            source_engine=STATE.source_engine, native=STATE.facts,
         ),
+        "cdc_wording": migration_mode.wording(STATE.source_engine),
         "has_remediation": STATE.remediation is not None,
         "has_conversion": STATE.conversion is not None,
         "pg_dsn": STATE.pg_dsn,
@@ -343,13 +405,13 @@ def get_state():
         "utilization": STATE.utilization,
         "rehearsal_dsn": STATE.rehearsal_dsn,
         "run_id": STATE.run_id,
-        "network_requirements": preflight.NETWORK_REQUIREMENTS,
+        "network_requirements": _preflight().NETWORK_REQUIREMENTS,
     }
 
 
 @app.post("/api/connect")
 def connect(req: ConnectRequest):
-    result = preflight.run(req.dsn, req.user, req.password, req.schema_name)
+    result = _preflight().run(req.dsn, req.user, req.password, req.schema_name)
     STATE.dsn, STATE.user, STATE.schema = req.dsn, req.user, req.schema_name
     STATE.checks, STATE.facts = result["checks"], result["facts"]
     # Whatever preflight resolved -- the schemas typed, or the ones discovered
@@ -527,6 +589,11 @@ def discover():
             migration_mode=STATE.migration_mode,
             mode_declared=STATE.mode_declared,
             mode_chosen_by=STATE.mode_chosen_by,
+            # Without this the collector defaults to Oracle and tries oracledb
+            # against MySQL -- DPY-6005, which reads as a credentials or network
+            # problem rather than the wrong driver. The preflight had already
+            # connected successfully by then, which makes it worse to diagnose.
+            source_engine=STATE.source_engine,
         )
         emit({"event": "start", "total": len(enabled), "probes": enabled})
         manifest = collector_run.execute(
@@ -676,7 +743,11 @@ def _discovery_summary(datasets: list[dict], facts: dict) -> list[dict]:
         {"label": "Columns", "value": count("columns"), "hint": "full structure captured"},
         {"label": "Indexes", "value": count("indexes"), "hint": "with columns and expressions"},
         {"label": "Constraints", "value": count("constraints"), "hint": "PK, FK, unique, check"},
-        {"label": "PL/SQL objects", "value": count("plsql_source"), "hint": "hashed for change detection"},
+        # plsql_source holds MySQL's routines and triggers too (full SHOW CREATE
+        # text), so the label follows the source -- "PL/SQL" on a MySQL run was
+        # wrong on the first screen a MySQL DBA reads.
+        {"label": "Stored routines" if engines.is_mysql(STATE.source_engine) else "PL/SQL objects",
+         "value": count("plsql_source"), "hint": "hashed for change detection"},
         {"label": "Size", "value": facts.get("size_gb", 0), "unit": "GB", "hint": "real segment bytes"},
         {"label": "Feature records", "value": count("feature_usage"), "hint": "the licence evidence"},
     ]
@@ -927,8 +998,9 @@ def sct_targets():
     what stops one leaking into Phase 3 as a path.
     """
     return {
-        "targets": sct_targets_mod.for_console(),
-        "default": sct_targets_mod.DEFAULT_TARGET_ID,
+        "source_engine": STATE.source_engine,
+        "targets": sct_targets_mod.for_console(STATE.source_engine),
+        "default": sct_targets_mod.default_target_id(STATE.source_engine),
         "assessed": sorted(STATE.sct),
     }
 
@@ -964,9 +1036,9 @@ def sct_assess(target: str = "", force: bool = False):
     if not STATE.connected or not STATE.password:
         raise HTTPException(409, "connect to the source first")
 
-    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    target_id = target or sct_targets_mod.default_target_id(STATE.source_engine)
     try:
-        target_row = sct_targets_mod.get(target_id)
+        target_row = sct_targets_mod.get(target_id, STATE.source_engine)
     except sct_targets_mod.UnknownTarget as exc:
         raise HTTPException(400, str(exc)) from None
 
@@ -991,13 +1063,14 @@ def sct_assess(target: str = "", force: bool = False):
 
         rec = sct_runner.assess(
             target_id=target_id,
-            dsn=STATE.dsn or collector_config.DEFAULT_DSN,
+            dsn=STATE.dsn or _default_dsn(),
             user=STATE.user or collector_config.DEFAULT_USER,
             password=STATE.password,
             schemas=list(STATE.schemas) or [STATE.schema],
             collector_run_id=STATE.run_id or "",
             on_line=lambda line: emit({"event": "sct", "line": line[:400]}),
             reuse_cached=not force,
+            source_engine=STATE.source_engine,
         )
 
         if not rec.get("ok"):
@@ -1040,11 +1113,12 @@ def _sct_summary(target_id: str) -> dict:
         "by_complexity": parsed.get("by_complexity") or {},
         "occurrences_by_complexity": parsed.get("occurrences_by_complexity") or {},
         "complexity_meaning": parsed.get("complexity_meaning") or {},
-        "issues": sct_route.annotate(parsed.get("issues") or []),
+        "issues": sct_route.annotate(parsed.get("issues") or [], STATE.source_engine),
         # The segregation Phase 4 and Phase 5 both act on: where the work lands
         # (source / target / decision / human) and who may do it. Deterministic,
         # from `sct/route.py` -- the model never decides any of it.
-        "segregation": sct_route.segregate(parsed.get("issues") or []),
+        "segregation": sct_route.segregate(parsed.get("issues") or [],
+                                           STATE.source_engine),
         # A column SCT added that this parser does not understand. Surfaced, not
         # dropped, so an SCT upgrade is visible instead of silently lossy.
         "unmapped_columns": parsed.get("unmapped_columns") or [],
@@ -1059,7 +1133,7 @@ def _sct_summary(target_id: str) -> dict:
 
 @app.get("/api/sct/assessment")
 def sct_assessment(target: str = ""):
-    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    target_id = target or sct_targets_mod.default_target_id(STATE.source_engine)
     if target_id not in STATE.sct:
         raise HTTPException(409, f"AWS SCT has not assessed {target_id} yet")
     return _sct_summary(target_id)
@@ -1096,7 +1170,7 @@ def sct_report_pdf(target: str = ""):
     *shape* from our rules and says so on every page; this is the real thing,
     and re-generating it would forfeit the only difference that matters.
     """
-    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    target_id = target or sct_targets_mod.default_target_id(STATE.source_engine)
     path = _sct_artefact(target_id, "pdf")
     return Response(
         content=path.read_bytes(),
@@ -1114,7 +1188,7 @@ def sct_report_xlsx(target: str = ""):
     alongside a sheet naming the tool, version and run that produced them. No
     value is recomputed; the only thing added is the container.
     """
-    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    target_id = target or sct_targets_mod.default_target_id(STATE.source_engine)
     path = _sct_artefact(target_id, "csv")
     rec = (STATE.sct[target_id]["record"] or {})
     data = sct_export.workbook_from_sct_csv(path, rec)
@@ -1128,7 +1202,7 @@ def sct_report_xlsx(target: str = ""):
 @app.get("/api/sct/report.csv")
 def sct_report_csv(target: str = ""):
     """SCT's own CSV, byte for byte."""
-    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    target_id = target or sct_targets_mod.default_target_id(STATE.source_engine)
     path = _sct_artefact(target_id, "csv")
     return Response(
         content=path.read_bytes(),
@@ -1173,7 +1247,8 @@ def _sct_issues_for(target_id: str) -> list[dict] | None:
     held = STATE.sct.get(target_id)
     if not held:
         return None
-    return sct_route.annotate((held.get("parsed") or {}).get("issues") or [])
+    return sct_route.annotate((held.get("parsed") or {}).get("issues") or [],
+                              STATE.source_engine)
 
 
 @app.get("/api/sct/remediate")
@@ -1183,7 +1258,7 @@ def sct_remediate(target: str = "", approve: str = ""):
     Streams because the model tier is involved: a live draft takes seconds per
     item, and a screen that sat blank for a minute would look broken.
     """
-    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    target_id = target or sct_targets_mod.default_target_id(STATE.source_engine)
     issues = _sct_issues_for(target_id)
     if issues is None:
         raise HTTPException(409, f"AWS SCT has not assessed {target_id} yet")
@@ -1194,8 +1269,18 @@ def sct_remediate(target: str = "", approve: str = ""):
 
         pg_target = STATE.pg_target or _pg_target_from_env()
         rehearsal = _rehearsal_target()
+        # The rehearsal copy exists only on the Oracle path: sct_plan routes every
+        # source-side fix on another engine to a person, so nothing is ever
+        # dry-run against a MySQL copy. "oracle rehearsal: not configured" on a
+        # MySQL run read as a missing prerequisite rather than a concept that
+        # does not apply.
+        if STATE.source_engine == "ORACLE":
+            src_detail = f"oracle rehearsal: {'configured' if rehearsal else 'not configured'}"
+        else:
+            src_detail = (f"{engines.LABEL[STATE.source_engine].lower()} source: no rehearsal copy"
+                          " -- source fixes go to a person")
         emit({"event": "stage", "stage": "targets",
-              "detail": f"oracle rehearsal: {'configured' if rehearsal else 'not configured'}"
+              "detail": f"{src_detail}"
                         f" | postgresql: {'configured' if pg_target else 'not configured'}"})
 
         approvals = {str(i.get("issue_code")): approve for i in issues} if approve else {}
@@ -1208,6 +1293,7 @@ def sct_remediate(target: str = "", approve: str = ""):
             entry = remediate_sct_plan.plan_item(
                 issue, model_mode=_model_mode(), rehearsal_target=rehearsal,
                 pg_target=pg_target, approvals=approvals,
+                source_engine=STATE.source_engine,
             )
             entries.append(entry)
             emit({"event": "item_done", "index": n,
@@ -1223,6 +1309,7 @@ def sct_remediate(target: str = "", approve: str = ""):
             {"issues": issues, "target": {"id": target_id},
              "collector_run_id": STATE.run_id},
             model_mode="off",   # entries are already planned; this only shapes totals
+            source_engine=STATE.source_engine,
         )
         plan["entries"] = entries
         # The build above is passed "off" because it must not re-plan entries
@@ -1274,19 +1361,23 @@ def sct_gate_endpoint(target: str = ""):
     not from a default: SCT never reads redo, and a gate that reported "ready"
     because it failed to look would be worse than no gate.
     """
-    target_id = target or sct_targets_mod.DEFAULT_TARGET_ID
+    target_id = target or sct_targets_mod.default_target_id(STATE.source_engine)
     issues = _sct_issues_for(target_id)
     if issues is None:
         raise HTTPException(409, f"AWS SCT has not assessed {target_id} yet")
 
+    held_target = ((STATE.sct.get(target_id) or {}).get("record") or {}).get("target") or {}
     decision = blocker_sct_gate.evaluate(
-        {"issues": issues, "target": {"id": target_id},
+        # The target row carries sct_conversion, which is how the gate tells a
+        # homogeneous "nothing to convert" from an assessment that found nothing.
+        {"issues": issues, "target": {**held_target, "id": target_id},
          "collector_run_id": STATE.run_id},
         # STATE.facts is what the preflight read from v$database on connect.
         facts=STATE.facts,
         migration_mode_record=_mode_record(),
         remediation=STATE.sct_remediation,
         waivers=STATE.waivers,
+        source_engine=STATE.source_engine,
     )
     STATE.sct_gate = decision
 
@@ -1382,6 +1473,80 @@ def set_migration_mode(req: MigrationModeRequest):
     return {"ok": True, **record}
 
 
+class SourceEngineRequest(BaseModel):
+    engine: str
+
+
+@app.post("/api/source-engine")
+def set_source_engine(req: SourceEngineRequest):
+    """Declare which engine the SOURCE runs. Asked at Connect, before connecting.
+
+    Before the connection, not after, because it changes the form: Oracle wants
+    host:port/service on 1521 and MySQL host:port/database on 3306, and the
+    preflight checks differ too (SELECT ANY DICTIONARY and ARCHIVELOG against
+    SHOW_ROUTINE and binlog_format).
+
+    Changing it invalidates a connection and everything built on it -- the
+    schemas, the discovery, the assessment all describe a different database.
+    Refusing to change it while connected would be worse: an operator who picked
+    the wrong engine would have to restart the console.
+    """
+    try:
+        engine = engines.normalize(req.engine)
+    except engines.EngineError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    changed = engine != STATE.source_engine
+    STATE.source_engine = engine
+
+    if changed:
+        # Everything downstream described the other engine. Cleared rather than
+        # left to look current, which is the same discipline the migration-mode
+        # change follows when it marks a completed discovery as needing a re-run.
+        STATE.password = None
+        STATE.checks = []
+        STATE.facts = {}
+        STATE.run_id = None
+        STATE.run_dir = None
+        STATE.manifest = None
+        STATE.assessment = None
+        STATE.sizing = None
+        STATE.sct = {}
+        # The target may no longer be legal from this source: Oracle -> RDS
+        # Oracle is fine, MySQL -> RDS Oracle is not. Reset to the source's own
+        # default rather than carrying an illegal pair forward.
+        legal = engine_spec.targets_for(engine)
+        if STATE.engine not in legal:
+            STATE.engine = legal[0]
+            STATE.engine_chosen_by = None
+
+    STATE.source_engine_chosen_by = None
+    try:
+        ident = _aws_session().client("sts").get_caller_identity()
+        STATE.source_engine_chosen_by = provision_deploy.identity_name(ident["Arn"])
+    except Exception:  # noqa: BLE001 -- no credentials is an ordinary state here
+        pass
+
+    spec = engine_spec.spec(engine)
+    return {
+        "ok": True,
+        "source_engine": engine,
+        "label": spec["label"],
+        "default_port": spec["default_port"],
+        "dsn_shape": spec["dsn_shape"],
+        "dsn_example": spec["dsn_example"],
+        "default_dsn": _default_dsn(),
+        "cdc_requirements": list(spec["cdc_requirements"]),
+        "collector_privileges": list(spec["collector_privileges"]),
+        "targets": [
+            {"id": t, "label": sizing_target.LABEL.get(t, t)}
+            for t in engine_spec.targets_for(engine)
+        ],
+        "chosen_by": STATE.source_engine_chosen_by,
+        "reset": changed,
+    }
+
+
 class EngineRequest(BaseModel):
     engine: str
 
@@ -1396,8 +1561,16 @@ def set_engine(req: EngineRequest):
     `sizing.target.choose` checks again there.
     """
     engine = req.engine.upper()
-    if engine not in sizing_target.TARGETS:
-        raise HTTPException(400, f"unknown target {req.engine!r}")
+    # Legal for THIS source, not merely a target this project knows about:
+    # MySQL -> RDS for Oracle and Oracle -> RDS for MySQL are both refused, and
+    # engines/spec.py is the only place that decides.
+    if not engine_spec.is_legal(STATE.source_engine, engine):
+        legal = ", ".join(engine_spec.targets_for(STATE.source_engine))
+        raise HTTPException(
+            400,
+            f"{engines.LABEL[STATE.source_engine]} does not migrate to "
+            f"{req.engine!r} in this project; supported targets: {legal}",
+        )
     if STATE.sizing and STATE.sizing.get("target_assessment"):
         try:
             sizing_target.choose(engine, STATE.sizing["target_assessment"])
@@ -1433,6 +1606,12 @@ def size():
             on_event=emit,
             engine=STATE.engine,
             chosen_by=STATE.engine_chosen_by,
+            # The model proposes the target and the sizing whenever the model tier
+            # is live -- the same policy Phase 4 already follows via _model_mode().
+            # Until 2026-09-29 the console never passed this, so Phase 3 in the
+            # browser was always heuristic even with Bedrock verified and working.
+            # validate.py / validate_target.py still decide either way.
+            use_bedrock=_model_mode() == "live",
             # Phase 4b measures the real cost of the heterogeneous path. Where it
             # has run, the assessment uses those compile results instead of
             # reporting the effort as unknown.
@@ -1696,6 +1875,7 @@ def appsql_run(req: AppSqlRequest):
         model_mode="live" if req.model else "off",
         target=STATE.pg_target,
         ddl_plan=ddl_plan,
+        source_engine=STATE.source_engine,
     )
     STATE.appsql = result
     appsql_plan.write(result)
@@ -1739,7 +1919,10 @@ def schema_ddl_run():
     # of this endpoint left it unset and 24 of 30 statements failed with
     # `relation "dbmig_app.seq_comm_id" does not exist` -- a compile failure
     # manufactured by the caller, not by the DDL.
-    plan["sequences_needed"] = [
+    # Not on MySQL: its `sequences` rows are AUTO_INCREMENT counters named
+    # `table.column`, already emitted as identity columns -- scaffolding them
+    # failed the whole compile, exactly as it did in the CLI.
+    plan["sequences_needed"] = [] if plan.get("source_engine") == "MYSQL" else [
         convert_ddl.ident(s["sequence_name"])
         for s in prov_records._dataset(STATE.run_dir.name, "sequences")
         if s.get("sequence_owner") == owner or s.get("owner") == owner
@@ -2405,6 +2588,67 @@ def _provisioned_pg_target():
         return None
 
 
+def _provisioned_target() -> dict | None:
+    """The RDS instance Phase 6 built, whichever engine, with its master login.
+
+    `_provisioned_pg_target` answers only for PostgreSQL; a MySQL -> RDS for
+    MySQL run has no PgTarget, so every Phase 7 path that needs the target
+    reads it from here. Endpoint from RDS, password from SSM -- the places the
+    deploy put them.
+    """
+    try:
+        plan = _provision_plan()
+        if not plan or not plan.get("stack_name"):
+            return None
+        session = _aws_session()
+        db = session.client("rds", region_name=provision_policy.REGION).describe_db_instances(
+            DBInstanceIdentifier=plan["stack_name"])["DBInstances"][0]
+        pw = session.client("ssm", region_name=provision_policy.REGION).get_parameter(
+            Name=plan["rendered"]["password_parameter"], WithDecryption=True)["Parameter"]["Value"]
+        mysql = db["Engine"] == "mysql"
+        return {"engine": "mysql" if mysql else db["Engine"],
+                "host": db["Endpoint"]["Address"], "port": int(db["Endpoint"]["Port"]),
+                "user": (provision_policy.MYSQL_MASTER_USERNAME if mysql
+                         else provision_policy.PG_MASTER_USERNAME),
+                "password": pw,
+                "database": None if mysql else provision_policy.PG_DB_NAME}
+    except Exception:  # noqa: BLE001 -- absent is an ordinary answer before Phase 6
+        return None
+
+
+def _target_counts() -> tuple[dict | None, str | None]:
+    """The target's tables and row counts, for Phase 7's two target checks."""
+    if STATE.engine == "MYSQL":
+        t = _provisioned_target()
+        if not t or t["engine"] != "mysql":
+            return None, "no RDS for MySQL target is deployed yet (Phase 6)"
+        return dms_run.mysql_target_counts(t["host"], t["port"], t["user"], t["password"])
+    return dms_run.target_counts_from(_provisioned_pg_target() or STATE.pg_target)
+
+
+def _source_private_host(public_host: str) -> str | None:
+    """The private address of the EC2 instance the console reaches at `public_host`.
+
+    DMS runs inside the VPC and must use the private address (see
+    /api/dms/execute). Asking EC2 for it replaces the DBSHIFT_SOURCE_PRIVATE_HOST
+    environment variable an operator had to know to set; a source that is not
+    an EC2 instance in this account returns None and the variable still works.
+    """
+    if not public_host:
+        return None
+    try:
+        ec2 = _aws_session().client("ec2", region_name=provision_policy.REGION)
+        for key in ("ip-address", "private-ip-address"):
+            for r in ec2.describe_instances(Filters=[{"Name": key, "Values": [public_host]}]
+                                            )["Reservations"]:
+                for inst in r.get("Instances", []):
+                    if inst.get("PrivateIpAddress"):
+                        return inst["PrivateIpAddress"]
+    except Exception:  # noqa: BLE001 -- permissions vary; the caller explains
+        return None
+    return None
+
+
 @app.get("/api/dms/plan")
 def dms_plan(migration_type: str = dms_policy.FULL_LOAD):
     """Everything knowable without creating anything. Free, and creates nothing."""
@@ -2424,7 +2668,7 @@ def dms_plan(migration_type: str = dms_policy.FULL_LOAD):
     # this reported "0 target tables" and refused the migration while the real
     # RDS instance held 11 tables and 21M rows. Phase 6's own record says where
     # the target is, and its password is in SSM where the deploy put it.
-    counts, why = dms_run.target_counts_from(_provisioned_pg_target() or STATE.pg_target)
+    counts, why = _target_counts()
     try:
         return dms_run.plan(session, migration_type=migration_type,
                             target_counts=counts, target_unread_reason=why)
@@ -2487,7 +2731,7 @@ def dms_execute(req: DmsExecute):
     # every single click regardless of the target's real state, including
     # right after /api/dms/plan had just reported both PASS. The plan route
     # was never wrong; this one just never looked.
-    counts, why = dms_run.target_counts_from(_provisioned_pg_target() or STATE.pg_target)
+    counts, why = _target_counts()
     plan = dms_run.plan(None, migration_type=req.migration_type,
                         target_counts=counts, target_unread_reason=why)
     estate = plan["estate"]
@@ -2514,6 +2758,8 @@ def dms_execute(req: DmsExecute):
     src_host = req.source_host or os.environ.get("DBSHIFT_SOURCE_PRIVATE_HOST", "")
     src_port, src_db = req.source_port, req.source_database
     if not src_host:
+        src_host = _source_private_host((STATE.dsn or "").partition("/")[0].partition(":")[0]) or ""
+    if not src_host:
         hostport, _, db = (STATE.dsn or "").partition("/")
         host, _, port = hostport.partition(":")
         if not host:
@@ -2526,8 +2772,9 @@ def dms_execute(req: DmsExecute):
             "private IP, or pass source_host explicitly, and retry.")
     if not src_port:
         _, _, port = (STATE.dsn or "").partition(":")
-        src_port = int(port.split("/")[0]) if port else 1521
-    if not src_db:
+        src_port = int(port.split("/")[0]) if port else (
+            3306 if STATE.source_engine == "MYSQL" else 1521)
+    if not src_db and STATE.source_engine != "MYSQL":
         _, _, src_db = (STATE.dsn or "").partition("/")
         src_db = src_db or "XEPDB1"
 
@@ -2541,15 +2788,26 @@ def dms_execute(req: DmsExecute):
     # it is the account already proven reachable -- this console is connected
     # as it right now. Sending `estate` here got ORA-01017 every time: no
     # password could have been right for a username that was never the point.
-    source = {"engine": "oracle", "host": src_host, "port": src_port,
-              "user": STATE.user or "dbmig_collector",
-              "password": req.source_password
-              or os.environ.get("DBSHIFT_SOURCE_OWNER_PASSWORD", ""),
-              "database": src_db,
-              # Without this the endpoint test fails on a pluggable database
-              # with "Log Miner is not supported in Oracle PDB environment".
-              # See dms.policy.ORACLE_SOURCE_ATTRIBUTES.
-              "extra_settings": dms_policy.ORACLE_SOURCE_ATTRIBUTES}
+    if STATE.source_engine == "MYSQL":
+        # The collector account the console is connected as: it holds SELECT on
+        # the estate, which is all a full load reads, and its password is
+        # already in this process's memory. MySQL endpoints name no database
+        # and take no `require` SSL mode (dms.policy.MYSQL_SSL_MODE).
+        source = {"engine": "mysql", "host": src_host, "port": src_port,
+                  "user": STATE.user or "dbmig_collector",
+                  "password": req.source_password or STATE.password
+                  or os.environ.get("DBSHIFT_SOURCE_PASSWORD", ""),
+                  "database": None, "ssl_mode": dms_policy.MYSQL_SSL_MODE}
+    else:
+        source = {"engine": "oracle", "host": src_host, "port": src_port,
+                  "user": STATE.user or "dbmig_collector",
+                  "password": req.source_password
+                  or os.environ.get("DBSHIFT_SOURCE_OWNER_PASSWORD", ""),
+                  "database": src_db,
+                  # Without this the endpoint test fails on a pluggable database
+                  # with "Log Miner is not supported in Oracle PDB environment".
+                  # See dms.policy.ORACLE_SOURCE_ATTRIBUTES.
+                  "extra_settings": dms_policy.ORACLE_SOURCE_ATTRIBUTES}
     # Same bug as the source, one field over: this was hardcoded to "" and
     # never resolved, so the run just seen live overwrote a working target
     # endpoint's ServerName with a blank string ("target endpoint ... points
@@ -2560,17 +2818,31 @@ def dms_execute(req: DmsExecute):
     target_host = pg_target.host if pg_target else ""
     target_port = pg_target.port if pg_target else (5432 if plan["heterogeneous"] else 1521)
     target_db = pg_target.database if pg_target else "dbshift"
-    if plan["heterogeneous"] and not target_host:
+    if plan["heterogeneous"] and not target_host and STATE.engine != "MYSQL":
         raise HTTPException(409, "no PostgreSQL target is reachable -- check Phase 6 "
                                  "has deployed and AWS credentials are valid")
 
     target = {"engine": "postgres" if plan["heterogeneous"] else "oracle",
               "host": target_host, "port": target_port,
               "user": "dbshiftadm",
-              "password": req.target_password or os.environ.get("DBSHIFT_PG_PASSWORD", ""),
+              # The provisioned target's own password, read from SSM, before
+              # anything typed: the form's field was the only source, so a run
+              # from the UI failed "both passwords are needed" for a password
+              # this console could already read.
+              "password": req.target_password
+              or (getattr(pg_target, "password", "") if pg_target else "")
+              or os.environ.get("DBSHIFT_PG_PASSWORD", ""),
               "database": target_db}
+    if STATE.engine == "MYSQL":
+        t = _provisioned_target()
+        if not t or t["engine"] != "mysql":
+            raise HTTPException(409, "no RDS for MySQL target is deployed -- run Phase 6 first")
+        target = {"engine": "mysql", "host": t["host"], "port": t["port"], "user": t["user"],
+                  "password": req.target_password or t["password"], "database": None,
+                  "ssl_mode": dms_policy.MYSQL_SSL_MODE,
+                  "extra_settings": dms_policy.MYSQL_TARGET_ATTRIBUTES}
     if not source["password"] or not target["password"]:
-        raise HTTPException(400, "both the source owner and target passwords are needed; "
+        raise HTTPException(400, "both the source and target passwords are needed; "
                                  "they are held in memory only and never written down")
 
     def work(emit):
@@ -2593,6 +2865,176 @@ def dms_execute(req: DmsExecute):
               "errored": rec.get("tables_errored", 0)})
 
     return _stream(work)
+
+
+class Approval(BaseModel):
+    approved_by: str
+
+
+def _approver(value: str) -> str:
+    if not value or "@" not in value:
+        raise HTTPException(400, "a named approver (an email address) is required")
+    return value.strip()
+
+
+@app.post("/api/dms/residue/apply")
+def dms_residue_apply(req: Approval):
+    """Apply the residue items that have exactly one right answer.
+
+    Only RULE-tier items marked READY with a statement: identity restarts on
+    PostgreSQL, AUTO_INCREMENT counters on MySQL, sequence restarts from
+    Oracle. Model- and person-tier items (a rewritten view, a job) are left for
+    a person. Nothing here ran from the console before 2026-09-30, so a MySQL
+    run always failed Phase 8's identity check for work that was ready to do.
+    """
+    who = _approver(req.approved_by)
+    from dms import residue as dms_residue
+    plan = dms_run.plan(None)
+    items = [i for i in plan["residue"]["items"]
+             if i["tier"] == dms_residue.RULE and i["status"] == dms_residue.READY and i.get("sql")]
+    if not items:
+        raise HTTPException(409, "no ready residue to apply")
+    t = _provisioned_target()
+    if not t or t["engine"] not in ("postgres", "mysql"):
+        raise HTTPException(409, "no provisioned PostgreSQL or MySQL target to apply it to")
+    results = []
+    if t["engine"] == "mysql":
+        import pymysql
+        conn = pymysql.connect(host=t["host"], port=t["port"], user=t["user"],
+                               password=t["password"], connect_timeout=20, autocommit=True)
+    else:
+        import pg8000.dbapi
+        conn = pg8000.dbapi.connect(host=t["host"], port=t["port"], database=t["database"],
+                                    user=t["user"], password=t["password"], timeout=60)
+    try:
+        cur = conn.cursor()
+        for i in items:
+            try:
+                cur.execute(i["sql"])
+                if t["engine"] != "mysql":
+                    conn.commit()
+                results.append({"object": i["object_name"], "sql": i["sql"], "ok": True})
+            except Exception as exc:  # noqa: BLE001 -- per item, never swallowed
+                if t["engine"] != "mysql":
+                    conn.rollback()
+                results.append({"object": i["object_name"], "sql": i["sql"], "ok": False,
+                                "error": str(exc).splitlines()[0][:200]})
+    finally:
+        conn.close()
+    record = {"applied_by": who, "at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+              "collector_run_id": plan["collector_run_id"], "target": t["host"],
+              "applied": sum(1 for r in results if r["ok"]),
+              "failed": sum(1 for r in results if not r["ok"]), "items": results}
+    out = Path(__file__).resolve().parent.parent / "dms" / "output"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "residue_apply.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+    return record
+
+
+@app.get("/api/decisions")
+def decisions_get():
+    """Recorded schema decisions, and the zero-date columns still waiting for one.
+
+    Only a MySQL -> PostgreSQL run can have zero dates PostgreSQL cannot store;
+    `pending` lists the NOT NULL ones no decision covers yet -- the ones Phase
+    7's preflight refuses on.
+    """
+    from convert import decisions as convert_decisions
+    pending = []
+    if STATE.source_engine == "MYSQL" and STATE.engine == "POSTGRESQL" and STATE.run_id:
+        estate = (STATE.schemas or [None])[0] or STATE.schema
+        covered = convert_decisions.nullable_for_zero_dates(estate or "")
+        pending = [f"{r['table_name']}.{r['column_name']}"
+                   for r in prov_records._dataset(STATE.run_id, "mysql_zero_dates")
+                   if str(r.get("nullable")).upper() in ("NO", "N")
+                   and f"{r['table_name']}.{r['column_name']}" not in covered]
+    return {"decisions": convert_decisions.load(), "zero_dates_pending": pending}
+
+
+@app.post("/api/decisions/zero-dates")
+def decisions_zero_dates(req: Approval):
+    """Record that the NOT NULL zero-date columns become nullable on the target.
+
+    The data owner's call, recorded against their name: the rows arrive with
+    NULL there, and Phase 8 reports the loss. Phase 4c must be generated again
+    afterwards so the DDL carries it -- the response says so.
+    """
+    who = _approver(req.approved_by)
+    from convert import decisions as convert_decisions
+    rows = [r for r in prov_records._dataset(STATE.run_id or "", "mysql_zero_dates")
+            if str(r.get("nullable")).upper() in ("NO", "N")]
+    if not rows:
+        raise HTTPException(409, "this discovery run records no zero dates in NOT NULL columns")
+    d = convert_decisions.record_zero_dates_nullable(
+        estate=rows[0]["owner"], columns=[f"{r['table_name']}.{r['column_name']}" for r in rows],
+        decided_by=who, collector_run_id=STATE.run_id)
+    STATE.schema_ddl = None     # stale: it was generated without the decision
+    return {"decision": d, "regenerate_schema_ddl": True}
+
+
+class SchemaCopy(BaseModel):
+    stage: str                  # plan | pre | post | cutover
+    approved_by: str = ""
+
+
+@app.get("/api/schemacopy")
+def schema_copy_get():
+    from dms import schema_mysql
+    plan = STATE.schema_copy or (json.loads(schema_mysql.PLAN.read_text(encoding="utf-8"))
+                                 if schema_mysql.PLAN.exists() else None)
+    if not plan:
+        raise HTTPException(409, "no schema copy plan yet")
+    return plan
+
+
+@app.post("/api/schemacopy")
+def schema_copy(req: SchemaCopy):
+    """MySQL -> RDS for MySQL: the source's own schema, before and after the load.
+
+    `plan` reads it from the source (SHOW CREATE, read-only). `pre` creates the
+    database, tables, routines and views on the target before DMS; `post` the
+    triggers and (disabled) events after it; `cutover` enables the events. See
+    dms/schema_mysql.py for why the stages are split that way.
+    """
+    if STATE.source_engine != "MYSQL" or STATE.engine != "MYSQL":
+        raise HTTPException(409, "the schema copy is the MySQL -> RDS for MySQL path's; "
+                                 "the PostgreSQL path builds its schema in Phase 4c")
+    from dms import schema_mysql
+    if req.stage == "plan":
+        if not (STATE.connected and STATE.password):
+            raise HTTPException(409, "connect to the source first")
+        host, _, port = (STATE.dsn or "").partition("/")[0].partition(":")
+        conn = schema_mysql._connect(host, int(port or 3306), STATE.user, STATE.password)
+        try:
+            plan = schema_mysql.extract(conn, (STATE.schemas or [STATE.schema])[0])
+        finally:
+            conn.close()
+        schema_mysql.OUTPUT.mkdir(parents=True, exist_ok=True)
+        schema_mysql.PLAN.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+        STATE.schema_copy = plan
+        return plan
+    if req.stage not in ("pre", "post", "cutover"):
+        raise HTTPException(400, f"unknown stage {req.stage!r}")
+    who = _approver(req.approved_by)
+    plan = STATE.schema_copy or (json.loads(schema_mysql.PLAN.read_text(encoding="utf-8"))
+                                 if schema_mysql.PLAN.exists() else None)
+    if not plan:
+        raise HTTPException(409, "read the schema from the source first (stage 'plan')")
+    t = _provisioned_target()
+    if not t or t["engine"] != "mysql":
+        raise HTTPException(409, "no RDS for MySQL target is deployed -- run Phase 6 first")
+    conn = schema_mysql._connect(t["host"], t["port"], t["user"], t["password"])
+    try:
+        result = schema_mysql.apply(conn, plan, req.stage, approved_by=who)
+    except PermissionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    finally:
+        conn.close()
+    plan.setdefault("applications", []).append(result)
+    plan["applied"] = True
+    schema_mysql.PLAN.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+    STATE.schema_copy = plan
+    return result
 
 
 @app.get("/api/migrate")
@@ -2642,6 +3084,8 @@ def validate(checksum: bool = True):
         # how every comparison is built, and Oracle rules against a PostgreSQL
         # target would report differences that are not there.
         target_engine=STATE.engine,
+        # A MySQL source is compared by validate/mysql.py, not the Oracle levels.
+        source_engine=STATE.source_engine,
         # No password is passed: STATE.pg_target is the *local Docker* compile
         # container from Phase 4b, not the provisioned RDS instance, and reusing
         # its password here would try the wrong credential against the wrong

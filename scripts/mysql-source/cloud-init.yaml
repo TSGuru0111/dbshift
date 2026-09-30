@@ -1,0 +1,102 @@
+#cloud-config
+# DBShift MySQL source estate on EC2 -- installs MySQL 8 and configures it for
+# both the collector (Phase 1) and AWS SCT (Phase 2).
+#
+# Every setting below is here because it was MEASURED against SCT 1.0.677 and the
+# collector, not because it is a sensible default. See docs/19-mysql-source.md.
+package_update: true
+
+write_files:
+  # The server configuration. Four groups of settings, each with its reason.
+  - path: /etc/my.cnf.d/dbshift.cnf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [mysqld]
+      # --- reachable from outside the box -------------------------------------
+      # The security group is what restricts access -- one /32 on 3306. Binding
+      # to localhost would make the instance useless as a migration source.
+      bind-address = 0.0.0.0
+      port = 3306
+
+      # --- CDC prerequisites, for DMS in Phase 7 -----------------------------
+      # binlog_format=ROW and binlog_row_image=FULL are what let DMS rebuild a
+      # target row. STATEMENT records the SQL rather than the result and cannot
+      # be replayed against PostgreSQL at all; a MINIMAL row image omits
+      # unchanged columns. The collector reads all three and maps them onto
+      # Oracle's ARCHIVELOG / supplemental-logging vocabulary.
+      server-id = 1
+      log-bin = binlog
+      binlog_format = ROW
+      binlog_row_image = FULL
+      binlog_expire_logs_seconds = 604800
+
+      # --- case sensitivity --------------------------------------------------
+      # 0 is the Linux default and is deliberately NOT changed. A MySQL schema is
+      # a directory on disk, so `Sales` and `SALES` are different databases --
+      # which is exactly why the collector must not fold schema names on this
+      # path. Setting 1 here would hide that class of bug.
+      lower_case_table_names = 0
+
+      # --- AWS SCT COMPATIBILITY: this one is not optional -------------------
+      # ONLY_FULL_GROUP_BY is in MySQL 8's DEFAULT sql_mode, and **SCT's own
+      # metadata query is invalid under it**. Measured 2026-09-29 against SCT
+      # 1.0.677:
+      #
+      #   Error executing 'load-partitions-by-schema' query: Expression #1 of
+      #   ORDER BY clause is not in SELECT list, references column
+      #   'information_schema.PARTITIONS.TABLE_SCHEMA' which is not in SELECT
+      #   list; this is incompatible with DISTINCT
+      #
+      # SCT retries three times and then abandons the whole assessment with
+      # "Metadata loading was interrupted because of data fetching issues".
+      # So a STOCK MySQL 8 cannot be assessed by SCT until this is relaxed.
+      # That is SCT's SQL, not ours -- nothing in DBShift can work around it, and
+      # on a customer engagement it is a prerequisite their DBA must action.
+      sql_mode = STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+
+      # --- sizing for a t3.medium (4 GB) ------------------------------------
+      innodb_buffer_pool_size = 1G
+      max_connections = 100
+
+runcmd:
+  # Amazon Linux 2023 ships MariaDB in its default repos, not MySQL. The Oracle
+  # community repo is the only way to get real MySQL 8 -- and the estate must be
+  # real MySQL, because MariaDB is a different server with its own catalogue
+  # quirks and SCT treats it as a separate vendor.
+  - [ dnf, install, -y, 'https://dev.mysql.com/get/mysql84-community-release-el9-1.noarch.rpm' ]
+  # **Pin 8.0, and get the repo ids right.** 8.4 is the release the RPM enables by
+  # default, and this estate targets 8.0 because that is what a client is
+  # overwhelmingly likely to be running.
+  #
+  # The repo ids are `mysql-8.4-lts-community` and `mysql-tools-8.4-lts-community`
+  # -- NOT `mysql84-lts-community`. Measured 2026-09-29: the wrong id makes
+  # `dnf config-manager --disable` a silent no-op, so 8.4.11 installed anyway.
+  #
+  # That mattered for more than the version number: **MySQL 8.4's /etc/my.cnf has
+  # no `!includedir /etc/my.cnf.d`**, so the configuration written below was
+  # present on disk and never read -- leaving ONLY_FULL_GROUP_BY in sql_mode,
+  # which breaks AWS SCT's own metadata query. A wrong repo id surfaced as an SCT
+  # failure twenty minutes later, which is exactly the kind of trail this comment
+  # exists to shorten.
+  - [ dnf, config-manager, --disable, mysql-8.4-lts-community ]
+  - [ dnf, config-manager, --disable, mysql-tools-8.4-lts-community ]
+  - [ dnf, config-manager, --enable, mysql80-community ]
+  - [ dnf, config-manager, --enable, mysql-tools-community ]
+  - [ dnf, install, -y, mysql-community-server ]
+  # Assert the includedir rather than trust it. 8.0's packaged my.cnf has it; if a
+  # future package drops it, the estate's settings would be silently ignored and
+  # the first symptom would be an abandoned SCT assessment.
+  - [ bash, -c, 'grep -q "includedir /etc/my.cnf.d" /etc/my.cnf || printf "
+!includedir /etc/my.cnf.d
+" >> /etc/my.cnf' ]
+  - [ systemctl, enable, --now, mysqld ]
+  # Prove the setting that matters took effect. Failing here is far cheaper than
+  # discovering it after SCT has run for twenty minutes and abandoned.
+  - [ bash, -c, 'mysqld --verbose --help 2>/dev/null | grep -E "^sql-mode " | grep -q ONLY_FULL_GROUP_BY && { echo "FATAL: ONLY_FULL_GROUP_BY still set; /etc/my.cnf.d not read" >&2; exit 1; } || echo "sql_mode is SCT-compatible"' ]
+  # Signal readiness for the seeding step, which runs from the operator's machine
+  # over SSH. A marker file is simpler to poll than parsing cloud-init status.
+  - [ bash, -c, 'until mysqladmin --socket=/var/run/mysqld/mysqld.sock ping 2>/dev/null | grep -q alive; do sleep 2; done' ]
+  - [ bash, -c, 'grep "temporary password" /var/log/mysqld.log | tail -1 | sed "s/.*root@localhost: //" > /root/.mysql-initial-password' ]
+  - [ chmod, '0600', /root/.mysql-initial-password ]
+  - [ touch, /var/lib/cloud/dbshift-mysql-ready ]

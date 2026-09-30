@@ -1,0 +1,36 @@
+{
+  "seeded_on": "2026-09-29",
+  "why": "Phase 4d for a MySQL source converts the MySQL SQL embedded in the application. No application codebase exists in this project, so these two mapper files carry 23 seeded constructs with known PostgreSQL forms, following scripts/demo-app/ for Oracle: real defects, a published answer key, honestly labelled as seeded.",
+  "scope_note": "The tables and columns are the real dbmig_mysql_app ones Phase 1 discovered on the EC2 MySQL source, so the parse gate resolves them against Phase 4c's shadow schema. Generated columns (order_line.line_total, product.price_with_tax) are deliberately not referenced: 4c omits them until after the load, so a statement naming one would fail the parse gate for a reason that is not the statement's.",
+  "expected_totals": {
+    "statements": 23,
+    "construct_occurrences": 29,
+    "statement_tiers": {"rule": 6, "model": 11, "manual": 6},
+    "note": "A statement's tier is its worst construct's: recordDailySale carries CURDATE (rule) and ON DUPLICATE KEY (model), so it is model. Asserted by scripts/demo-app-mysql/verify_appsql.py against the mapper text, not by the phase reporting on itself."
+  },
+  "constructs": [
+    {"id": "MYAPP-001", "construct": "MY_BACKTICK", "tier": "rule", "statements": ["findCustomerByRef", "legacyOrderRows"], "postgresql": "unquoted lower-case names"},
+    {"id": "MYAPP-002", "construct": "MY_IFNULL", "tier": "rule", "statements": ["findCustomerByRef"], "postgresql": "COALESCE()"},
+    {"id": "MYAPP-003", "construct": "MY_LIMIT_OFFSET", "tier": "rule", "statements": ["pageCustomers", "findCustomers"], "postgresql": "LIMIT #{pageSize} OFFSET #{offset} -- the arguments swap"},
+    {"id": "MYAPP-004", "construct": "MY_CURDATE", "tier": "rule", "statements": ["countJoinedToday", "recordDailySale"], "postgresql": "CURRENT_DATE"},
+    {"id": "MYAPP-005", "construct": "MY_NOW", "tier": "rule", "statements": ["markVerified", "recentOrders"], "postgresql": "LOCALTIMESTAMP"},
+    {"id": "MYAPP-006", "construct": "MY_LIKE_CI", "tier": "model", "statements": ["searchByNamePrefix"], "postgresql": "ILIKE, or LIKE on citext per the SCT 8795 decision"},
+    {"id": "MYAPP-007", "construct": "MY_CONCAT", "tier": "model", "statements": ["searchByNamePrefix", "displayName"], "postgresql": "|| (NULL-propagating)"},
+    {"id": "MYAPP-008", "construct": "MY_IF_FN", "tier": "model", "statements": ["displayName"], "postgresql": "CASE WHEN ... THEN ... ELSE ... END"},
+    {"id": "MYAPP-009", "construct": "MY_INSERT_IGNORE", "tier": "model", "statements": ["insertCustomerIfAbsent"], "postgresql": "ON CONFLICT DO NOTHING"},
+    {"id": "MYAPP-010", "construct": "MY_FOUND_ROWS", "tier": "manual", "statements": ["pageWithTotal", "lastPageTotal"], "postgresql": "count(*) OVER () in one query -- a redesign of the pair"},
+    {"id": "MYAPP-011", "construct": "MY_USER_VARIABLE", "tier": "manual", "statements": ["rankByLoyalty"], "postgresql": "row_number() OVER (ORDER BY loyalty_points DESC)"},
+    {"id": "MYAPP-012", "construct": "MYBATIS_INTERPOLATION", "tier": "manual", "statements": ["customersSortedBy"], "postgresql": "unchanged, reported"},
+    {"id": "MYAPP-013", "construct": "MY_ON_DUPLICATE_KEY", "tier": "model", "statements": ["recordDailySale"], "postgresql": "ON CONFLICT (sale_date, product_id) DO UPDATE ... EXCLUDED"},
+    {"id": "MYAPP-014", "construct": "MY_GROUP_CONCAT", "tier": "model", "statements": ["orderSkus"], "postgresql": "string_agg(p.sku, ', ' ORDER BY l.line_no)"},
+    {"id": "MYAPP-015", "construct": "MY_DATE_FORMAT", "tier": "model", "statements": ["monthlyRevenue"], "postgresql": "to_char(order_date, 'YYYY-MM')"},
+    {"id": "MYAPP-016", "construct": "MY_DATE_ARITH", "tier": "model", "statements": ["recentOrders"], "postgresql": "LOCALTIMESTAMP - make_interval(days => #{days})"},
+    {"id": "MYAPP-017", "construct": "MY_STR_TO_DATE", "tier": "model", "statements": ["ordersSince"], "postgresql": "to_timestamp(#{fromDate}, 'DD/MM/YYYY')"},
+    {"id": "MYAPP-018", "construct": "MY_REPLACE_INTO", "tier": "model", "statements": ["saveCategory"], "postgresql": "INSERT ... ON CONFLICT (category_id) DO UPDATE"},
+    {"id": "MYAPP-019", "construct": "MY_JSON_EXTRACT", "tier": "model", "statements": ["productColour"], "postgresql": "attributes ->> 'colour'"},
+    {"id": "MYAPP-020", "construct": "MY_LAST_INSERT_ID", "tier": "model", "statements": ["createOrder"], "postgresql": "INSERT ... RETURNING order_id"},
+    {"id": "MYAPP-021", "construct": "MY_LOCK_SHARE", "tier": "rule", "statements": ["readOrderShared"], "postgresql": "FOR SHARE"},
+    {"id": "MYAPP-022", "construct": "MY_MATCH_AGAINST", "tier": "manual", "statements": ["searchProducts"], "postgresql": "to_tsvector(...) @@ websearch_to_tsquery(...)"},
+    {"id": "MYAPP-023", "construct": "RESERVED_WORD_OBJECT", "tier": "manual", "statements": ["legacyOrderRows"], "postgresql": "order_tbl / group_col / desc_col / primary_col, from Phase 4c"}
+  ]
+}

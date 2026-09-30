@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  SEEDED APPLICATION SQL - not a real application. See CustomerMapper.xml.
+-->
+<mapper namespace="com.dbmig.mysqlapp.dao.OrderMapper">
+
+  <!-- MYAPP-013 MY_ON_DUPLICATE_KEY (model) with MYAPP-004 MY_CURDATE -->
+  <insert id="recordDailySale">
+    INSERT INTO product_daily_sales (sale_date, product_id, units, revenue)
+    VALUES (CURDATE(), #{productId}, #{units}, #{revenue})
+    ON DUPLICATE KEY UPDATE
+      units   = units   + VALUES(units),
+      revenue = revenue + VALUES(revenue)
+  </insert>
+
+  <!-- MYAPP-014 MY_GROUP_CONCAT (model) -->
+  <select id="orderSkus" resultType="map">
+    SELECT o.order_id,
+           GROUP_CONCAT(p.sku ORDER BY l.line_no SEPARATOR ', ') AS skus
+      FROM customer_order o
+      JOIN order_line l ON l.order_id = o.order_id
+      JOIN product p ON p.product_id = l.product_id
+     WHERE o.customer_id = #{customerId}
+     GROUP BY o.order_id
+  </select>
+
+  <!-- MYAPP-015 MY_DATE_FORMAT (model) -->
+  <select id="monthlyRevenue" resultType="map">
+    SELECT DATE_FORMAT(order_date, '%Y-%m') AS order_month, SUM(order_total) AS revenue
+      FROM customer_order
+     WHERE status NOT IN ('cancelled', 'refunded')
+     GROUP BY DATE_FORMAT(order_date, '%Y-%m')
+  </select>
+
+  <!-- MYAPP-016 MY_DATE_ARITH (model) with MYAPP-005 MY_NOW:
+       the bind cannot live inside an interval literal. -->
+  <select id="recentOrders" resultType="map">
+    SELECT order_id, order_ref
+      FROM customer_order
+     WHERE order_date &gt;= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+  </select>
+
+  <!-- MYAPP-017 MY_STR_TO_DATE (model): NULL on a bad string in MySQL, an error in PostgreSQL. -->
+  <select id="ordersSince" resultType="map">
+    SELECT order_id, order_date
+      FROM customer_order
+     WHERE order_date &gt;= STR_TO_DATE(#{fromDate}, '%d/%m/%Y')
+  </select>
+
+  <!-- MYAPP-018 MY_REPLACE_INTO (model): REPLACE deletes then inserts. -->
+  <insert id="saveCategory">
+    REPLACE INTO product_category (category_id, category_code, category_name, is_active)
+    VALUES (#{categoryId}, #{categoryCode}, #{categoryName}, 1)
+  </insert>
+
+  <!-- MYAPP-019 MY_JSON_EXTRACT (model): the column is jsonb on the target. -->
+  <select id="productColour" resultType="string">
+    SELECT JSON_UNQUOTE(JSON_EXTRACT(attributes, '$.colour')) AS colour
+      FROM product
+     WHERE product_id = #{productId}
+  </select>
+
+  <!-- MYAPP-020 MY_LAST_INSERT_ID (model): selectKey reads session state after the insert. -->
+  <insert id="createOrder">
+    <selectKey keyProperty="orderId" resultType="long" order="AFTER">
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    INSERT INTO customer_order (order_ref, customer_id, status, order_total, ship_address_id)
+    VALUES (#{orderRef}, #{customerId}, 'new', #{orderTotal}, #{shipAddressId})
+  </insert>
+
+  <!-- MYAPP-021 MY_LOCK_SHARE (rule) -->
+  <select id="readOrderShared" resultType="map">
+    SELECT order_id, status FROM customer_order WHERE order_id = #{orderId} LOCK IN SHARE MODE
+  </select>
+
+  <!-- MYAPP-022 MY_MATCH_AGAINST (manual): the text-search configuration is a decision. -->
+  <select id="searchProducts" resultType="map">
+    SELECT product_id, product_name
+      FROM product
+     WHERE MATCH(product_name, description) AGAINST (#{query} IN NATURAL LANGUAGE MODE)
+  </select>
+
+  <!-- MYAPP-023 RESERVED_WORD_OBJECT (manual), with MYAPP-001 MY_BACKTICK:
+       4c created this table as order_tbl and its columns as group_col, desc_col, primary_col. -->
+  <select id="legacyOrderRows" resultType="map">
+    SELECT `key`, `group`, `desc` FROM `order` WHERE `primary` = 1
+  </select>
+
+</mapper>

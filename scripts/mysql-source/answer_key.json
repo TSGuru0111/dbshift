@@ -1,0 +1,137 @@
+[
+  {
+    "defect": 1,
+    "title": "MyISAM storage engine",
+    "object": "legacy_import_log (3 rows)",
+    "expected_severity": "CRITICAL",
+    "match_rules": [
+      "MY-001"
+    ],
+    "match_object_like": "LEGACY_IMPORT_LOG",
+    "note": "The most important MySQL-only finding. No transactions, no crash recovery, and DMS CDC cannot replicate a MyISAM table -- the binlog records the change but there is no transactional boundary to apply it within. Has no Oracle analogue at all."
+  },
+  {
+    "defect": 2,
+    "title": "utf8mb3 columns cannot hold 4-byte characters",
+    "object": "customer_feedback.subject, customer_feedback.body",
+    "expected_severity": "HIGH",
+    "match_rules": [
+      "MY-002"
+    ],
+    "match_object_like": "CUSTOMER_FEEDBACK",
+    "note": "Legacy `utf8` is 3-byte. Emoji and several CJK ranges truncate. Silent data loss that only appears on the rows containing one, which is why the column charset is the finding rather than the data."
+  },
+  {
+    "defect": 3,
+    "title": "No primary key on a high-volume table",
+    "object": "clickstream_raw (50,000 rows)",
+    "expected_severity": "CRITICAL",
+    "match_rules": [
+      "DQ-001",
+      "MY-003"
+    ],
+    "match_object_like": "CLICKSTREAM_RAW",
+    "note": "Worse on MySQL than Oracle: InnoDB creates a hidden 6-byte clustered index DMS cannot address, so CDC has no reliable way to locate a row for UPDATE or DELETE. CDC-only, so on a full-load run it must be marked not-applicable with its reason and keep severity_if_applicable."
+  },
+  {
+    "defect": 4,
+    "title": "Zero dates have no PostgreSQL representation",
+    "object": "contract_term.signed_on, contract_term.expires_on (2 rows)",
+    "expected_severity": "HIGH",
+    "match_rules": [
+      "MY-004"
+    ],
+    "match_object_like": "CONTRACT_TERM",
+    "note": "'0000-00-00' is not a date PostgreSQL can store. These arrive NULL, which is data loss and cannot be normalised away -- so Phase 8 must report it as a mismatch, not an expected difference. Compare as text: the literal in a WHERE clause is itself rejected under NO_ZERO_DATE."
+  },
+  {
+    "defect": 5,
+    "title": "BIGINT UNSIGNED above the PostgreSQL bigint ceiling",
+    "object": "ledger_entry.balance_minor (2 of 4 rows)",
+    "expected_severity": "CRITICAL",
+    "match_rules": [
+      "MY-005"
+    ],
+    "match_object_like": "LEDGER_ENTRY",
+    "note": "PostgreSQL bigint is signed, max 9223372036854775807. MySQL unsigned reaches 18446744073709551615. The direct analogue of the Oracle FLOAT -> DOUBLE PRECISION truncation that lost 38 significant digits and was caught ONLY by the level-4 checksum -- row counts and DMS's own error report both missed it. Target type must be numeric."
+  },
+  {
+    "defect": 6,
+    "title": "Definer-rights routine",
+    "object": "fn_legacy_tax_rate (SQL SECURITY DEFINER)",
+    "expected_severity": "HIGH",
+    "match_rules": [
+      "MY-006"
+    ],
+    "match_object_like": "FN_LEGACY_TAX_RATE",
+    "note": "RDS grants no SUPER privilege, so a routine whose definer does not exist on the target fails at RUNTIME rather than at migration time."
+  },
+  {
+    "defect": 7,
+    "title": "Definer-rights view over PII",
+    "object": "v_customer_pii (SQL SECURITY DEFINER)",
+    "expected_severity": "MEDIUM",
+    "match_rules": [
+      "MY-006"
+    ],
+    "match_object_like": "V_CUSTOMER_PII",
+    "note": "Same problem as defect 6, harder to spot because a view reads as metadata rather than code. NOTE: SQL SECURITY DEFINER is MySQL's DEFAULT for a view, so the finding is not 'is DEFINER' but 'whose definer will not exist on the target' -- a rule that counts all DEFINER views fires on every clean view too."
+  },
+  {
+    "defect": 8,
+    "title": "Reserved-word identifiers",
+    "object": "table `order` with columns `key`, `group`, `desc`, `primary`",
+    "expected_severity": "HIGH",
+    "match_rules": [
+      "RDS-001",
+      "RDS-002"
+    ],
+    "match_object_like": "ORDER",
+    "note": "Deliberately different words from the Oracle estates. Backtick-quoted on MySQL, double-quoted on PostgreSQL, and any tool or ORM omitting the quotes fails at runtime."
+  },
+  {
+    "defect": 9,
+    "title": "Duplicate values in a should-be-unique column",
+    "object": "supplier.tax_ref (2 duplicate groups, one case-only)",
+    "expected_severity": "HIGH",
+    "match_rules": [
+      "DQ-002",
+      "MY-007"
+    ],
+    "match_object_like": "SUPPLIER",
+    "note": "Adding the missing unique index on the target fails partway through the load. One duplicate pair differs only in case, which is a duplicate under MySQL's _ci collation and NOT under PostgreSQL's default -- so the count itself changes across engines."
+  },
+  {
+    "defect": 10,
+    "title": "Orphaned reference with no foreign key",
+    "object": "warehouse_stock.product_id = 999999",
+    "expected_severity": "HIGH",
+    "match_rules": [
+      "MY-008"
+    ],
+    "match_object_like": "WAREHOUSE_STOCK",
+    "note": "Adding the FK on the target fails; not adding it carries the corruption forward. NOT Oracle's PERF-001 (unindexed foreign key) -- MySQL creates a backing index for every FK automatically, so that defect cannot exist here and a rule reporting it would be reporting something the engine prevents."
+  },
+  {
+    "defect": 11,
+    "title": "Redundant index on the same leading column",
+    "object": "shipment.ix_dup_a is a prefix of ix_dup_ab",
+    "expected_severity": "MEDIUM",
+    "match_rules": [
+      "PERF-008"
+    ],
+    "match_object_like": "SHIPMENT",
+    "note": "Earns nothing, costs write time and storage on every insert, and is carried to the target unless someone looks."
+  },
+  {
+    "defect": 12,
+    "title": "Sensitive columns in clear text",
+    "object": "customer_payment_detail.bank_account_no, .national_id",
+    "expected_severity": "HIGH",
+    "match_rules": [
+      "SEC-007"
+    ],
+    "match_object_like": "CUSTOMER_PAYMENT_DETAIL",
+    "note": "No encryption, no masking, a plain SELECT grant. Moving it unchanged to a cloud target is a decision someone should make knowingly rather than by default."
+  }
+]

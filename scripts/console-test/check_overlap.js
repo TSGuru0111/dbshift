@@ -30,7 +30,25 @@ const log = (label, ok, detail) => {
   const p = await b.newPage({ viewport: { width: W, height: H } });
   const jsErrors = [];
   p.on('pageerror', e => jsErrors.push(e.message));
-  p.on('console', m => { if (m.type() === 'error') jsErrors.push(m.text()); });
+  // A 409 from /api/ is not an error: it is the console asking for a record that
+  // does not exist yet, which is the normal state of every screen downstream of
+  // the last phase that ran. Chromium logs the failed fetch to the console
+  // regardless, so this check counted "sizing has not run" as a layout fault.
+  // drive_counts_export.js has excluded these since it was written; this file had
+  // drifted from it.
+  p.on('console', m => {
+    if (m.type() !== 'error') return;
+    const t = m.text();
+    if (/\b409\b/.test(t) && /Failed to load resource/.test(t)) return;
+    jsErrors.push(t);
+  });
+  // Chromium's console line for a failed fetch has no URL, so a 400 could not be
+  // traced to its request. Record the URL beside it.
+  const badUrls = [];
+  p.on('response', r => {
+    if (r.status() >= 400 && r.status() !== 409 && r.url().includes('/api/'))
+      badUrls.push(`${r.status()} ${r.url().replace(/^https?:\/\/[^/]+/, '')}`);
+  });
 
   await p.goto(URL);
   await p.waitForTimeout(1200);
@@ -46,6 +64,15 @@ const log = (label, ok, detail) => {
   for (const view of views) {
     await p.evaluate(v => show(v), view);
     await p.waitForTimeout(450);
+    // DMS_PLAN=1 renders Phase 7's plan first. Without it the Migrate screen is
+    // measured with its plan panels (story, schema copy, residue, checks)
+    // hidden -- the empty state that hides every layout fault.
+    if (view === 'migrate' && process.env.DMS_PLAN) {
+      await p.click('#btnDmsPlan');
+      await p.waitForFunction(() => $('#btnDmsPlan').textContent === 'Plan' && !$('#btnDmsPlan').disabled
+                                    && typeof DMSPLAN !== 'undefined' && DMSPLAN, null, { timeout: 300000 }).catch(() => {});
+      await p.waitForTimeout(800);
+    }
 
     const r = await p.evaluate(() => {
       // An element inside a display:none subtree is zero-sized on purpose --
@@ -193,7 +220,8 @@ const log = (label, ok, detail) => {
     if (bad) await p.screenshot({ path: path.join(OUT, `bad-${view}.png`), fullPage: false });
   }
 
-  log('no browser console errors', jsErrors.length === 0, jsErrors.slice(0, 2).join(' | '));
+  log('no browser console errors', jsErrors.length === 0,
+      jsErrors.slice(0, 2).join(' | ') + (badUrls.length ? '  [' + badUrls.slice(0, 4).join(', ') + ']' : ''));
   console.log(`\n${PASS}/${PASS + FAIL} phases clean at ${W}x${H}`);
   await b.close();
   process.exit(FAIL ? 1 : 0);
