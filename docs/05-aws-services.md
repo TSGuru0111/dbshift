@@ -118,14 +118,43 @@ before assuming it works.
 
 ## Four constraints that change how we build
 
-**1. EC2 instance launch is explicitly denied.**
-`ec2:RunInstances`, `StartInstances`, `CreateImage` and both Spot actions are
-`Deny`. RDS, DMS replication instances and Fargate do **not** need these, so the
-pipeline is unaffected — but **a bastion host is impossible**.
+**1. EC2 instance launch was explicitly denied. It is not any more — re-probed
+2026-09-28.**
 
-That turns a beta shortcut into a hard requirement: reaching RDS means either a
-public endpoint locked to one IP, or VPC endpoints plus Lambda-in-VPC. There is
-no jump box option to fall back on. Plan the network accordingly.
+> ✅ **The deny has been lifted.** Measured on 2026-09-28 against account
+> 280646578374 with the `DBA_permissions` SSO role, using a real regional AMI
+> (`ami-0ee11497c4eac651d`) so a bad argument could not mask the answer:
+>
+> | Action | Result |
+> |---|---|
+> | `ec2:RunInstances` | `DryRunOperation` — would have succeeded |
+> | `ec2:CreateKeyPair` | `DryRunOperation` — **was `Deny` in September** |
+> | `ec2:CreateSecurityGroup` | `DryRunOperation` |
+> | `ec2:CreateTags` | `DryRunOperation` |
+> | `ec2:AllocateAddress` | `DryRunOperation` |
+>
+> An EC2 source host is therefore possible, and one already exists:
+> **`dbshift-source-oracle`** (`i-07b0d1acfe31edc1a`, t3.large, running) in
+> default VPC `vpc-05f9bf94bf057b67e`. A bastion is no longer impossible either
+> — though `provision/policy.py` still sets `PUBLICLY_ACCESSIBLE = True` with a
+> `/32` security group, which remains a sound choice and was not changed on the
+> strength of this finding alone.
+>
+> **One trap re-confirmed while measuring it.** The SSM public parameter
+> `/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64`
+> returns `ParameterNotFound` on this account, and passing that empty value to
+> `run-instances` produced `InvalidAMIID.Malformed` — a *validation* error
+> impersonating a permission result, exactly as warned below. **Resolve AMIs with
+> `ec2 describe-images`, not SSM.**
+
+**What was true until 2026-09-28, kept because it explains decisions already
+made:** `ec2:RunInstances`, `StartInstances`, `CreateImage` and both Spot actions
+were `Deny`, verified across four instance types and three regions. RDS, DMS
+replication instances and Fargate do not need these, so the pipeline was
+unaffected — but a bastion host was impossible, which is why
+`provision/policy.py:33` reaches RDS through a public endpoint locked to one IP
+rather than a jump box, and why `docs/HANDOFF-2026-09-18-OPTION-A.md` chose a
+router port forward over an EC2 Oracle source.
 
 **2. CloudFormation is scoped to `dbshift-*` and `CDKToolkit`.**
 Every stack **must** be named with the `dbshift-` prefix. A stack named anything

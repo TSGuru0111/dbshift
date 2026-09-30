@@ -1,6 +1,31 @@
 # Phase 4b — Convert PL/SQL
 
-> **Latest update — 2026-09-17 (the model tier is exercised).**
+> **Latest update -- 2026-09-29. MySQL stored code converts, 7 of 7 ready for
+> approval, through the same five gates.**
+>
+> There is no deterministic MySQL -> PL/pgSQL converter, so `classify` routes every
+> MySQL routine to the model tier (manual only for LOAD DATA / OUTFILE / sys_exec),
+> using its own catalogue `convert/constructs_mysql.json` (32 constructs) and a
+> MySQL-aware lexer (`#` comments, double-quoted strings, backslash escapes). The
+> engine is read from the collector run's manifest, never assumed. Parity checks
+> MySQL residue on **every** construct, because there is no rule tier to limit it
+> to. The shadow schema types MySQL columns with `convert/typemap_mysql.py`.
+>
+> **One Oracle rule inverts on MySQL:** `SELECT ... INTO` must **not** become
+> `INTO STRICT`. MySQL leaves the variable NULL on zero rows and `sp_place_order`
+> tests `IS NULL` right after; STRICT would turn that into an unhandled exception.
+> The MySQL prompt and catalogue say so; the model's `sp_place_order` kept
+> non-STRICT, replaced `LAST_INSERT_ID()` with `RETURNING`, `ON DUPLICATE KEY` with
+> `ON CONFLICT (sale_date, product_id)`, and removed the transaction statements a
+> PL/pgSQL procedure with an EXCEPTION block may not run.
+>
+> Live on the EC2 run: **7/7 READY_FOR_APPROVAL**, compiled on PostgreSQL 16 and
+> rolled back. The first run had 6/7: parity rejected a *correct*
+> `FOR v_product_id, v_price IN SELECT ...` because the catalogue's marker allowed
+> one loop variable -- the marker was wrong, not the model. `convert.selftest_mysql`
+> **71/71** (with the 4c proof).
+
+> **Previous update — 2026-09-17 (the model tier is exercised).**
 > `scripts/oracle-source/09_seed_model_tier_plsql.sql` seeded six `DBMIG_APP`
 > objects using constructs `constructs.json` already classified `tier=model` —
 > `CONNECT BY`, `BULK COLLECT`/`FORALL`, `LISTAGG`/`DECODE`, `EXECUTE IMMEDIATE`,
@@ -504,3 +529,11 @@ which is the same model. No Haiku, no Opus.
 
 **Nothing was applied.** The conversions are in `convert/output/plpgsql/`, each
 header saying `NOT applied anywhere. Review, then approve.`
+
+**2026-09-29 -- MySQL source.** `classify` loads a catalogue per engine
+(`constructs_mysql.json`), scans MySQL with `code_only_mysql`, and routes MySQL to the
+model tier with `_route_mysql`. `model` gained `SYSTEM_PROMPT_MYSQL` and an engine on
+`build_prompt`/`validate_output`/`live_convert`; `gates.parity_check` takes the engine
+and checks residue on every MySQL construct. `inventory.load` records the run's
+`source_engine` plus constraints (for FK-aware shadow types); `target._column_type`
+maps MySQL columns and reads YES/NO nullability. FOR-loop markers accept a target list.

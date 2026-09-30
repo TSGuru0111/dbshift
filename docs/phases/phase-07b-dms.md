@@ -1,6 +1,30 @@
 # Phase 7b — Migrate with AWS DMS (the heterogeneous path)
 
-> **Latest update — 2026-09-21 (later still): the console never passed its own
+> **Latest update -- 2026-09-30. MySQL -> RDS for PostgreSQL loaded for real:
+> 19/19 tables, 196,544 rows, 0 errors. The schema copy for MySQL -> RDS for MySQL
+> is built and proven on a same-version stand-in.**
+>
+> **What the real run found**, each fixed and re-run clean (`docs/20-mysql-problems-log.md`):
+> the CLI never passed the stack's DMS security group (target test timed out); a
+> reused instance must wait until the group is *active*; `execute()` handed task
+> creation `None` for the migration type; the "tables exist" check ignored 4c's
+> `order -> order_tbl`; and **a DMS column-rename rule delivered the renamed
+> columns as NULL** -- so keyword columns are now created under their source names
+> and renamed by 4c after the load, and DMS renames tables only.
+>
+> **Zero dates** in NOT NULL columns stop a PostgreSQL load before it starts; a
+> recorded, named decision (`convert/decisions.py`) makes them nullable and the
+> loss is reported by Phase 8. **Residue** on a MySQL source is AUTO_INCREMENT
+> counters: identity `RESTART WITH` on PostgreSQL, `AUTO_INCREMENT =` on MySQL --
+> and the console can now apply the ready items with a named approver.
+>
+> **MySQL -> RDS for MySQL** gets its schema from the source (`dms/schema_mysql.py`):
+> DEFINER removed (ERROR 1227 on RDS otherwise), MyISAM -> InnoDB, triggers after
+> the load, events created DISABLED and enabled at cutover. Proven on MySQL 8.4.11
+> with RDS-like grants: 19/3/5/2/1/10/46 objects, identical to the source.
+> `dms.selftest_mysql` **35/35**. The kill switch no longer terminates source hosts.
+
+> **Previous update — 2026-09-21 (later still): the console never passed its own
 > target.** `/api/dms/plan` called `plan()` without `target_counts`, so
 > `target_has_tables` and `target_empty` reported **blocked** on a console where
 > the target was registered -- and their remedy line read "run this from the
@@ -409,3 +433,12 @@ tuple. An endpoint created before this change has the right host, port, user
 and database, so without that row `drift` is empty, the endpoint is reused
 unchanged, and the run fails again with the identical message -- a fix that
 silently does not apply is worse than no fix.
+
+**2026-09-30 -- MySQL source, real run.** `schema_mysql.py` (new); `mappings` table
+renames and `remove-column` for generated columns; `residue._mysql_counters`, view
+`create_after`; `preflight.zero_dates` and target-mismatch refusal; MySQL endpoints
+(no database, `MYSQL_SSL_MODE`, `FOREIGN_KEY_CHECKS=0`); CLI `--target-dsn`, engine-
+aware source, `dms_group_id` from `deployed.json`; `actions.create_instance` joins a
+reused instance to the trusted group. Console: MySQL source endpoint with automatic
+private-IP resolution, `/api/dms/residue/apply`, `/api/decisions*`, `/api/schemacopy`.
+Kill switch: source hosts stopped not terminated (`--include-source-hosts`), `--only`.

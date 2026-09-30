@@ -1,6 +1,23 @@
 # Phase 5 — Blocker gate
 
-> **Latest update — 2026-09-21 (the console screen, and what it was hiding).**
+> **Latest update -- 2026-09-29. MySQL source: CDC readiness in MySQL's words, and a
+> homogeneous path's empty SCT result is CLEAR with the reason.**
+>
+> `collector/mode.readiness()` takes `source_engine` and the native binlog readings;
+> on MySQL the unmet list names `log_bin`, `binlog_format`, `binlog_row_image` and
+> REPLICATION CLIENT, and `CDC_WORDING` supplies the remedy -- a MySQL source was
+> being told to run `ALTER DATABASE ARCHIVELOG`. The gate records `source_engine`.
+> On MySQL -> RDS for MySQL SCT has nothing to convert and returns zero items; the
+> gate now says that is the expected answer for a homogeneous pair rather than
+> leaving "0 items" to read as "not looked at" (driven by the target's
+> `sct_conversion: false`, so a conversion pair with zero items gets no such note).
+>
+> On the EC2 estate: MySQL -> RDS for PostgreSQL **PROCEED** (10 items, all work, none
+> blocking a full load); MySQL -> RDS for MySQL **PROCEED** with the homogeneous
+> reason; CDC readiness "all of it is already in place" (ROW, FULL). Oracle's verdict
+> and wording are unchanged.
+
+> **Previous update — 2026-09-21 (the console screen, and what it was hiding).**
 > Two faults, both on the screen rather than in `sct_gate.py`, and the first hid
 > the second.
 >
@@ -299,3 +316,11 @@ must fix each one. `validate` is no longer blocked because SCT attributes the
 external-table problem to the load rather than to validation — a difference
 worth knowing before this gate is trusted at a client, and visible rather than
 buried.
+
+**2026-09-29 -- MySQL source.** `sct_gate.evaluate` and `cdc_requirements` take
+`source_engine`; wording comes from `collector.mode.CDC_WORDING`; `_no_conversion`
+explains an empty homogeneous result. `blocker.sct_run` gained `--source-engine`,
+matches the discovery run without upper-casing MySQL schema names, and passes binlog
+readings. The preflight records `replication_client`. The console's Connect facts,
+mode cards and DMS hint read `cdc_wording` from `/api/state` instead of hard-coded
+ARCHIVELOG text.

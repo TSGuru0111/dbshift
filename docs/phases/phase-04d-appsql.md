@@ -1,6 +1,25 @@
 # Phase 4d — The application's SQL
 
-> **Latest update — 2026-09-20 (the console screen states its evidence, and
+> **Latest update -- 2026-09-29. MySQL application SQL: 23 seeded statements, 6
+> by rule, 11 by the model, 6 to a person -- all 17 conversions parse on PostgreSQL.**
+>
+> `appsql/constructs_mysql.json` (23 constructs) and `appsql/rules_mysql.py`
+> (backticks, IFNULL, `LIMIT a, b` -> `LIMIT b OFFSET a`, CURDATE, NOW ->
+> LOCALTIMESTAMP, LOCK IN SHARE MODE). The engine rides on each extracted statement,
+> so classify, the rules, the prompt and the parity gate read the same one. Every
+> MySQL **manual**-tier construct is kept from the model automatically, from the
+> catalogue -- not from a second list that could be forgotten.
+>
+> Corpus: `scripts/demo-app-mysql/` against the real dbmig_mysql_app tables, with an
+> answer key verified independently (`verify_appsql.py` 34/34, negative-tested).
+> Live: 6 rule + 11 Bedrock conversions all pass static, parity and the parse gate
+> against a shadow built from 4c's MySQL DDL (19 tables, rolled back); the model's
+> caveats named the real behaviour changes (INSERT IGNORE vs DO NOTHING, REPLACE's
+> delete-then-insert, to_date vs to_timestamp). Result comparison is still blocked,
+> as on Oracle. `appsql.selftest_mysql` **50/50**. The console defaults the path to
+> the MySQL corpus on a MySQL session.
+
+> **Previous update — 2026-09-20 (the console screen states its evidence, and
 > this file exists).** `#appsqlTargetStatus` — half the band above the fold —
 > read **"Checking the target…"** on every load because no JavaScript anywhere
 > in the console ever wrote to it. It is now wired to the registered PostgreSQL
@@ -279,3 +298,9 @@ against an empty database reported all twelve conversions of the day as
 `REJECTED` with `relation "customer" does not exist` — condemning the work for
 a fact about the database. Building 4c's own tables and rolling them back is
 the only version that proves something about the rewrite.
+
+**2026-09-29 -- MySQL source.** Catalogue and rules per engine; `plan.build` takes
+`source_engine` and stamps it on each statement; `transform` words the prompt by
+source and derives MySQL's never-drafted set from the catalogue's manual tier;
+`gates.parity_check` and `result_check` read the engine. Seeded
+`scripts/demo-app-mysql/` with answer key and verifier.

@@ -1,6 +1,26 @@
 # Phase 6 — Provision
 
-> **Latest update — 2026-09-21: the template downloads from the Plan pane.**
+> **Latest update -- 2026-09-30. RDS for MySQL renders from the source's own
+> settings; a real MySQL -> RDS for PostgreSQL target was deployed and torn down.**
+>
+> A third target branch. RDS for MySQL has no editions and no option group; what
+> matters is a **DB parameter group**, rendered from the source's `SHOW VARIABLES`:
+> `sql_mode` (RDS 8.4's default is only `NO_ENGINE_SUBSTITUTION`), collation,
+> `event_scheduler`, `lower_case_table_names`, plus two RDS needs forced on:
+> `log_bin_trust_function_creators` (ERROR 1419 otherwise) and `local_infile` (DMS).
+> Every value is checked against RDS's live `describe-engine-default-parameters`
+> in preflight -- it caught `explicit_defaults_for_timestamp=ON` where RDS wants `1`,
+> a rollback avoided. **The major comes from RDS's lifecycle API**: 8.0 left
+> standard support on 2026-07-31, so an 8.0.46 source renders 8.4.11 (WARN,
+> upgrade) rather than billing Extended Support. `verify` asks the live server for
+> each `@@parameter`.
+>
+> Records must describe the target Phase 3 chose, not just the same run: a gate
+> judged for RDS for MySQL beside a PostgreSQL sizing is now refused. A zero-item
+> homogeneous SCT result names its estate from the discovery manifest (this was the
+> `/api/cutover` 400). `provision.selftest_mysql` **31/31**.
+
+> **Previous update — 2026-09-21: the template downloads from the Plan pane.**
 > **Download .json** sends the rendered CloudFormation as a file. It prefers
 > what the live stack ran and falls back to the local render when no stack
 > exists — which is the ordinary case both *before* a deploy and *after* a
@@ -612,3 +632,11 @@ Phases 7–8. Found on the way: RDS offers no 21c EE in `ap-south-1` (downgrade)
 the upstream records were mixed and had to be regenerated; RDS Custom shares a
 price with RDS and had to be excluded by product. Kill switch extended to S3 so
 it can tear this template down.
+
+**2026-09-30 -- RDS for MySQL.** `policy` MySQL constants (`MYSQL_MAJORS`,
+`MYSQL_CARRIED`, `MYSQL_FORCED`, `MYSQL_BOOLEAN_AS_01`); `render` MySQL branch with
+`DbParameterGroup`; `preflight.mysql_major` (lifecycle), `mysql_parameters_valid`,
+MySQL `version_direction`; `pricing` MySQL; `records.target_mismatches` and the
+manifest fallback in `estate_of`; `prepared.check` not-applicable for MySQL
+targets; `verify._verify_mysql`. Real deploy of `dbshift-target-dbmig-mysql-app-pg`
+(PostgreSQL 16.15, $0.106/h), removed with `killswitch --only dbmig-mysql-app`.

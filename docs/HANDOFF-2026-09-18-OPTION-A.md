@@ -1,5 +1,25 @@
 # Handoff — finish Phases 6, 7, 8 via a router port forward (option A)
 
+> ## ⚠️ Superseded 2026-09-28 — do not start from this document
+>
+> This plan exists because `ec2:RunInstances` was explicitly denied, making a
+> port forward on the office router the only way to let AWS DMS reach an Oracle
+> source. **That deny has been lifted** (re-measured 2026-09-28; see
+> `docs/05-aws-services.md` constraint 1), and an in-VPC EC2 source host
+> already runs: `dbshift-source-oracle`, `i-07b0d1acfe31edc1a`.
+>
+> A source inside the VPC is reachable by security group, which is both simpler
+> and safer than forwarding a database port through a router — `dms/actions.py`
+> `grant_ingress` already grants SG-to-SG rather than a CIDR, so the rule dies
+> with the replication instance.
+>
+> **Kept, not deleted**, for two reasons: the instruction "do not re-open the
+> decision or re-probe EC2" explains why nobody re-checked for ten days, and the
+> firewall-rule reasoning (never `-Profile Any`, restrict to the replication
+> instance's address) is still the right instinct for any host that is not in the
+> VPC.
+
+
 Paste everything below the line into a new Claude Code session in `dbshift/`.
 Written to be read cold: assume no memory of the sessions that produced it.
 

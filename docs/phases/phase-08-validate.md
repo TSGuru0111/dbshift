@@ -1,6 +1,25 @@
 # Phase 8 — Validate
 
-> **Latest update — 2026-09-21 (later): it found real data loss.**
+> **Latest update -- 2026-09-30. A MySQL source validates on both pairs; against
+> real RDS for PostgreSQL: 19/19 counts exact, 18/19 tables identical on every
+> row, and the one difference is the decided zero-date loss.**
+>
+> `validate/mysql.py` holds the MySQL levels; `levels.py` dispatches to them.
+> **MySQL -> RDS for MySQL** runs the same SQL on both sides -- objects, columns,
+> keys, indexes, counts, an MD5 checksum per row, the server settings Phase 6
+> carried, AUTO_INCREMENT counters, events (DISABLED until cutover is expected).
+> **MySQL -> PostgreSQL** checksums a canonical text per engine keyed on the MySQL
+> type (DECIMAL trailing zeros, CHAR padding, TIMESTAMP in UTC, JSON as jsonb) and
+> checks identity positions. Oracle's `empty_string_is_null` is **not** applied --
+> MySQL keeps '' distinct -- and zero dates are listed as never normalised.
+>
+> Proven three ways: an **independent Python reference** both engines must equal
+> (`validate.selftest_mysql` 19/19), corruption tests (one cent in 14,000 rows;
+> one NULL -> '' in 5,000 -- both caught), and the real RDS run. Level 5 caught
+> real work twice: 6 MySQL counters behind the source, 16 identities that would
+> have reissued keys -- both cleared by applying Phase 7's residue.
+
+> **Previous update — 2026-09-21 (later): it found real data loss.**
 > Run against the 32.9M-row migration. **Level 3: 11 of 11 comparable tables
 > match exactly.** Level 4 then caught what nothing else did: Oracle `FLOAT`
 > mapped to `DOUBLE PRECISION` had **truncated 38 significant digits to 15**
@@ -260,3 +279,9 @@ per-run reports), console stage 8. Phase 7's run records now also keep one file
 per run: writing only to `migration_run.json` had already lost the record of a
 successful migration, approvals included, when a later run stopped at the gate
 and overwrote it.
+
+**2026-09-30 -- MySQL source.** `validate/mysql.py` (new); `Options.source_engine`;
+MySQL connections for either side (UTC session, `information_schema_stats_expiry=0`);
+PostgreSQL `extra_float_digits=1` for a MySQL source; `rows()` passes no parameters
+when there are none (pymysql `%`). Identity position read from the sequence's
+`last_value`/`is_called` -- `pg_sequence_last_value` is NULL right after a restart.

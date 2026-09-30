@@ -1,6 +1,49 @@
 # Phase 2 — Assess
 
-> **Latest update — 2026-09-17 (later still).** **AWS SCT is now the
+> **Latest update — 2026-09-29. MySQL is a second source, and Phase 2 for it is
+> real AWS SCT — not the 50-rule engine.**
+>
+> `sct/targets.py` became a **matrix keyed on source engine**. From MySQL the
+> in-scope targets are RDS for MySQL and RDS for PostgreSQL; `rds-oracle` does not
+> exist from a MySQL source and is refused by name. Every row now carries
+> **`sct_conversion`**, and it is load-bearing: AWS publishes **no MySQL → MySQL
+> conversion path**, so on that pair zero action items is a *complete* result
+> rather than evidence still to be collected. **Phase 5 must read that flag** —
+> the "absent evidence reports blocked" default is right everywhere else and
+> wrong exactly here.
+>
+> **Proven against SCT 1.0.677 on a live MySQL 8.0.46**: MySQL → PostgreSQL
+> produced **34 occurrences across 10 action items**, SCT's own PDF and three
+> CSVs, parsed with **zero unmapped columns**. The items are the seeded defects —
+> `8825` date defaults ×11 (zero dates), `8795` case sensitivity ×8 (the `_ci`
+> collation), `8706` datatypes ×2 (ENUM/SET), `8829` `ON DUPLICATE KEY UPDATE`,
+> `9994` Events. Nine route to `human` and one maps, because these are MySQL codes
+> and `route.py` holds Oracle's; an unmapped item says so rather than pretending
+> to a classification. `sct.selftest_mysql` **64/64**.
+>
+> **Three findings a fake cursor could never have produced**, each written up with
+> its measurement in `docs/19-mysql-source.md`:
+>
+> 1. **MySQL takes no `connectionType`** — its property class has no such concept,
+>    and passing one makes SCT load *Oracle's* and fail with `No enum constant
+>    OracleConnectionProperties.ConnectionType.BASIC`. What surfaces is
+>    `Not found object(s) for path "Servers.MYSQL"`, which reads like a tree-path
+>    bug rather than a parameter that should be absent. No `database` either.
+> 2. **SCT wants `SELECT` and `SHOW VIEW` at SERVER scope**, not the schema scope
+>    the collector needs — `MYSQL Server : [SELECT, SHOW VIEW]`, again hidden
+>    behind the same misleading path error.
+> 3. **SCT's own `load-partitions-by-schema` query is invalid under
+>    `ONLY_FULL_GROUP_BY`**, which is in MySQL 8's *default* `sql_mode`. SCT
+>    retries three times then abandons the assessment. **A stock MySQL 8 cannot be
+>    assessed until it is relaxed** — SCT's SQL, not ours, and a prerequisite a
+>    client's DBA must action.
+>
+> **The Oracle path is untouched.** 279/279 on `sct.selftest`, 29/29 modules
+> overall, and the SCT cache key is **deliberately unchanged for Oracle** so the
+> five real 25-minute assessments in `sct/output/` are still found; MySQL carries
+> a prefix and preserves schema-name case.
+>
+> Earlier — **2026-09-17 (later still).** **AWS SCT is now the
 > assessment.** The Assess screen leads with SCT, an SCT run advances the stage
 > rail, and the 50-rule engine's panels are **hidden** — it still runs headlessly
 > because Phases 3, 7, 9 and 10 read `assessment.json`, and the gate still
@@ -181,6 +224,48 @@ Console: **Phase 2 - Assess**, with rule-by-rule progress.
 Recall **7 of 7 detectable, severity exact on all 7**.
 
 ## Change log
+
+**2026-09-29** — **MySQL added as a second source; Phase 2 for it is real AWS SCT.**
+
+New: `sct/selftest_mysql.py` (64/64). Changed: `sct/targets.py` (per-source
+matrix, `sct_conversion` on every row, `for_source`/`default_target_id`/`converts`),
+`sct/scenario.py` (`SOURCE_VENDORS` table, `split_dsn`, `_source_params`),
+`sct/toolchain.py` (per-engine JDBC driver, `ENV_MYSQL_JDBC`, glob matching),
+`sct/runner.py` (engine threaded through `plan`/`assess`/`cached`, engine in the
+cache key and on the record), `sct/run.py` (`--source-engine`, engine-aware
+schemas and DSN defaults), `web/server.py` (`STATE.source_engine`,
+`POST /api/source-engine`, pair-aware target validation, engine-aware DSN
+default), `scripts/mysql-source/01_setup_admin.sql`,
+`scripts/mysql-source/run_mysql.ps1`.
+
+**What the live run cost, and why it was worth it.** Three of the four faults
+below are invisible to an offline test by construction, and the fourth was a
+wrong assumption I had already written into a passing selftest:
+
+- **`connectionType` on MySQL.** I assumed `BASIC` by symmetry with Oracle's
+  `BASIC_SERVICE_NAME`, and wrote a selftest asserting it. Reading SCT's bytecode
+  settled it: `MySqlConnectionProperties` declares serverName, port, username,
+  password, useSSL and has **no `$ConnectionType` inner class**. Passing one made
+  SCT load `OracleConnectionProperties` and die on `No enum constant ...BASIC`.
+  Two selftest assertions were wrong and now assert the measured behaviour.
+- **Server-scope grants.** `SELECT` and `SHOW VIEW` `ON *.*`, in addition to the
+  schema-scoped grants the collector needs.
+- **`ONLY_FULL_GROUP_BY`.** SCT's own query breaks under MySQL 8's default
+  `sql_mode`. Nothing here can work around it; it is a source-server prerequisite.
+- **The misleading error.** Both the parameter fault and the privilege fault
+  surfaced as `Not found object(s) for path "Servers.MYSQL"` — because `AddSource`
+  had already failed and the tree node never existed. Anyone debugging this path
+  should read the FIRST error in the log, not the last.
+
+**Deliberately not changed:** `sct/route.py`. MySQL's action-item codes are not in
+its table, so nine of ten route to `human` carrying `route_mapped: False` and the
+reason. Classifying them is follow-up work; reporting them as unclassified is
+correct now, and inventing routes from a single run would not be.
+
+**Oracle regression:** `sct.selftest` 279/279, all 29 selftest modules pass, and
+the Oracle cache key is unchanged so the five existing real assessments still
+resolve.
+
 
 **2026-09-17 (later) — a second path drives the real AWS SCT.** The 2026-09-17
 entry below shipped an SCT-*shaped* export produced by this engine's own rules.

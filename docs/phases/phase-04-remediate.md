@@ -1,6 +1,35 @@
 # Phase 4 — Detect & Remediate
 
-> **Latest update — 2026-09-17.** **The phase now remediates AWS SCT's action
+> **Latest update -- 2026-09-29. MySQL source: SCT's action items routed per source
+> engine, and no MySQL statement ever meets Oracle's gates.**
+>
+> SCT's action-item codes are per source vendor (MySQL's are 8xxx) and the shared
+> 999x codes mean different things per source -- 9994 is Oracle AQ on DBMIG_APP and
+> a MySQL EVENT on DBMIG_MYSQL_APP. `sct/route.py` now carries `MYSQL_ROUTES`, which
+> **override** `ROUTES` for a MySQL source; `route()`, `annotate()`, `segregate()`
+> and `blocking()` take `source_engine`. All ten codes the real EC2 run raised are
+> mapped (8706/8825 target, 8795/9994 decision, 8811/8829/8844/8850/8859 a person
+> with a model draft, 9997 shared); none routes to the source.
+>
+> `sct_plan.plan_item` refuses to draft or gate a source-side fix for any engine but
+> Oracle -- the allow-list, rehearsal and approval behind that route are Oracle's.
+> `sct_generate` names the source in the target prompt and never applies an Oracle
+> template to another engine. The CLIs take `--source-engine`, because "newest SCT
+> record on disk" had silently become the MySQL one.
+>
+> Two gate bugs found by the first live MySQL run, both fail-closed but wrong:
+> `pg_policy` read "ON UPDATE CURRENT_TIMESTAMP" inside a `COMMENT ON` string as
+> "rewrites data" (and would have refused every `ON UPDATE CASCADE` FK) -- comment
+> text and FK referential actions are now exempt, and only those; the same rule now
+> also catches `UPDATE "quoted"`. And a target fix naming a schema the target does
+> not have yet (SQLSTATE 3F000) is **BLOCKED** until Phase 4c's DDL is applied, not
+> REJECTED -- a wrong table in an existing schema (42P01) still fails.
+>
+> Live, Bedrock Sonnet 4.6: 10 items, 0 unmapped, 4 advice drafts, 3 target fixes
+> blocked on the missing schema, nothing applied. `remediate.selftest_sct_mysql`
+> **101/101**.
+
+> **Previous update — 2026-09-17.** **The phase now remediates AWS SCT's action
 > items, routed by where the fix belongs.** `remediate/sct_plan.py`,
 > `sct_generate.py`, `pg_policy.py`, `sct_run.py`. SCT is the assessment a client
 > reads (Phase 2), so it is what Phase 4 acts on; the 50-rule path in `plan.py`
@@ -649,3 +678,12 @@ which is what it actually reads. Verified: `4b armed by discovery alone: true`,
 
 `sct.selftest` **278/278**; `drive_sct_1to5.js` **44/44**, `drive_sct.js`
 **48/48**.
+
+**2026-09-29 -- MySQL source.** `sct/route.py` gained `MYSQL_ROUTES` (10 codes from
+the real DBMIG_MYSQL_APP run) and an engine argument throughout; the SOURCE meaning
+became engine-neutral. `sct_plan`/`sct_generate` gained `source_engine`, refuse a
+non-Oracle source fix, and word the prompt by source. `pg_policy` exempts COMMENT
+text and FK referential actions from the UPDATE rule and catches quoted table names;
+`pg_dry_run` reports 3F000 as BLOCKED with Phase 4c as the remedy. The 8811 route's
+own verify text first repeated the Oracle STRICT rule, which is wrong for MySQL --
+corrected before it shipped. Both CLIs filter records by `--source-engine`.

@@ -1,5 +1,29 @@
 # Making the on-premises Oracle reachable from AWS DMS
 
+> ## ⚠️ Superseded in part — re-measured 2026-09-28
+>
+> **`ec2:RunInstances` is no longer denied.** Re-probed on 2026-09-28 with a real
+> regional AMI: `RunInstances`, `CreateKeyPair`, `CreateSecurityGroup`,
+> `CreateTags` and `AllocateAddress` all return `DryRunOperation`. `CreateKeyPair`
+> in particular was an explicit `Deny` in September and is now allowed. See
+> `docs/05-aws-services.md` constraint 1 for the measured table.
+>
+> **An EC2 source host now exists**: `dbshift-source-oracle`
+> (`i-07b0d1acfe31edc1a`, t3.large, running) in default VPC
+> `vpc-05f9bf94bf057b67e`. So Option C below is available after all, and the
+> port-forward runbook (`docs/18`) is one route rather than the only one.
+>
+> **Everything else in this document stands**, and the part worth reading twice is
+> the argument-validation trap: AWS validates arguments *before* evaluating IAM,
+> so a wrong AMI id or a malformed instance id returns `InvalidAMIID.NotFound` or
+> `InvalidInstanceID.Malformed` rather than an authorization result. That trap
+> fired again during the 2026-09-28 re-probe, via an SSM public parameter that
+> returns `ParameterNotFound` on this account and yielded an empty AMI id. **Use
+> `ec2 describe-images`.** The measurements below are kept with their original
+> date because they explain why `provision/policy.py` and
+> `docs/HANDOFF-2026-09-18-OPTION-A.md` are shaped as they are.
+
+
 **For: whoever administers the office network.**
 **Asked because:** AWS Database Migration Service must open a TCP connection to
 an Oracle listener that currently sits on a laptop behind NAT. Everything else

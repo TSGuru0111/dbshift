@@ -1,6 +1,31 @@
 # Phase 4c — Schema DDL for PostgreSQL
 
-> **Latest update — 2026-09-14 (built and compiled for real).** `convert/ddl.py`
+> **Latest update -- 2026-09-29. MySQL schema DDL: 84 of 84 statements compile on
+> PostgreSQL 16.**
+>
+> `convert/ddl_mysql.py`, dispatched from `ddl.build(..., source_engine="MYSQL")` by
+> the engine in the run's manifest. Same emission order and notes; MySQL's catalogue
+> is read differently, and each difference was a silent wrong answer:
+>
+> - every MySQL primary key is named `PRIMARY`, so a foreign key's parent comes from
+>   `constraint_columns.referenced_table_name`, not the constraint name (which matched
+>   the first `PRIMARY` in the schema); PKs become `<table>_pkey`;
+> - nullability is YES/NO (reading Oracle's `N` made every column nullable);
+> - literal defaults arrive unquoted (`GB`) and are quoted; `DEFAULT_GENERATED` is an
+>   expression default, not a generated column -- the collector's own
+>   `virtual_column` had the same confusion and is fixed at source;
+> - unsigned integers widen (`int unsigned` -> bigint; `bigint unsigned` ->
+>   numeric(20,0), except identities and foreign keys to them, which stay bigint);
+>   ENUM/SET become text with a CHECK; JSON -> jsonb; TIME -> interval;
+> - MySQL index names are per table, so repeats are renamed; a table named `order`
+>   becomes `order_tbl` everywhere it is referenced, with a note that Phase 7's DMS
+>   mapping must rename it the same way.
+>
+> Not emitted, with a note: generated columns (added after the load), FULLTEXT
+> indexes (a text-search decision), MySQL-only CHECK functions. DBMIG_MYSQL_APP:
+> 19 tables, 24 keys, 10 FKs, 10 checks, 21 indexes, **84/84** compiled, 0 errors.
+
+> **Previous update — 2026-09-14 (built and compiled for real).** `convert/ddl.py`
 > generates the tables, keys, checks and indexes a PostgreSQL target needs, from
 > what discovery recorded. **Every statement was executed against PostgreSQL 16
 > inside a transaction that was rolled back**: 30 of 30 on `DBMIG_APP`, 52 of 52
@@ -223,3 +248,13 @@ produced a broken target:
 
 The first run was 24 statements with 10 failures. After the fixes: 30 of 30 on
 `DBMIG_APP`, 52 of 52 on `DBMIG_TELCO`.
+
+**2026-09-29 -- MySQL source.** Added `convert/ddl_mysql.py` and
+`convert/typemap_mysql.py`; `ddl.build` dispatches on `source_engine`; `ddl_run` reads
+the engine from the run and no longer scaffolds MySQL's AUTO_INCREMENT counters as
+sequences (that created `schema.table.column` and failed the compile), and neither
+does the console. The reserved-word note no longer says "not in Oracle".
+
+**Known gap, both engines:** 4c renames reserved words (`_col`, and `_tbl` for MySQL
+tables) but DMS lower-cases without renaming, so Phase 7's table mapping must carry
+the same renames or the load targets names that do not exist.

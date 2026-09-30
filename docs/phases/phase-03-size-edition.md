@@ -1,5 +1,48 @@
 # Phase 3 — Size & Edition decision
 
+> **Latest update -- 2026-09-29. MySQL source: RDS for MySQL or RDS for PostgreSQL,
+> with the model tier live on both decisions.**
+>
+> From a MySQL source the two paths are **RDS for MySQL and RDS for PostgreSQL**;
+> RDS for Oracle is refused by name (`choose()` now checks the target is a path
+> *from this source*, not merely a known target). The evidence is MySQL's own --
+> MyISAM, utf8mb3, missing primary keys, definer rights, events on the homogeneous
+> side; ENUM/SET, unsigned BIGINT, `_ci` collations, FULLTEXT, partitions and the
+> stored code on the heterogeneous side. Pre-migration work that applies whichever
+> target is chosen is listed on **both** paths, so the homogeneous one does not look
+> free.
+>
+> **The recommendation's central argument is different, not just relabelled.**
+> From Oracle, PostgreSQL's conversion cost buys the end of an Oracle licence. MySQL
+> and PostgreSQL are both open source, so there is **no licence saving either way**;
+> the heuristic recommends the homogeneous path and names what *would* justify
+> PostgreSQL (a platform standard, a feature MySQL lacks) as something outside the
+> evidence. The Bedrock prompt says this explicitly -- without it, a model reaches
+> for "PostgreSQL ends the licence", which is false here.
+>
+> **Bedrock is live in Phase 3 on both decisions, in the console too.** Two gaps
+> were closed on the way: `run.py` never passed `use_bedrock` to `assess()`, so
+> with `--bedrock` the *target recommendation* silently stayed heuristic on every
+> run on both engines; and the console's `/api/size` never passed it at all, so
+> Phase 3 in the browser was always heuristic. It now follows `_model_mode()`, the
+> same policy Phase 4 uses. `validate_target` bounds the MySQL answer exactly as
+> the Oracle one -- with one principled exemption: recommending the *homogeneous*
+> path from MySQL is not capped by conversion evidence, because it rests on
+> converting nothing. A PostgreSQL recommendation still is.
+>
+> **Unsigned BIGINT is weighed by value columns only.** Counting every unsigned
+> BIGINT put 29 points on PostgreSQL for an estate with one genuinely risky column;
+> identities count up from 1 and foreign keys hold only identity values, so neither
+> can reach 2^63. The finding now names the six ambiguous columns to check,
+> `ledger_entry.balance_minor` among them.
+>
+> Measured on the EC2 MySQL estate: RDS for MySQL 10 effort points, RDS for
+> PostgreSQL 26; the model recommended MySQL at high confidence with all four rule
+> checks passing, and sized `db.t3.small`, 20 GB, no edition, zero overrides.
+> `sizing.selftest_mysql` **54/54**; Oracle's 41/41 and 73/73 unchanged.
+>
+> Earlier:
+
 > **Latest update — 2026-09-14 (two migration paths).** The phase now decides
 > **which engine**, not only how big. Two targets are supported and the client
 > chooses: Amazon RDS for Oracle (homogeneous) or Amazon RDS for PostgreSQL

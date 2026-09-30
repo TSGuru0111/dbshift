@@ -5,11 +5,117 @@
 
 ## What this project is
 
-An AWS-native, human-in-the-loop AI agent that migrates an on-premises Oracle
-database to Amazon RDS for Oracle. Built as a company accelerator — the
-deliverable is a demonstrable capability, not a one-off migration.
+An AWS-native, human-in-the-loop AI agent that migrates an on-premises database
+to Amazon RDS. Built as a company accelerator — the deliverable is a demonstrable
+capability, not a one-off migration.
 
-**Scope is deliberately narrow.** One source engine, **two targets**, ten phases.
+**Scope — two source engines, ten phases, four legal pairs.** MySQL was added as
+a second source on **2026-09-28**; Oracle remains the default and the proven path.
+`engines/spec.py` is the only place that knows the pairs, and it refuses the two
+combinations this project does not perform (MySQL→RDS Oracle, Oracle→RDS MySQL).
+
+| Source | Target | Kind | State |
+|---|---|---|---|
+| Oracle | RDS for **Oracle** | homogeneous | Built, proven, cut over 2026-09-12 |
+| Oracle | RDS for **PostgreSQL** | heterogeneous | Phases 1–10 complete 2026-09-14 |
+| MySQL | RDS for **MySQL** | homogeneous | **Phases 1–8 built 2026-09-30**; 1–5 proven; 6 renders (MySQL 8.4 — 8.0 is past RDS standard support); schema copy + Phase 8 proven on a MySQL 8.4.11 stand-in; not yet run on AWS |
+| MySQL | RDS for **PostgreSQL** | heterogeneous | **Phases 1–8 proven for real 2026-09-30** — deployed RDS PostgreSQL 16.15, DMS 19/19 tables (196,544 rows, 0 errors), Phase 8: 19/19 counts, 18/19 identical checksums, 1 decided zero-date loss; torn down. Problems and fixes: `docs/20-mysql-problems-log.md` |
+
+**The MySQL path, as it stands.** `engines/` holds the seam (47/47),
+`collector/dialect.py` the connection and bind style, `collector/probes_mysql/`
+ten probes over `information_schema` emitting **the same dataset names and, since
+2026-09-29, Oracle's column sets** (`conform()` pads from `oracle_columns.json`), so
+the `v_user_*` views and every downstream reader need no change
+(`collector.selftest_probes_mysql` **105/105**). Results are proven against the EC2
+estate below. `docs/19-mysql-source.md` states exactly what is proven and what is not.
+
+**Phases 4, 4b, 4c, 4d and 5 on MySQL (2026-09-29)** — each is the Oracle machinery
+with the engine threaded through, never a fork; the gates are unchanged:
+
+- **Engine comes from the run, not the environment.** 4b/4c read the collector
+  manifest's `source_engine`; 4d stamps it on each statement; the SCT CLIs take
+  `--source-engine` (the "newest record on disk" had become the MySQL one).
+- **SCT routing is per source** (`sct/route.py` `MYSQL_ROUTES` overrides `ROUTES`):
+  shared codes mean different things — 9994 is AQ on Oracle, an EVENT on MySQL.
+  **No MySQL fix is ever gated by Oracle's source allow-list.**
+- **The Oracle "SELECT INTO must be STRICT" rule inverts on MySQL** — MySQL code
+  tests the variable for NULL after a zero-row SELECT INTO; STRICT would make that
+  an exception. Encoded in the MySQL catalogue and prompt.
+- **MySQL's catalogue reads differently:** every PK is named `PRIMARY` (FK parents
+  come from `referenced_table_name`), nullability is YES/NO, literal defaults are
+  unquoted, `DEFAULT_GENERATED` is not a generated column (the collector had that
+  wrong too — fixed at source).
+- **CDC readiness speaks MySQL** (`collector/mode.CDC_WORDING`): a MySQL source was
+  being told to run `ALTER DATABASE ARCHIVELOG`.
+- Gate fixes found live: `pg_policy` read "ON UPDATE" in a COMMENT as a data rewrite
+  (now exempt, and `UPDATE "quoted"` is now caught); a fix whose schema the target
+  lacks yet (3F000) is BLOCKED on Phase 4c, not REJECTED.
+- **Known gaps:** 4c renames reserved words (`order` → `order_tbl`) but DMS does not,
+  so Phase 7's mapping must mirror them; `/api/cutover` 400s on a MySQL run (it reads
+  the owning schema from the 50-rule assessment, which a SCT-only run lacks) —
+  both belong to the Phase 6–10 work.
+
+Self-tests: `remediate.selftest_sct_mysql` 101/101, `convert.selftest_mysql` 71/71,
+`appsql.selftest_mysql` 50/50; seeded 4d corpus `scripts/demo-app-mysql/`
+(answer key verified 34/34).
+
+**The MySQL estate is on EC2 and SCT assesses it there, since 2026-09-29.**
+`dbshift-source-mysql` (`i-0bd32544c1577b5ed`, t3.medium, **MySQL 8.0.46**) in the
+same VPC/subnet as `dbshift-source-oracle`, security group `sg-0067f7243b4a0dce7`
+open on 3306+22 to the operator `/32` only. SCT's own CSV records
+`3.108.190.1:3306`, so the artefact itself proves which server it read.
+**It bills while running** — stop it when idle. Rebuild and gotchas:
+`scripts/mysql-source/EC2-HOST.md`. Two that will bite again:
+**MySQL 8.4's packaged `my.cnf` has no `!includedir /etc/my.cnf.d`** (so a config
+file can sit unread, and a wrong `dnf config-manager` repo id silently installs
+8.4), and **the SCT cache key now includes the host** — the same estate locally
+and on EC2 previously shared a directory, so an EC2 run served the container's
+report.
+
+**The console is engine-aware since 2026-09-29.** Connect leads with a
+source-engine picker (it changes the form, so it is asked before connecting);
+`web/preflight_mysql.py` runs the six checks in Oracle's shape; Phase 3 offers only
+the legal pairs; two MySQL-only Discover panels show binlog readiness and the
+storage-engine/charset audit; 4b/4c/4d state their own inapplicability on a
+homogeneous pair; and Phase 7 branches on the **pair** — Data Pump serves only
+Oracle→Oracle. `drive_srcpick.js` **28/28**, `check_overlap.js` **17/17 at both
+1440x900 and 390x844** (phone width is new).
+
+**The UI work found three server bugs, all now fixed:** `/api/state` 500'd on
+MySQL because `sizing_target.LABEL` lacked a `MYSQL` entry; console discovery built
+a `Config` without `source_engine` and ran oracledb against MySQL; and
+`preflight_mysql` returned the schema list under the wrong key, so the console fell
+back to Oracle's default schemas and produced a run that **looked successful while
+collecting zero tables**. `docs/19-mysql-source.md` has all three.
+
+**Phase 2 on the MySQL path is real AWS SCT, not the 50-rule engine.** Decided
+2026-09-29. `sct/targets.py` is now a matrix keyed on source engine, and every row
+carries `sct_conversion` — which Phase 5 must read.
+
+**Three things a real SCT run against MySQL found, none of them guessable:**
+
+1. **MySQL takes no `connectionType`.** Its `MySqlConnectionProperties` has no
+   `$ConnectionType` inner class, and passing one makes SCT load *Oracle's*
+   property class and fail with `No enum constant
+   OracleConnectionProperties.ConnectionType.BASIC`. The visible follow-on error
+   is `Not found object(s) for path "Servers.MYSQL"`, which reads like a
+   tree-path bug. MySQL takes no `database` either.
+2. **SCT demands `SELECT` and `SHOW VIEW` at SERVER scope** (`ON *.*`), not the
+   schema scope the collector needs: `MYSQL Server : [SELECT, SHOW VIEW]`. Third
+   time this project has paid for a privilege check that presents as something
+   else, after `SELECT ANY DICTIONARY` and `SHOW_ROUTINE`.
+3. **SCT's own metadata query is invalid under MySQL 8's default `sql_mode`.**
+   `load-partitions-by-schema` breaks on `ONLY_FULL_GROUP_BY` and SCT abandons
+   the assessment. **A stock MySQL 8 cannot be assessed until it is relaxed** —
+   SCT's SQL, not ours, and a real prerequisite for a client's DBA.
+
+`docs/19-mysql-source.md` has the measurements. `sct.selftest_mysql` 64/64.
+
+**MySQL → MySQL has no conversion step, and that is a structural difference, not
+an omission.** AWS publishes no MySQL→MySQL conversion path because there is
+nothing to convert; SCT produces a same-engine *assessment* only. So Phase 5 must
+read "no conversion action items" on that pair as **CLEAR with a reason**, never as
+missing evidence — the opposite of the right default everywhere else.
 
 | Path | Target | State |
 |---|---|---|
@@ -69,8 +175,26 @@ not re-add them.
 | Migrate (7) detail | Oracle: Data Pump full load run 2026-09-11, 11/11 tables match. PostgreSQL: `dms/` built 2026-09-14 — the **residue** (sequences by rule, views by model, external tables by a person). Self-test 85/85. **No data migrated**: the source is unreachable from AWS. `docs/phases/phase-07b-dms.md` |
 | Validate (8) | ✅ **Both engines.** Oracle: `validated` 2026-09-12, 5 levels, 5.4M rows a side, 0 mismatches. PostgreSQL: `validate/crossengine.py` built 2026-09-14 — a canonical text form on both sides, same MD5, **proven against the real PostgreSQL**. Self-test 32/32. Levels 2 and 5 report not-comparable by design |
 | Cutover (9) | ✅ **Cut over 2026-09-12** — records re-run for the target's run `6e48d16a`, OPS-001/OPS-002 accepted by `guru.ts@ganitinc.com`, 1 step applied, 0 failed. Applications are not repointed; the source stays authoritative |
-| Kill switch | ✅ `killswitch/` — stop, empty and destroy every `dbshift-*` resource. **The instance was stopped again after the cutover; RDS auto-restarts a stopped instance after 7 days** |
+| Kill switch | ✅ `killswitch/` — stop, empty and destroy every `dbshift-*` resource. **Scans EC2 instances since 2026-09-29**: it had no EC2 branch because `RunInstances` was denied when it was written, so the two running source hosts were invisible to the one tool whose job is to say what bills. A stopped instance is reported as not-billable-for-compute *and* told that its EBS volume still bills. Verified against the live account: 2 ours, 4 other teams' — reported, never touched. `_do` also had to learn to dispatch STOP on kind, since it called `rds.stop_db_instance` for any STOP. **The instance was stopped again after the cutover; RDS auto-restarts a stopped instance after 7 days** |
 | **Report (10)** | ✅ `report/`, built 2026-09-12. The "DMS and SCT report": SCT-style conversion assessment + DMS pre-migration assessment from records. Console stage **10 · Report** (rail, unlocked by the assessment) plus the header **Report ↗** link. `docs/phases/phase-10-report.md` |
+
+## EC2 is available again — re-measured 2026-09-28
+
+`ec2:RunInstances` was explicitly denied account-wide and **is not any more**.
+Re-probed with a real regional AMI (`ami-0ee11497c4eac651d`): `RunInstances`,
+`CreateKeyPair`, `CreateSecurityGroup`, `CreateTags` and `AllocateAddress` all
+return `DryRunOperation`. `CreateKeyPair` was a hard `Deny` in September.
+
+**An in-VPC source host already runs:** `dbshift-source-oracle`
+(`i-07b0d1acfe31edc1a`, t3.large) in default VPC `vpc-05f9bf94bf057b67e`. So
+`docs/HANDOFF-2026-09-18-OPTION-A.md` (the router port-forward plan) is superseded
+for new work, and `docs/17-source-reachability.md` carries the reversal.
+
+**The trap in that document fired again while measuring this.** AWS validates
+arguments before evaluating IAM, so a bad AMI id returns `InvalidAMIID.Malformed`
+rather than an authorization result. The SSM public AMI parameter returns
+`ParameterNotFound` on this account, and the empty value it yielded produced
+exactly that misleading error. **Resolve AMIs with `ec2 describe-images`.**
 
 ## The AWS account, and the tag every resource must carry
 

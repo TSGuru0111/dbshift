@@ -1,6 +1,46 @@
 # Phase 1 — Discover
 
-> **Latest update — 2026-09-16 (later).** **The console's summary tiles now count
+> **Latest update — 2026-09-28.** **MySQL is a second source engine, and Phase 1
+> is where that becomes real.** Discovery now dispatches on
+> `DBSHIFT_SOURCE_ENGINE` (`ORACLE`, the default, or `MYSQL`): `collector/dialect.py`
+> owns the connection, the driver's error class, the bind style and the three
+> catalogue queries `run.py` issues directly, and `collector/probes_mysql/` holds
+> ten probes reading `information_schema` where Oracle's twelve read `DBA_*`.
+>
+> **The MySQL probes emit the same 47 dataset names, with the same columns.** That
+> is the whole contract the rest of the pipeline rests on — `assess/loader.py`
+> builds one SQLite table per dataset and the 51 rules are SQL over those tables
+> and the `v_user_*` views. A renamed dataset would not fail here; it would fail
+> inside a rule three phases later as "no such column", looking like a broken
+> rule. So `collector.selftest_probes_mysql` (**62/62**) checks the parity
+> mechanically, including that the 22 datasets MySQL has no analogue for are
+> emitted **shaped and empty** with a recorded reason each.
+>
+> Five datasets are new and MySQL-only, all namespaced `mysql_` so they cannot
+> collide: `mysql_table_storage` (storage engine per table — a MyISAM table has
+> no transactions and DMS CDC cannot track it), `mysql_charsets` (utf8mb3 cannot
+> hold a 4-byte character; a `_ci` collation makes `'A' = 'a'` here but not on a
+> PostgreSQL target), `mysql_binlog`, `mysql_binlog_position` and
+> `mysql_tables_without_pk`.
+>
+> **Two traps found and closed while building it.** `DBSHIFT_SCHEMAS` was
+> upper-cased unconditionally; a MySQL schema is a directory on disk, so on Linux
+> `Sales` and `SALES` are different databases and the collector would have read
+> nothing while reporting nothing wrong — the same shape as the hardcoded schema
+> list that once made the console collect nothing on anyone else's database.
+> Folding is now `engines/spec.py`'s `fold_schema_names`. And MySQL's positional
+> binds mean a UNION probe needs its marker count to match its bind count, which
+> `objects.py` gets right only because the selftest checks every probe's
+> arithmetic rather than trusting it.
+>
+> **Oracle is unchanged, and that was measured, not assumed.** All 28 selftest
+> modules pass; live discovery on `DBMIG_APP` gives 48 datasets and
+> `collector.verify` **5/5**; assessment recall is **7/7** on `DBMIG_APP` and
+> **14/14** on `DBMIG_TELCO`, severity exact on both. `Session` keeps Oracle as
+> its default dialect, so a caller that never heard of the flag behaves exactly
+> as before. See `docs/19-mysql-source.md`.
+>
+> Earlier — **2026-09-16 (later).** **The console's summary tiles now count
 > what a client would count.** "Tables" reported the raw `DBA_TABLES` row count —
 > **21 on `DBMIG_APP`, where the client has 9** — because it included the tables
 > Oracle manages on their behalf: 7 Text index internals, a materialized view's
@@ -198,6 +238,114 @@ python -m collector.selftest_mode  # the mode, end to end. No database
 Console: **Phase 1 - Discover**, with probe-by-probe progress.
 
 ## Change log
+
+**2026-09-28** — **MySQL added as a second source engine.**
+
+New: `engines/` (`SOURCE_ENGINES`, `normalize`, and `spec.py` holding the
+per-engine facts and the four legal `(source, target)` pairs — selftest 47/47);
+`collector/dialect.py` (connect, driver error class, bind style, and the three
+catalogue queries `run.py` issues directly); `collector/probes_mysql/` (ten
+probes over `information_schema`); `collector/selftest_probes_mysql.py` (62/62).
+
+Changed: `collector/db.py` — `Session` is now driver-neutral. It only ever needed
+`cursor.execute`, `cursor.description` and `fetchall()`, which PEP 249
+guarantees, so one implementation serves both engines; the Oracle-specific import,
+the `fetch_lobs` default and `except oracledb.Error` moved to the dialect.
+`in_binds` stays exported here because ten Oracle probes import it, and now
+delegates. `collector/config.py` — `source_engine` field, `DBSHIFT_SOURCE_ENGINE`,
+an engine-shaped DSN default, and the schema-folding fix below.
+`collector/probes/__init__.py` — `probes_for(engine)`, with `PROBES` still
+exported. `collector/run.py` — dialect-driven schema discovery and identity, and
+`source_engine` on the record.
+
+**Two bugs this would have shipped with, both found by writing the test first.**
+
+`_schemas_from_env()` upper-cased every configured schema name. That is free on
+Oracle, which folded the identifier itself, and wrong on MySQL, where a schema is
+a directory on disk — so on Linux `Sales` and `SALES` are two different databases
+and the collector would have looked for one that does not exist. It would have
+found nothing, reported nothing a reader would notice, and produced an empty run
+that looks exactly like an empty estate. Folding is now driven by
+`engines/spec.py`'s `fold_schema_names`. This is the third time this project has
+been bitten by an assumption about identifier case; it is the same shape as the
+hardcoded schema list that made the console collect nothing on anyone else's
+database.
+
+MySQL's paramstyle is positional, so a UNION query needs exactly as many `%s`
+markers as binds. `objects.py` unions five catalogues and passes `binds * 5`.
+Nothing about that is self-evidently right, so the selftest asserts marker count
+equals bind count for **every** query every probe issues, rather than for the one
+I happened to think of.
+
+**What is deliberately NULL rather than faked.** `cdb` and `con_name` are NULL on
+MySQL because there is no container question to answer and `'NO'` would assert
+one. `plsql_errors` and `invalid_objects` are empty because MySQL refuses to
+create a routine that does not parse, so there is no standing population of
+broken objects. `index_expressions` is empty because MySQL 8 implements a
+functional index as a hidden generated column, so there is no expression on the
+index to report. Each of the 22 no-analogue datasets carries its reason in
+`NO_MYSQL_ANALOGUE`, so the list is a record of decisions rather than a list of
+gaps to tidy away later.
+
+**`num_rows` is an estimate on both engines, and Phase 8 must not compare it.**
+`information_schema.TABLES.table_rows` is InnoDB's sampled count and is routinely
+20-50% wrong. It lands in `num_rows` because Oracle's column means the same kind
+of thing (last-gathered statistics); the exact count comes from `dataprofile.py`,
+which counts. A sampled scan uses a modulus on a single-column integer primary
+key where one exists and a `LIMIT` prefix otherwise — and says which, because a
+prefix reported as a sample is a lie about coverage and every duplicate count
+built on it describes only the first N rows.
+
+**Oracle regression, measured:** 28/28 selftest modules; live `DBMIG_APP`
+discovery 48 datasets, `collector.verify` 5/5; assessment 7/7 recall severity
+exact; `DBMIG_TELCO` 14/14 recall severity exact.
+
+**Then run against a real MySQL 8.0.46**, which found four more bugs the offline
+test could not — and this is the part worth remembering, because three of the four
+were invisible to a fake cursor by construction:
+
+1. **`%` in SQL is a format specifier to pymysql.** It interpolates with
+   `query % args`, so `LIKE '%TEMPORARY%'` raised
+   `ValueError: unsupported format character 'T'`. Fixed in
+   `MySQLDialect.prepare_sql()`, which doubles a literal `%` **only when the query
+   carries binds** — pymysql does not interpolate when args is None, and a doubled
+   `%%` would then reach the server literally and match the wrong rows. Put in the
+   dialect rather than each probe because a probe author writing `LIKE '%unsigned%'`
+   is writing correct SQL.
+2. **`generated` is reserved in MySQL 8.** `AS generated` is a syntax error; it
+   broke `objects`, `indexes` and `constraints`. The other Oracle-shaped aliases
+   (`status`, `temporary`, `position`, `engine`, `collation`) are non-reserved and
+   MySQL accepts them — the live run is what established which is which.
+3. **Four grants, and MySQL's failure mode is worse than Oracle's.** Without
+   `EXECUTE`, `TRIGGER` and `EVENT` the corresponding `information_schema` views
+   return **zero rows, with no error**. Without **`SHOW_ROUTINE`** (a dynamic
+   privilege, 8.0.20+, `ON *.*` only) routines are listed and
+   `routine_definition` is NULL — so Phase 4b would find four routines and no code
+   to convert. Oracle at least refuses the query; MySQL just reports a smaller
+   estate.
+4. **`mysql.role_edges` needs SELECT on the `mysql` schema**, which also exposes
+   every password hash. Switched to `information_schema.applicable_roles`: fewer
+   rows on a big server, no privilege escalation, and no false failure in the
+   manifest.
+
+`collector.selftest_probes_mysql` is now **81/81** with all four as regressions.
+
+**The estate:** `scripts/mysql-source/` — 00_reset, 01 grants, 02 objects,
+03 data, 04 defects, plus `answer_key.json` and `verify_defects.py`. 9 clean
+tables + 8 defect-carrying, 3 views, 5 routines, 2 triggers, 1 event, 5 RANGE
+partitions, ~205,000 rows, seeded in ~15s. **12/12 defects verified**, and the
+gate is tested in both directions: converting the MyISAM table to InnoDB reports
+11/12 and exits 1.
+
+Discovery against it: **56 datasets, 0 failed queries, 2.3s.**
+
+**Two numbers worth keeping.** `clickstream_raw` holds exactly 50,000 rows and
+`information_schema.TABLES.table_rows` reported **49,882** — which is why
+`num_rows` carries the estimate and `dataprofile.py` counts, and why Phase 8 must
+never compare `num_rows`. And all 3 views plus all 5 routines report
+`SQL SECURITY DEFINER`, because that is MySQL's default — so the finding is
+*whose definer will not exist on the target*, not *is DEFINER*.
+
 
 **2026-09-16 (later)** — **The summary tiles count user objects, not Oracle's.**
 Client feedback: "Discover — check the count it is printing." It was right.
