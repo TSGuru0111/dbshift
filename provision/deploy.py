@@ -39,6 +39,8 @@ if __package__ in (None, ""):
 
 from botocore.exceptions import ClientError
 
+import awsregion
+
 from . import policy
 from . import run as run_mod
 
@@ -140,13 +142,21 @@ def _append(path: Path, entry: dict) -> None:
 def deploy(session, *, confirm_account: str, accept_hourly: float | None, halt_reason: str | None = None,
            price_file: Path | None = None, operator_cidr: str | None = None, on_event=None,
            poll_seconds: int = 20, timeout_minutes: int = 90, sleep=time.sleep,
-           execute=run_mod.execute, now: datetime | None = None) -> dict:
+           execute=run_mod.execute, now: datetime | None = None,
+           instance_override: dict | None = None, config_override: dict | None = None) -> dict:
     emit = on_event or (lambda e: None)
     now = now or datetime.now(timezone.utc)
 
     # ---- every refusal happens before anything is created -------------------------
+    # instance_override / config_override must be the exact ones the render the
+    # person is looking at used (web/server.py reads them from
+    # STATE.provision_overrides). Without them this re-render silently fell back
+    # to the Phase 3 derived instance -- a saved override never reached the
+    # thing that actually creates the stack, and the price shown for the
+    # override never matched what --accept-hourly was then checked against.
     plan = execute(session=session, price_file=price_file, operator_cidr=operator_cidr,
-                   now=now, on_event=on_event)
+                   now=now, on_event=on_event,
+                   instance_override=instance_override, config_override=config_override)
     if not plan["ready"]:
         bad = [f"{c['name']}: {c['detail']}" for c in plan["checks"] if c["status"] in ("fail", "blocked")]
         raise DeployRefused("preflight is not clean -- " + ("; ".join(bad) or "nothing rendered"))
@@ -180,6 +190,7 @@ def deploy(session, *, confirm_account: str, accept_hourly: float | None, halt_r
               "account": identity["Account"], "collector_run_id": r["collector_run_id"],
               "cost": est, "acknowledgement": ack}
     # Written before the first billable call, so an interrupted deploy still has a record.
+    awsregion.mark_used(policy.REGION)   # so the kill switch still looks here if the region is changed later
     _append(OUTPUT / "deployments.jsonl", {**record, "event": "requested"})
 
     # The SSM parameter holding the master password is a resource too, and the

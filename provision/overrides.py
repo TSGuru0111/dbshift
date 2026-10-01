@@ -123,8 +123,9 @@ LOCKED = {
                      "and Phase 8 compares against the source's.",
     "engine": "The engine is the Phase 3 target decision. Changing it is a different "
               "migration, not a different instance.",
-    "region": "The account, the S3 exchange bucket and the DMS instance are all in "
-              f"{policy.REGION}. A target elsewhere would cross-charge egress.",
+    "region": "The region is chosen once, on the region selector, and applies to the whole "
+              "project: the RDS target, the S3 exchange bucket and the DMS instance must all be in "
+              "it, or every load and export would cross-charge egress.",
 }
 
 

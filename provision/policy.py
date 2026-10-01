@@ -13,7 +13,7 @@ from __future__ import annotations
 # acts only on dbshift* names. The prefix is load-bearing twice over.
 STACK_PREFIX = "dbshift-"
 
-REGION = "ap-south-1"
+# REGION is dynamic -- see __getattr__ at the foot of this file and awsregion.py.
 
 # Edition -> (RDS engine, licence model). There is no licence-included EE on RDS.
 ENGINE = {
@@ -168,4 +168,15 @@ MYSQL_FORCED = {
         "AWS DMS loads a MySQL target with LOAD DATA LOCAL INFILE; with this off the full load "
         "cannot write a row (AWS DMS user guide, MySQL as a target, prerequisites)"),
 }
+
+
+def __getattr__(name):
+    # `policy.REGION` is read at call time from awsregion, so the region chosen in
+    # the console reaches every AWS call that already spells it `policy.REGION`.
+    # Import-time uses (f-strings at module level) would freeze the first value;
+    # there are none, and the selftest scans for them.
+    if name == "REGION":
+        import awsregion
+        return awsregion.current()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

@@ -151,13 +151,19 @@ def select_tables(table_rows: list[dict], objects: list[dict], schema: str,
 def table_mappings(*, schema: str, tables: list[str] | None = None,
                    lowercase: bool, exclude: list[str] | None = None,
                    renames: dict | None = None,
-                   remove_columns: list[tuple[str, str]] | None = None) -> dict:
+                   remove_columns: list[tuple[str, str]] | None = None,
+                   parallel_load_rules: list[dict] | None = None) -> dict:
     """Which tables move, and under what names.
 
     `tables` None means every table in the schema -- a % wildcard, which is what
     DMS understands. Naming them explicitly is better when the set is known,
     because a table added to the source between planning and running would
     otherwise be picked up silently.
+
+    `parallel_load_rules` are the table-settings rules from dms.parallel_load,
+    already built -- this function only assigns them rule-id/rule-name like
+    every other rule, so the numbering stays one sequence across selection,
+    transformation and table-settings rules rather than three separate ones.
     """
     rules: list[dict] = []
     rule_id = 1
@@ -217,6 +223,11 @@ def table_mappings(*, schema: str, tables: list[str] | None = None,
         add({"rule-type": "transformation", "rule-target": "column",
              "object-locator": {"schema-name": schema, "table-name": table, "column-name": column},
              "rule-action": "remove-column", "value": None, "old-value": None})
+    # Range-based parallel load: the planner's own rules, passed through as
+    # built. They are table-settings rules rather than transformations, so they
+    # neither read nor affect the renames above.
+    for rule in parallel_load_rules or []:
+        add(rule)
 
     return {"rules": rules}
 

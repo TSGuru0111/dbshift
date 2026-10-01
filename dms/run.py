@@ -24,6 +24,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import awsregion
+
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "dms"
@@ -34,7 +36,7 @@ from provision import run as provision_run
 from provision import policy as prov_policy
 from provision import run as prov_run
 
-from . import actions, mappings, policy, preflight, residue
+from . import actions, mappings, parallel_load, policy, preflight, residue
 
 
 def target_from_deployment(session=None) -> dict | None:
@@ -287,14 +289,52 @@ def target_counts_from(target) -> tuple[dict | None, str | None]:
             pass
 
 
+def priced_classes(session) -> list[dict]:
+    """policy.INSTANCE_CLASSES with each class's live hourly rate for the selected
+    region. The selection (which classes, their vCPU and memory) is policy and is
+    unchanged; only the price comes from the Price List API. A class with no price
+    carries `usd_per_hour: None` and the reason, and the screen shows it as
+    "Pricing unavailable" -- the class stays selectable."""
+    from pricing import query
+    out, failed = [], None
+    for c in policy.INSTANCE_CLASSES:
+        row = {**c, "usd_per_hour": None, "price_unavailable": None}
+        if failed and failed.code != "no-match":
+            row["price_unavailable"] = failed.reason   # the API itself is down; do not ask twice
+        else:
+            try:
+                if session is None:
+                    raise query.PricingUnavailable("no AWS session", "no-credentials")
+                row["usd_per_hour"] = query.price(
+                    session, resource_type=query.DMS, region=policy.REGION,
+                    instance_type=c["class"], multi_az=policy.MULTI_AZ)["hourlyPrice"]
+            except query.PricingUnavailable as exc:
+                failed, row["price_unavailable"] = exc, exc.reason
+        out.append(row)
+    return out
+
+
 def plan(session=None, *, migration_type: str | None = None,
          target_counts: dict | None = None, target_unread_reason: str | None = None,
-         parallel_subtasks: int | None = None, instance_class: str | None = None) -> dict:
+         parallel_subtasks: int | None = None, instance_class: str | None = None,
+         parallel_load_batches: int = 0, source_connect=None) -> dict:
     """Everything that can be known without creating anything. Free.
 
     Produces the two JSON documents DMS will be given, the preflight verdict,
     and the list of objects DMS will *not* move -- which is as important as
     what it will, because "DMS migrated the database" is never true.
+
+    `parallel_load_batches` splits one table's full load across that many DMS
+    threads, by range -- see dms.parallel_load. 0 is a normal, single-threaded
+    load; this is the only thing 0 means here, never "unset". Finding which
+    tables are even eligible (a single numeric primary key) is free -- it only
+    reads what Discovery already collected -- and runs regardless of the
+    requested batch count, so the plan can always say why a table would stay
+    single-pass. Sizing the split needs each column's *real* MIN/MAX, which is
+    not something Discovery stores, so that part is skipped unless the caller
+    passes `source_connect` (a zero-arg callable opening a source connection)
+    -- the console supplies one from the connection Phase 1 already made;
+    without it every table is reported single-pass rather than guessed at.
     """
     recs = prov_records.load()
     # None means "whatever Phase 1 declared". An explicit argument still wins,
@@ -419,8 +459,37 @@ def plan(session=None, *, migration_type: str | None = None,
                  and c.get("table_name") in set(tables)
                  and "generated" in (c.get("extra") or "").lower()
                  and "default_generated" not in (c.get("extra") or "").lower()]
+    # Eligibility (a single numeric primary key) is offline and free, so it is
+    # always computed and reported -- a table with a composite or non-numeric
+    # key is "single-pass" for a reason worth showing, not just silently
+    # unsplit. Sizing the split (the live MIN/MAX read) only runs when both a
+    # batch count and a connection were actually given.
+    pk_cols = parallel_load.numeric_pk_columns(
+        prov_records._dataset(run_id, "constraints"),
+        prov_records._dataset(run_id, "constraint_columns"),
+        prov_records._dataset(run_id, "columns"), schema=estate, tables=tables)
+    pl_rules: list[dict] = []
+    pl_report = {"requested_batches": parallel_load_batches,
+                 "eligible": sorted(pk_cols), "split": [],
+                 "single_pass": sorted(tables)}
+    if parallel_load_batches and parallel_load_batches > 1 and pk_cols:
+        if source_connect is None:
+            pl_report["reason"] = ("no source connection was available to read the real "
+                                   "MIN/MAX of each table's key, so every table stays "
+                                   "single-pass rather than guessing a split")
+        else:
+            ranges = parallel_load.fetch_ranges(source_connect, estate, pk_cols)
+            pl_rules, split_report = parallel_load.build_rules(
+                schema=estate, table_ranges=ranges, batches=parallel_load_batches)
+            pl_report["split"] = split_report["split"]
+            pl_report["single_pass"] = sorted(set(tables) - set(split_report["split"]))
+    elif parallel_load_batches and parallel_load_batches > 1 and not pk_cols:
+        pl_report["reason"] = ("no included table has a single-column numeric primary "
+                               "key, so there is nothing here range-partitioning could split")
+
     tm = mappings.table_mappings(schema=estate, tables=tables, lowercase=heterogeneous,
-                                 renames=dms_renames, remove_columns=generated)
+                                 renames=dms_renames, remove_columns=generated,
+                                 parallel_load_rules=pl_rules)
     ts = mappings.task_settings(migration_type=migration_type,
                                 parallel_subtasks=parallel_subtasks)
 
@@ -452,7 +521,8 @@ def plan(session=None, *, migration_type: str | None = None,
                      "multi_az": policy.MULTI_AZ},
         # What the screen offers, from policy rather than duplicated in the
         # page, so the classes and their rates cannot drift apart.
-        "sizing_options": {"classes": policy.INSTANCE_CLASSES,
+        "region": policy.REGION,
+        "sizing_options": {"classes": priced_classes(session),
                            "subtasks": policy.SUBTASK_CHOICES,
                            "default_class": policy.INSTANCE_CLASS,
                            "default_subtasks": policy.PARALLEL_SUBTASKS},
@@ -476,6 +546,7 @@ def plan(session=None, *, migration_type: str | None = None,
                                 "columns")}),
         "not_moved_by_dms": mappings.excluded_objects(objects, estate),
         "table_mappings": tm,
+        "parallel_load": pl_report,
         "task_settings": ts,
         "lowercase_names": heterogeneous,
         "provision_stack": (prov_plan or {}).get("stack_name"),
@@ -486,7 +557,8 @@ def plan(session=None, *, migration_type: str | None = None,
 def execute(session, *, confirm_account: str, migration_type: str | None = None,
             source: dict, target: dict, on_event=None, target_counts: dict | None = None,
             instance_class: str | None = None, dms_group_id: str | None = None,
-            parallel_subtasks: int | None = None) -> dict:
+            parallel_subtasks: int | None = None, parallel_load_batches: int = 0,
+            source_connect=None) -> dict:
     """Create the instance, endpoints and task, then run it. **This bills.**"""
     events: list[dict] = []
 
@@ -502,7 +574,8 @@ def execute(session, *, confirm_account: str, migration_type: str | None = None,
             f"resolve to ({account}), and it was {confirm_account!r}")
 
     p = plan(session, migration_type=migration_type, target_counts=target_counts,
-             parallel_subtasks=parallel_subtasks, instance_class=instance_class)
+             parallel_subtasks=parallel_subtasks, instance_class=instance_class,
+             parallel_load_batches=parallel_load_batches, source_connect=source_connect)
     if not p["ready"]:
         raise ValueError("preflight refused: " + ", ".join(p["refused_because"]))
     # The type the plan resolved -- Phase 1's declaration when none was passed.
@@ -514,6 +587,7 @@ def execute(session, *, confirm_account: str, migration_type: str | None = None,
               "plan": {k: v for k, v in p.items() if k not in ("table_mappings", "task_settings")},
               "events": events}
     _save(record)
+    awsregion.mark_used(policy.REGION)   # so the kill switch still looks here if the region is changed later
 
     dms = session.client("dms", region_name=policy.REGION)
     ec2 = session.client("ec2", region_name=policy.REGION)

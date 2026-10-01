@@ -24,10 +24,11 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "killswitch"
 
+import awsregion
 from . import actions, scan
 
 DEFAULT_PROFILE = os.environ.get("DBSHIFT_AWS_PROFILE", "dbshift-static")
-DEFAULT_REGION = os.environ.get("DBSHIFT_AWS_REGION", "ap-south-1")
+DEFAULT_REGION = awsregion.current()   # console choice, else DBSHIFT_AWS_REGION, else ap-south-1
 OUTPUT = Path(__file__).resolve().parent / "output"
 
 
@@ -38,7 +39,9 @@ def session_for(profile: str):
 
 def regions_for(session, all_regions: bool, region: str) -> list[str]:
     if not all_regions:
-        return [region]
+        # The named region plus every region this project has created something
+        # in: choosing a different region after a deploy must not hide the old one.
+        return sorted({region, *awsregion.used()})
     ec2 = session.client("ec2", region_name=region)
     return sorted(r["RegionName"] for r in ec2.describe_regions()["Regions"])
 

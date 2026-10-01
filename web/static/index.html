@@ -980,7 +980,13 @@ tr:last-child td{border-bottom:none}
     </div>
     <div class="panel pad mt">
       <div class="eyebrow">What a client environment needs<span class="hint" tabindex="0" role="note" title="On this laptop the database is local, so nothing is in the way. At a client site these are what to request up front — the first one blocks everything else.">i</span></div>
-      <div class="netreq" id="netreq"></div>
+      <div class="row2 mt-s" style="align-items:start">
+        <div class="netreq" id="netreq"></div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:10px">Change Data Capture (CDC)<span class="hint" tabindex="0" role="note" title="What DMS needs from the source engine to replicate ongoing changes, not just an initial load. This differs by engine, unlike the general requirements on the left.">i</span></div>
+          <div class="netreq" id="cdcreq"></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -1622,10 +1628,18 @@ tr:last-child td{border-bottom:none}
 
       <div class="mt"><div class="eyebrow">Instance class</div>
         <div class="row2">
+          <div class="field"><label for="ovRegion">AWS Region</label>
+            <select id="ovRegion"></select>
+            <div id="ovRegionNote" style="font-size:12.5px;margin-top:4px"></div></div>
           <div class="field"><label for="ovClass">Class</label>
             <select id="ovClass"></select></div>
+        </div>
+        <div class="row2 mt-s">
           <div class="field"><label>Derived by Phase 3</label>
             <div class="mono" id="ovDerived" style="padding:10px 0;color:var(--ink-3)"></div></div>
+          <div class="field"><label>Estimated price · Amazon RDS<span class="hint" tabindex="0" role="note"
+              title="From the AWS Price List API, for the region and class selected above. hourly x 730 h -- an estimate, not a bill.">i</span></label>
+            <div class="mono" id="ovPrice" style="padding:10px 0"></div></div>
         </div>
         <div id="ovClassNote"></div>
       </div>
@@ -1855,6 +1869,23 @@ tr:last-child td{border-bottom:none}
           <pre id="dmsMappingJson"></pre></details>
         <details class="steplog"><summary>Task settings — how DMS behaves while it runs</summary>
           <pre id="dmsSettingsJson"></pre></details>
+
+        <!-- One table can dwarf the rest of the estate, and MaxFullLoadSubTasks
+             above only runs several *tables* at once -- it does nothing for
+             that one. This splits a single table's own load across several DMS
+             threads, by range, the same "ranges" parallel-load AWS's own docs
+             show. 0 is a normal, single-threaded load; only a table with one
+             numeric primary key column can split at all, and the box below
+             says which of this estate's tables that is, once a number is set. -->
+        <div class="mt"><div class="eyebrow">Parallel load, per table<span class="hint" tabindex="0" role="note"
+            title="Splits one table's own load across this many DMS threads, by range on its primary key -- not how many tables load at once (that is above). Only a table with a single numeric primary key column can split. 0 means every table loads as one pass, same as today.">i</span></div>
+          <div class="row2">
+            <div class="field"><label for="dmsBatches">Batches per table</label>
+              <input id="dmsBatches" type="number" inputmode="numeric" min="0" step="1" value="0"></div>
+            <div class="field"><label>&nbsp;</label>
+              <div class="mono" id="dmsBatchesNote" style="padding:10px 0;color:var(--ink-3)"></div></div>
+          </div>
+        </div>
       </div>
 
       <div class="panel pad" id="dmsRunPanel" style="display:none">
@@ -1877,6 +1908,8 @@ tr:last-child td{border-bottom:none}
             <select id="dmsSubtasks"></select></div>
         </div>
         <div class="note info" id="dmsSizingNote" style="margin:0 0 12px"></div>
+        <div class="eyebrow">Estimated price · AWS DMS replication instance</div>
+        <div id="priceMigrate" style="margin:6px 0 14px"></div>
 
         <div class="field"><label for="dmsConfirm">Type the AWS account id to confirm</label>
           <input id="dmsConfirm" class="mono" placeholder="000000000000"></div>
@@ -2282,7 +2315,12 @@ function provTab(which){
 }
 document.addEventListener('click', e => {
   const chip = e.target.closest('#provTabs .chip');
-  if (chip) provTab(chip.dataset.prov);
+  if (!chip) return;
+  provTab(chip.dataset.prov);
+  // openDeployTab is declared later in this script (function declarations are
+  // hoisted), and re-renders the plan so the rate shown here can never drift
+  // from what Deploy's own gate will check.
+  if (chip.dataset.prov === 'deploy') openDeployTab();
 });
 // What each pane holds, on the chip itself. The deploy form is on the third
 // pane, so a switcher that said only "Plan / Live / Deploy" left the phase's
@@ -2304,7 +2342,7 @@ function provChipState(plan, status){
   // The rate is the fact a person needs before opening the pane, not after.
   set('#provChipDeploy', !plan ? ''
     : s.exists ? 'deployed'
-    : est ? `$${est.instance_per_hour}/h` : 'no price list');
+    : est ? `$${est.instance_per_hour}/h` : 'no price');
 }
 
 function renderPageNav(){
@@ -2397,6 +2435,11 @@ async function loadState(){
     LEGAL_TARGETS = s.legal_targets || LEGAL_TARGETS;
     renderSourceEngines();
   }
+  // One entry per engine, each headed by its engine name -- CDC needs a
+  // different setup on Oracle than on SQL Server, unlike the general list.
+  $('#cdcreq').innerHTML = (s.cdc_requirements || []).map(r =>
+    `<div><div class="t">${esc(r.engine)} <span style="font-weight:400;color:var(--ink-3)">— ${esc(r.title)}</span></div>
+      <div class="d">${esc(r.detail)}</div></div>`).join('');
   if (s.engine) { ENGINE = s.engine; renderPaths(); showMigrationEngine(); }
   if (s.migration_modes) {
     MODES = s.migration_modes; MODE = s.migration_mode;
@@ -3570,6 +3613,99 @@ $('#btnSize').onclick = () => {
   };
   es.onerror = () => { es.close(); btn.disabled = false; setStage('target','active','connection lost'); };
 };
+
+/* ---------------- AWS price card ----------------
+   renderPriceCard() is Migrate's price card (an AWS DMS replication instance).
+   Provision has its own inline picker instead (region + class + price, in
+   "Instance and database configuration"), because there a person is choosing
+   a candidate before saving it, not just reading a decision already made --
+   see renderOvRegion()/refreshOvPrice() further down. Target & Sizing has no
+   price of its own: it recommends an instance class, and that class is only
+   priced once Provision is reached. Both still share one region -- see
+   changeProjectRegion() below -- and PRICE.region and PRICE.cards are what tie
+   the DMS card and Provision's inline picker together, even though only the
+   DMS card is a "card" in the literal, boxed-panel sense any more.
+
+   The class shown is always the phase's own decision, or a candidate it is
+   only looking at, passed in by the caller; the price is looked up for it and
+   never the other way round. If pricing fails the class is still shown, with
+   "Pricing unavailable" beside it. The region is the project's target region:
+   it is where Provision and Migrate create resources and what prices are
+   quoted for. Changing it never
+   re-runs sizing, and is refused while a stack exists in the old region. */
+const PRICE = {region: null, regions: [], seq: {}, cards: {}, note: ''};
+
+async function priceRegions(){
+  if (PRICE.regions.length) return;
+  try {
+    const r = await (await fetch('/api/aws/pricing-region')).json();
+    PRICE.region = r.region; PRICE.regions = r.regions;
+  } catch (e) { /* the card renders without a dropdown and says so */ }
+}
+
+// The one project-wide region change, whichever control it was made from --
+// the Target & Sizing card, the Migrate card, or the Provision region select
+// beside the instance class. It posts the change, then refreshes every
+// registered card (PRICE.cards) so all of them read the same region back,
+// including this one's own select if the change was refused.
+async function changeProjectRegion(newRegion){
+  const r = await fetch('/api/aws/pricing-region', {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({region: newRegion})});
+  if (r.ok) {
+    PRICE.region = newRegion; PRICE.note = '';
+    // What was rendered or priced for the old region says nothing about this one.
+    if ($('#provResult')) { $('#provResult').style.display = 'none'; $('#provEmpty').style.display = ''; }
+    if ($('#dmsClass')) $('#dmsClass').innerHTML = '';
+    PRICE.migrateClass = null;
+    if (typeof DMSPLAN !== 'undefined' && DMSPLAN) renderDmsPlan();
+  } else {
+    PRICE.note = (await r.json().catch(() => ({}))).detail || 'the region could not be changed';
+  }
+  Object.values(PRICE.cards).forEach(f => f());
+  return r.ok;
+}
+
+async function renderPriceCard(box, phase, resource, label, cls){
+  const el = typeof box === 'string' ? $('#' + box) : box;
+  if (!el) return;
+  PRICE.cards[el.id] = () => renderPriceCard(el, phase, resource, label, cls);
+  const seq = PRICE.seq[el.id] = (PRICE.seq[el.id] || 0) + 1;
+  await priceRegions();
+  const opts = PRICE.regions.map(x =>
+    `<option value="${esc(x.code)}"${x.code === PRICE.region ? ' selected' : ''}>${esc(x.code)} — ${esc(x.name)}</option>`).join('');
+  const head = `<div class="field" style="max-width:340px"><label>AWS Region</label>
+      <select data-price-region>${opts}</select></div>`;
+  const shell = body => {
+    if (seq !== PRICE.seq[el.id]) return;          // a newer request owns this card
+    el.innerHTML = head + body;
+    const sel = el.querySelector('[data-price-region]');
+    if (sel) sel.onchange = () => changeProjectRegion(sel.value);
+  };
+  const tile = (k, v, h) => `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${v}</div>
+    <div class="h">${esc(h || '')}</div></div>`;
+  const known = tile(label, esc(cls || '—'), '');
+  shell(`<div class="tiles mt-s">${known}<div class="tile"><div class="k">Price</div>
+    <div class="v">…</div><div class="h">asking the AWS Price List API</div></div></div>`);
+
+  let d;
+  try {
+    const q = new URLSearchParams({phase, resourceType: resource});
+    if (resource === 'dms' && cls) q.set('instanceType', cls);
+    const r = await fetch('/api/aws/pricing?' + q);
+    d = r.ok ? await r.json() : {available: false, reason: (await r.json().catch(() => ({}))).detail || 'request failed'};
+  } catch (e) { d = {available: false, reason: 'network failure'}; }
+
+  const off = PRICE.note ? `<div class="note bad mt-s">${esc(PRICE.note)}</div>` : '';
+  if (!d.available) {
+    shell(`<div class="tiles mt-s">${known}${tile('Price', '<span style="font-size:18px">Pricing unavailable</span>', d.reason || '')}</div>${off}`);
+    return;
+  }
+  shell(`<div class="tiles mt-s">
+      ${tile(label, esc(d.instanceType), `${d.vcpu ?? '—'} vCPU · ${d.memory || '—'}`)}
+      ${tile('Hourly cost', '$' + d.hourlyPrice.toFixed(4) + '<small>/hour</small>', d.currency + ' · on-demand')}
+      ${tile('Estimated monthly cost', '$' + d.monthlyPrice.toFixed(2) + '<small>/month</small>', 'hourly × 730 h — an estimate, not a bill')}
+    </div>${off}`);
+}
 
 async function renderSizing(){
   const s = await (await fetch('/api/sizing')).json();
@@ -5419,38 +5555,75 @@ let statusTimer = null;
 let PROV_PLAN = null;
 
 const CHECK_MARK = {pass:'✓', warn:'!', fail:'×', blocked:'⏸', info:'i'};
+// Most check names read fine as "snake_case -> words". stack_name_free is the
+// exception: what it actually checks is whether the CloudFormation stack this
+// phase is about to create already exists, and "stack name free" reads as a
+// database naming rule to someone who has not read preflight.py.
+const CHECK_LABEL = {stack_name_free: 'CloudFormation template name'};
 function checkRow(c){
   const cls = c.status === 'pass' ? 'pass' : c.status === 'fail' ? 'fail' : 'warn';
+  const label = CHECK_LABEL[c.name] || c.name.replace(/_/g,' ');
   return `<div class="check ${cls}"><span class="mark">${CHECK_MARK[c.status] || '·'}</span>
-    <div><div class="name">${esc(c.name.replace(/_/g,' '))}</div><div class="detail">${esc(c.detail)}</div>
+    <div><div class="name">${esc(label)}</div><div class="detail">${esc(c.detail)}</div>
     ${c.remedy && c.status !== 'pass' ? `<div class="remedy">${esc(c.remedy)}</div>` : ''}</div></div>`;
 }
 
-$('#btnProvision').onclick = () => {
+// A named declaration (hoisted), not an inline handler, so the Deploy tab can
+// call the exact same render-and-check that the button does -- see
+// openDeployTab() below, which is why this returns a promise rather than
+// nothing.
+function renderAndCheck(){
   const btn = $('#btnProvision');
   btn.disabled = true;
   $('#provEmpty').style.display = 'none';
   $('#provLive').innerHTML = '';
   setStage('provision', 'busy', 'rendering');
-  const es = new EventSource('/api/provision');
-  es.onmessage = async (m) => {
-    const d = JSON.parse(m.data);
-    if (d.event === 'stage') {
-      $('#provLive').insertAdjacentHTML('beforeend', `<div class="tick done"><span class="st"></span>
-        <span class="nm">${esc(d.stage)}</span><span class="meta">${esc(d.detail)}</span></div>`);
-    } else if (d.event === 'complete') {
-      es.close();
-      await renderProvision();
-      btn.disabled = false;
-    } else if (d.event === 'error') {
-      es.close();
-      setStage('provision', 'active', 'failed');
-      $('#provLive').insertAdjacentHTML('beforeend', `<div class="note bad mt-s">${esc(d.message)}</div>`);
-      btn.disabled = false;
-    }
-  };
-  es.onerror = () => { es.close(); btn.disabled = false; setStage('provision', 'active', 'connection lost'); };
-};
+  return new Promise(resolve => {
+    const es = new EventSource('/api/provision');
+    es.onmessage = async (m) => {
+      const d = JSON.parse(m.data);
+      if (d.event === 'stage') {
+        $('#provLive').insertAdjacentHTML('beforeend', `<div class="tick done"><span class="st"></span>
+          <span class="nm">${esc(d.stage)}</span><span class="meta">${esc(d.detail)}</span></div>`);
+      } else if (d.event === 'complete') {
+        es.close();
+        await renderProvision();
+        btn.disabled = false;
+        resolve(true);
+      } else if (d.event === 'error') {
+        es.close();
+        setStage('provision', 'active', 'failed');
+        $('#provLive').insertAdjacentHTML('beforeend', `<div class="note bad mt-s">${esc(d.message)}</div>`);
+        btn.disabled = false;
+        resolve(false);
+      }
+    };
+    es.onerror = () => {
+      es.close(); btn.disabled = false; setStage('provision', 'active', 'connection lost'); resolve(false);
+    };
+  });
+}
+$('#btnProvision').onclick = renderAndCheck;
+
+// deploy()'s own gate recomputes the plan from scratch -- including its price
+// -- and refuses unless --accept-hourly is exactly that fresh number (deploy.py:
+// "must be the rate just computed"). The banner and #dRate here were only ever
+// as current as the last "Render and check", so a config change (Multi-AZ, an
+// instance override) or a live price change made after that render, but before
+// Deploy was opened, left the person typing back a number the server would no
+// longer agree with -- not a hardcoded value, a stale one. Re-rendering on
+// every visit to this tab keeps the two in sync, and clearing #dRate makes
+// clear that whatever was typed before this refresh is not to be trusted.
+async function openDeployTab(){
+  if (!PROV_PLAN) return;   // nothing rendered yet; the empty-plan note covers this
+  const rate = $('#dRate'), btn = $('#btnDeploy');
+  rate.value = '';
+  rate.disabled = true; btn.disabled = true;
+  rate.placeholder = 'recalculating…';
+  await renderAndCheck();
+  rate.disabled = false; btn.disabled = false;
+  rate.placeholder = 'as shown above';
+}
 
 /* ---------------- provision: manual instance and configuration ----------------
    The screen's claim is that every value says where it came from. An override
@@ -5459,10 +5632,57 @@ $('#btnProvision').onclick = () => {
    what Phase 3 derived next to what is being chosen instead. */
 let OV = null;   // the options payload, loaded once per render
 
+/* The region select lives beside the class picker rather than in its own price
+   card, but it changes the same project-wide region as the other phases'
+   cards -- so it is registered into PRICE.cards like them, and a region change
+   made anywhere rebuilds this <select> too (picking up the reverted value if
+   the change was refused, e.g. a stack already exists in the old region). */
+async function renderOvRegion(){
+  const sel = $('#ovRegion');
+  if (!sel) return;
+  await priceRegions();
+  sel.innerHTML = PRICE.regions.map(x =>
+    `<option value="${esc(x.code)}"${x.code === PRICE.region ? ' selected' : ''}>${esc(x.code)} — ${esc(x.name)}</option>`).join('');
+  sel.onchange = () => changeProjectRegion(sel.value);
+  // A refused change (a live stack in the old region, most often) reverts this
+  // select silently -- PRICE.region did not move, so the rebuilt options just
+  // re-select where it already was. Without this the person sees their pick
+  // snap back with no visible reason.
+  const note = $('#ovRegionNote');
+  if (note) note.innerHTML = PRICE.note
+    ? `<span style="color:var(--bad,#c0392b)">${esc(PRICE.note)}</span>` : '';
+}
+
+// The compact price readout beside the class picker: priced for whatever class
+// is selected right now, not necessarily a saved override or a rendered plan --
+// so choosing a candidate previews its price before "Use these values".
+let ovPriceSeq = 0;
+async function refreshOvPrice(){
+  const box = $('#ovPrice');
+  const cls = $('#ovClass');
+  if (!box || !cls || !cls.value) { if (box) box.textContent = ''; return; }
+  const seq = ++ovPriceSeq;
+  box.innerHTML = '<span style="color:var(--ink-3)">asking the AWS Price List API…</span>';
+  let d;
+  try {
+    const q = new URLSearchParams({phase: 'provision', resourceType: 'rds', instanceType: cls.value});
+    const r = await fetch('/api/aws/pricing?' + q);
+    d = r.ok ? await r.json() : {available: false, reason: (await r.json().catch(() => ({}))).detail || 'request failed'};
+  } catch (e) { d = {available: false, reason: 'network failure'}; }
+  if (seq !== ovPriceSeq) return;                  // a newer request owns this box
+  box.innerHTML = d.available
+    ? `$${d.hourlyPrice.toFixed(4)}/hour <span style="color:var(--ink-3)">· est. $${d.monthlyPrice.toFixed(2)}/month</span>`
+    : `<span class="mono" style="color:var(--danger,#c0392b)">Pricing unavailable</span>`
+      + `<div style="font-size:12.5px;color:var(--ink-3);margin-top:2px">${esc(d.reason || '')}</div>`;
+}
+PRICE.cards.ovRegion = renderOvRegion;
+PRICE.cards.ovPrice = refreshOvPrice;
+
 async function loadProvOptions(){
   const r = await fetch('/api/provision/options');
   if (!r.ok) return;
   OV = await r.json();
+  renderOvRegion();
 
   $('#ovDerived').textContent = OV.derived.instance_class
     ? `${OV.derived.instance_class} · ${OV.derived.vcpu} vCPU / ${OV.derived.memory_gib} GiB`
@@ -5520,8 +5740,9 @@ async function loadProvOptions(){
       </summary><div class="body">${OV.locked.map(l =>
         `<p class="why"><b>${esc(l.property)}</b> — ${esc(l.why)}</p>`).join('')}</div></details>`;
 
-  $('#ovClass').onchange = showClassNote;
+  $('#ovClass').onchange = () => { showClassNote(); refreshOvPrice(); };
   showClassNote();
+  refreshOvPrice();
   paintOvSummary();
 }
 
@@ -5639,10 +5860,14 @@ async function renderProvision(){
   $('#provTiles').innerHTML = rd ? [
     tile('Engine', provEngineTile(rd), rd.licence),
     tile('Instance', esc(rd.instance_class), `${rd.storage_gb} GB ${rd.storage_type}`),
-    tile('Per hour', est ? '$' + est.instance_per_hour : '—', est ? `plus $${est.storage_per_month}/month storage` : 'no price list'),
+    tile('Per hour', est ? '$' + est.instance_per_hour : '—', est ? `plus $${est.storage_per_month}/month storage` : 'no price'),
     tile('If forgotten', est ? '$' + est.if_left_running_30_days : '—', est ? `30 days · an 8-hour day is $${est.per_8h_day}` : ''),
   ].join('') : '';
 
+  // The live price lives beside the class picker now (Instance and database
+  // configuration, above) rather than down here -- refreshed on open in case
+  // rendering ran from a saved override the picker had not re-priced yet.
+  refreshOvPrice();
   $('#provChecks').innerHTML = p.checks.map(checkRow).join('');
   renderProvParams(rd, p.source);
   // The fixed fields show what this render uses, so they follow a new render.
@@ -5657,7 +5882,7 @@ async function renderProvision(){
     ? `Deploying starts billing at <b>$${est.instance_per_hour}/hour</b> plus $${est.storage_per_month}/month
        storage — $${est.per_8h_day} for an 8-hour day, <b>$${est.if_left_running_30_days} if left running
        30 days</b>. Excludes ${esc(est.excludes.replace(/^Oracle/, 'Oracle'))}.`
-    : 'No price list, so no deploy: a deploy is never offered without a stated cost.';
+    : 'No price could be established, so no deploy: a deploy is never offered without a stated cost.';
   setStage('provision', 'active', p.ready ? (est ? `ready · $${est.instance_per_hour}/h` : 'ready') : 'not ready');
   await refreshStatus();
 }
@@ -6907,6 +7132,24 @@ $('#btnResidueApply').onclick = async () => {
   } finally { gateResidue(); }
 };
 
+// What batches actually did, in the estate's own table names -- the box only
+// says a number, and "4 batches" means nothing without knowing whether it
+// applied to one table or eleven.
+function renderParallelLoadNote(report, requested){
+  const box = $('#dmsBatchesNote');
+  if (!box) return;
+  if (!report || !requested) {
+    box.textContent = 'One pass per table, same as today.';
+    return;
+  }
+  const split = report.split || [], single = report.single_pass || [];
+  const bits = [];
+  if (split.length) bits.push(`<b>${split.length} table(s) split</b> into ${requested}: ${esc(split.join(', '))}`);
+  if (single.length) bits.push(`${single.length} single-pass -- no single numeric primary key to split on`);
+  box.innerHTML = bits.join('<br>') || 'Nothing eligible to split; every table stays single-pass.';
+  if (report.reason) box.innerHTML += `<div class="note info mt-s" style="padding:8px">${esc(report.reason)}</div>`;
+}
+
 async function renderDmsPlan(){
   const btn = $('#btnDmsPlan');
   btn.disabled = true;
@@ -6915,7 +7158,11 @@ async function renderDmsPlan(){
   const label = btn.textContent;
   btn.textContent = 'Planning…';
   const type = $('#dmsType') ? $('#dmsType').value : 'full-load';
-  const r = await fetch('/api/dms/plan?migration_type=' + encodeURIComponent(type));
+  // 0 (or blank, or negative -- the field is clamped on blur below) always
+  // reads as 0: a normal, single-threaded load, same as before this existed.
+  const batches = Math.max(0, parseInt(($('#dmsBatches') || {}).value, 10) || 0);
+  const q = new URLSearchParams({migration_type: type, parallel_load_batches: String(batches)});
+  const r = await fetch('/api/dms/plan?' + q);
   btn.disabled = false;
   btn.textContent = label;
   if (!r.ok) {
@@ -6956,6 +7203,7 @@ async function renderDmsPlan(){
       <div class="detail">${esc(why)}</div></div></div>`).join('');
   $('#dmsMappingJson').textContent = JSON.stringify(d.table_mappings, null, 2);
   $('#dmsSettingsJson').textContent = JSON.stringify(d.task_settings, null, 2);
+  renderParallelLoadNote(d.parallel_load, batches);
 
   // The plain-language summary. Everything below this point is detail, and a
   // person reading the screen for the first time should not have to assemble
@@ -7143,7 +7391,7 @@ function renderDmsSizing(d){
   const cls = $('#dmsClass'), sub = $('#dmsSubtasks');
   if (!cls.options.length) {
     cls.innerHTML = opts.classes.map(c =>
-      `<option value="${esc(c.class)}">${esc(c.class)} — $${c.usd_per_hour.toFixed(3)}/h · ${esc(c.note)}</option>`).join('');
+      `<option value="${esc(c.class)}">${esc(c.class)} — ${c.usd_per_hour == null ? 'pricing unavailable' : '$' + c.usd_per_hour.toFixed(3) + '/h'} · ${esc(c.note)}</option>`).join('');
     cls.value = d.instance.class || opts.default_class;
     sub.innerHTML = opts.subtasks.map(n =>
       `<option value="${n}">${n} tables at once</option>`).join('');
@@ -7151,24 +7399,33 @@ function renderDmsSizing(d){
     cls.onchange = sub.onchange = () => renderDmsSizing(DMSPLAN);
   }
   const chosen = opts.classes.find(c => c.class === cls.value) || opts.classes[0];
+  // renderDmsSizing runs on every dropdown change; only ask for a price when the
+  // class actually differs from the one already on the card.
+  if (PRICE.migrateClass !== chosen.class) {
+    PRICE.migrateClass = chosen.class;
+    renderPriceCard('priceMigrate', 'migrate', 'dms', 'DMS replication instance', chosen.class);
+  }
   const rows = (d.tables || []).reduce((a, t) => a + (DMSPLAN.row_counts?.[t] || 0), 0)
                || DMS_MEASURED.rows;
   // Scale the measurement by compute and parallelism, then floor it: past a
   // point the source and network bound the load, not the instance.
   const speedup = (chosen.vcpu / DMS_MEASURED.vcpu) * (Number(sub.value) / DMS_MEASURED.subtasks);
   const mins = Math.max(8, Math.round(DMS_MEASURED.minutes * (rows / DMS_MEASURED.rows) / speedup));
-  const cost = (chosen.usd_per_hour * (mins / 60)).toFixed(2);
+  // The rate is the live Price List rate for the selected region, never a
+  // constant. Without one the time estimate stands and the dollar figure is omitted.
+  const cost = chosen.usd_per_hour == null ? null : (chosen.usd_per_hour * (mins / 60)).toFixed(2);
   // en-US grouping explicitly: the browser's own locale renders 32971741 as
   // "3,29,71,741" here, which is correct for India but does not match the
   // "33M" in the same sentence or any other number in this console.
   $('#dmsSizingNote').innerHTML =
     `<b>Roughly ${mins} minutes</b> for ${rows.toLocaleString('en-US')} rows across
-     ${(d.tables || []).length} table(s) — about <b>$${cost}</b> for the replication
-     instance alone.
+     ${(d.tables || []).length} table(s) — ${cost === null
+       ? `<b>pricing unavailable</b> (${esc(chosen.price_unavailable || 'no rate')}), so no cost is shown`
+       : `about <b>$${cost}</b> for the replication instance alone at the live $${chosen.usd_per_hour}/h`}.
      <span style="color:var(--ink-3)">The target keeps billing throughout, so this is
      not the cost of the migration. An estimate scaled from one measured run
      (33M rows, 47 min on dms.t3.small at 8) — row width, indexes and network
-     all move it.</span>`;
+     all move it. Rate: AWS Price List, ${esc(d.region || PRICE.region || '')}.</span>`;
 }
 
 $('#btnDmsPlan').onclick = () => renderDmsPlan();
@@ -7239,7 +7496,8 @@ $('#btnDmsRun').onclick = async () => {
       source_password: $('#dmsSourcePw').value,
       target_password: $('#dmsTargetPw').value,
       instance_class: ($('#dmsClass') || {}).value || '',
-      parallel_subtasks: Number(($('#dmsSubtasks') || {}).value || 0)})});
+      parallel_subtasks: Number(($('#dmsSubtasks') || {}).value || 0),
+      parallel_load_batches: Math.max(0, parseInt(($('#dmsBatches') || {}).value, 10) || 0)})});
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));
     btn.disabled = false;

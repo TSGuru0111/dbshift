@@ -229,6 +229,16 @@
       "Resource": "*"
     },
     {
+      "Sid": "PriceListRead",
+      "Effect": "Allow",
+      "Action": [
+        "pricing:GetProducts",
+        "pricing:DescribeServices",
+        "pricing:GetAttributeValues"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "IdentityAndVisibility",
       "Effect": "Allow",
       "Action": [
