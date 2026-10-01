@@ -2806,8 +2806,8 @@ def _source_connect_from_state():
         from collector import dialect as collector_dialect
         cfg = collector_config.Config(
             user=STATE.user, password=STATE.password, dsn=STATE.dsn,
-            schemas=(), output_dir=_Path("."), source_engine=STATE.engine)
-        return collector_dialect.for_engine(STATE.engine).connect(cfg)
+            schemas=(), output_dir=_Path("."), source_engine=STATE.source_engine)
+        return collector_dialect.for_engine(STATE.source_engine).connect(cfg)
 
     return connect
 

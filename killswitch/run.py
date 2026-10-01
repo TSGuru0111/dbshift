@@ -56,24 +56,35 @@ def execute(session, *, mode: str | None, confirm: str | None, regions: list[str
             f"refusing to {mode}: --confirm must be the account id these credentials resolve "
             f"to ({account}), and it was {confirm!r}")
 
-    found, plan, results = [], [], []
+    found, plan, results, region_errors = [], [], [], []
     for region in regions:
-        clients = scan.clients_for(session, region)
-        here = scan.scan(clients, region)
-        if only:
-            # One run's resources, by name: `--only dbmig-mysql-app` tears down
-            # that estate's target, bucket and replication instance and leaves
-            # every other run -- and every source host -- untouched.
-            needle = only.lower()
-            here = [r for r in here
-                    if needle in " ".join(str(r.get(k) or "") for k in ("id", "name", "stack")).lower()]
-        found += here
-        if mode:
-            step = actions.decide(here, mode, include_snapshots=include_snapshots,
-                                  force_deletion_protection=force_deletion_protection,
-                                  include_source_hosts=include_source_hosts)
-            plan += step
-            results += actions.execute(step, clients)
+        # One region must never be able to block every other one. `regions`
+        # includes every region this project has ever been pointed at
+        # (awsregion.used()), not only the one something is actually deployed
+        # in -- a stray visit to a disabled opt-in region (list_stacks there
+        # answers InvalidClientTokenId, which reads exactly like an expired
+        # session even though the credentials are fine everywhere else) used
+        # to fail the scan outright, so a real stack billing in a healthy
+        # region could never be found, let alone destroyed.
+        try:
+            clients = scan.clients_for(session, region)
+            here = scan.scan(clients, region)
+            if only:
+                # One run's resources, by name: `--only dbmig-mysql-app` tears down
+                # that estate's target, bucket and replication instance and leaves
+                # every other run -- and every source host -- untouched.
+                needle = only.lower()
+                here = [r for r in here
+                        if needle in " ".join(str(r.get(k) or "") for k in ("id", "name", "stack")).lower()]
+            found += here
+            if mode:
+                step = actions.decide(here, mode, include_snapshots=include_snapshots,
+                                      force_deletion_protection=force_deletion_protection,
+                                      include_source_hosts=include_source_hosts)
+                plan += step
+                results += actions.execute(step, clients)
+        except Exception as exc:  # noqa: BLE001 -- recorded and reported, not raised
+            region_errors.append({"region": region, "error": str(exc).splitlines()[0]})
 
     ours_billing = [r for r in found if r["ours"] and r["billable"]]
     report = {
@@ -84,6 +95,7 @@ def execute(session, *, mode: str | None, confirm: str | None, regions: list[str
         "found": found,
         "plan": plan,
         "results": results,
+        "region_errors": region_errors,
         "ours_billing": len(ours_billing),
         "not_ours_billing": sum(1 for r in found if not r["ours"] and r["billable"]),
     }
