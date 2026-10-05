@@ -190,6 +190,17 @@ evidence.
 
 ## Change log
 
+**2026-10-05 — the rules are on the screen, and the findings are readable.**
+A *Validation rules* panel now opens the console screen: each of the five
+levels with a one-line gist, the checks it runs **on the current pair** (the
+names `levels.py` / `mysql.py` emit, from `VAL_RULES` / `valRuleChecks` in
+`index.html`), and a `not run on this pair` tag where a level is skipped by
+design. `#valLevels` is **no longer a `.scrollcap`**: below the rules, controls
+and verdict it got only its 150px floor, so the findings scrolled in a slot
+inside a scrolling page. The page scrolls instead. This reverses the
+2026-09-20 entry below for this one view, on the operator's request. Checked
+in Edge at 1440x900 and 390x844 (no horizontal overflow).
+
 **2026-09-20 — the levels list actually scrolls, and a bug in the shared
 layout rule.** Phase 8's console screen did not cap its list: `#valLevels`
 carries `.scrollcap` and still rendered **2089px tall, hanging 1743px below

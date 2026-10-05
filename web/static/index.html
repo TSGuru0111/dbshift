@@ -605,6 +605,27 @@ details:not([open])>*:not(summary){display:none!important}
 .check.fail .remedy{background:var(--bad-soft);border-color:transparent;color:var(--bad)}
 .check.warn .remedy{background:var(--warn-soft);border-color:transparent;color:var(--warn)}
 
+/* Phase 8's rules list: one row per level, its checks beneath. */
+.vrules{display:flex;flex-direction:column;gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.vrule{background:var(--surface);padding:11px 16px;display:grid;grid-template-columns:44px 1fr auto;
+  gap:4px 12px;align-items:start}
+.vrule .lv{font-family:"IBM Plex Mono",monospace;font-size:12.5px;font-weight:600;color:var(--accent-ink);
+  background:var(--accent-soft);border-radius:3px;padding:2px 0;text-align:center;margin-top:1px}
+.vrule .nm{font-size:14px;font-weight:600}
+.vrule .gist{font-size:13px;color:var(--ink-2);margin-top:2px;max-width:84ch;text-wrap:pretty}
+.vrule .runs{font-family:"IBM Plex Mono",monospace;font-size:12px;padding:1px 8px;border-radius:3px;
+  border:1px solid var(--rule-strong);color:var(--ink-2);white-space:nowrap}
+.vrule .runs.off{border-color:transparent;background:var(--warn-soft);color:var(--warn)}
+.vrule ul{grid-column:2 / -1;margin:4px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:3px}
+.vrule li{font-size:13px;color:var(--ink-2);line-height:1.45}
+.vrule li b{color:var(--ink);font-weight:600}
+.vrule.off .nm,.vrule.off li b{color:var(--ink-2)}
+@media (max-width:640px){
+  .vrule{grid-template-columns:38px 1fr}
+  .vrule .runs{grid-column:2;justify-self:start}
+}
+
 .facts{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--rule);
   border:1px solid var(--rule);border-radius:3px;overflow:hidden;margin-top:16px}
 .facts div{background:var(--surface);padding:12px 14px}
@@ -1973,6 +1994,15 @@ tr:last-child td{border-bottom:none}
       <p>Five levels, from <i>it exists</i> to <i>it behaves</i>.</p>
     </div>
 
+    <!-- The rules, before anything runs: what each level checks and whether it
+         runs on this pair. Filled by renderValRules() from VAL_RULES, which
+         names the checks validate/ actually emits for each source/target pair. -->
+    <div class="panel pad" id="valRules" style="margin-bottom:12px">
+      <div class="spread"><div class="eyebrow" style="margin:0">Validation rules</div>
+        <span class="mono" id="valRulesPair" style="font-size:12.5px;color:var(--ink-3)"></span></div>
+      <div class="vrules mt-s" id="valRulesList"></div>
+    </div>
+
     <!-- Nine lines of prose, 202px, permanently above the fold and directly
          off the levels list below it. The claim is one sentence; the working
          is on the hint, where the rest of this console puts it. -->
@@ -2001,7 +2031,11 @@ tr:last-child td{border-bottom:none}
          loss or a held-back table, which are not the same news. -->
     <div class="panel pad mt" id="valVerdict" style="display:none"></div>
 
-    <div id="valLevels" class="mt scrollcap"></div>
+    <!-- Not a .scrollcap any more (2026-10-05). As one it got only the height
+         left under the rules, controls and verdict -- often its 150px floor --
+         so the findings scrolled in a slot inside a scrolling page and could not
+         be read. The page scrolls instead, and every finding is at full size. -->
+    <div id="valLevels" class="mt"></div>
     <div id="valEmpty" class="panel mt"><div class="empty">Migrate first. Validation compares the target
       against the estate it was built from.</div></div>
   </section>
@@ -2390,6 +2424,8 @@ function show(id){
   // report with 11 of 11 row counts matching sat in validate/output/. Load it
   // whenever the phase is opened; it refuses harmlessly when there is none.
   if (id === 'validate' && !validateRendered) { validateRendered = true; renderValidatePlan(); }
+  // The rules depend on the pair, which can change after the first visit.
+  else if (id === 'validate') renderValRules();
   // Load the instance picker and the configuration form from the server rather
   // than hardcoding either in the page: the classes on offer, the defaults and
   // the locked properties are all decided in provision/overrides.py, so the
@@ -6321,7 +6357,95 @@ function findingRow(f){
     </div></div>`;
 }
 
+/* The rules Phase 8 applies, per source/target pair. Check names are the ones
+   validate/levels.py and validate/mysql.py emit, so a rule listed here is a row
+   the run will report under the same name. A level with `off` does not run on
+   that pair, by design -- said here before the run, not discovered after it. */
+// `var`, not const: show('validate') can run while the page is still restoring
+// its last view, before this line executes, and a const would throw there.
+var VAL_RULES = {
+  1: {name: 'Objects', gist: 'Everything that should exist on the target does — matched by name, not by count.'},
+  2: {name: 'Structure', gist: 'Column, key and index definitions match the source.'},
+  3: {name: 'Row counts', gist: 'The exact number of rows, table by table, on both databases.'},
+  4: {name: 'Data content', gist: 'A checksum of every row on both sides, so equal counts cannot hide changed values.'},
+  5: {name: 'Behaviour', gist: 'What only shows up once the database is used — counters, settings, objects that must run.'},
+};
+function valRuleChecks(src, tgt){
+  const cross = src !== tgt;
+  const mysqlSrc = src === 'MYSQL';
+  const L4 = [
+    ['data content', 'MD5 over a canonical text of every row; any table whose checksum differs is a mismatch.'],
+    ...(cross ? [['differences that are correct', mysqlSrc
+        ? "Rendering differences normalised on both sides — DECIMAL trailing zeros, CHAR padding, TIMESTAMP in UTC. '' and NULL are never treated as equal."
+        : "Rendering differences normalised on both sides — trailing zeros, CHAR padding, Oracle's empty-string-is-NULL."]] : []),
+    ['columns not checksummed', 'Generated columns not yet on the target are left out of the checksum and listed, never silently dropped.'],
+  ];
+  if (mysqlSrc && cross) return {
+    1: [['tables present', "Every source table exists on the target, under Phase 4c's names (order → order_tbl)."],
+        ['other objects', 'Routines, triggers, views and events are counted by Phases 4b and 7, not matched by name.']],
+    2: {off: 'Not compared across engines: Phase 4c chose the target types on purpose (int unsigned → bigint, ENUM → text). Levels 3 and 4 prove the values survived.'},
+    3: [['row counts', 'Source and target counts must be equal for every table.']],
+    4: L4,
+    5: [['identity positions', 'Each identity column restarts past the highest loaded id, so the first insert after cutover cannot reuse a migrated key.']],
+  };
+  if (mysqlSrc) return {
+    1: [['objects present', 'Every table, view, routine, trigger and event on the source exists on the target.'],
+        ['objects added', 'Nothing on the target that the source does not have.']],
+    2: [['columns · keys and constraints · indexes', 'The same SQL reads both servers; definitions must be identical.'],
+        ['storage engines', 'Each table uses the same storage engine on both sides.']],
+    3: [['row counts', 'Source and target counts must be equal for every table.']],
+    4: L4,
+    5: [['server settings', "sql_mode, character set, collation and the other settings Phase 6's parameter group carried."],
+        ['AUTO_INCREMENT counters', 'Every counter is at or ahead of the source, so no id is issued twice.'],
+        ['event', 'Each event exists; DISABLED on the target until cutover is expected.'],
+        ['routine executes', 'fn_legacy_tax_rate returns the same answer on both servers.']],
+  };
+  if (cross) return {
+    1: [['tables present', 'Every source table exists on the target under its converted name.'],
+        ['other objects', 'Converted code and views are counted by Phases 4b and 7, not matched by name.']],
+    2: {off: 'Not compared across engines: NUMBER became NUMERIC and VARCHAR2 became VARCHAR on purpose. Levels 3 and 4 prove the values survived.'},
+    3: [['row counts', 'Source and target counts must be equal for every table.']],
+    4: L4,
+    5: {off: "Not compared across engines: invalid objects, grants and sequence positions are Oracle concepts. Phase 7's residue lists the equivalents with an owner."},
+  };
+  return {
+    1: [['objects present', 'Every object on the source exists on the target.'],
+        ['objects added', 'Nothing on the target that the source does not have.'],
+        ['Oracle-generated objects', 'System-named objects are reported apart, not counted as missing.']],
+    2: [['columns', 'Every column has the same type, length and nullability.'],
+        ['constraints', 'Primary, unique, foreign and check constraints match.'],
+        ['indexes', 'The same indexes exist on the same columns.']],
+    3: [['row counts', 'Source and target counts must be equal for every table.']],
+    4: L4,
+    5: [['objects compile', 'No object is invalid on the target that was valid on the source.'],
+        ['grants', 'The same privileges are granted.'],
+        ['sequences', 'Every sequence is at or ahead of the source.'],
+        ['database link · scheduler job · external table · materialized view · text index · password profile',
+         'Each one checked where the estate has it.']],
+  };
+}
+function renderValRules(){
+  const list = $('#valRulesList');
+  if (!list || !VAL_RULES) return;   // too early: renderValidatePlan calls again
+  const src = SRC || 'ORACLE', tgt = ENGINE || 'ORACLE';
+  const label = e => ({ORACLE: 'Oracle', MYSQL: 'MySQL', POSTGRESQL: 'PostgreSQL'}[e] || e);
+  $('#valRulesPair').textContent = `${label(src)} → RDS for ${label(tgt)}`;
+  const checks = valRuleChecks(src, tgt);
+  list.innerHTML = [1, 2, 3, 4, 5].map(n => {
+    const r = VAL_RULES[n], c = checks[n], off = c && !Array.isArray(c);
+    const opt = n === 4 && !off ? ' Runs only when "Compare every row\'s values" is ticked.' : '';
+    const items = off ? `<li>${esc(c.off)}</li>`
+      : c.map(([name, gist]) => `<li><b>${esc(name)}</b> — ${esc(gist)}</li>`).join('');
+    return `<div class="vrule${off ? ' off' : ''}">
+      <span class="lv">L${n}</span>
+      <div><div class="nm">${esc(r.name)}</div><div class="gist">${esc(r.gist + opt)}</div></div>
+      <span class="runs${off ? ' off' : ''}">${off ? 'not run on this pair' : 'runs'}</span>
+      <ul>${items}</ul></div>`;
+  }).join('');
+}
+
 async function renderValidatePlan(){
+  renderValRules();
   const r = await fetch('/api/validate/plan');
   if (!r.ok) return;
   const p = await r.json();
@@ -8238,7 +8362,14 @@ renderPageNav();
 // routes are, and the evidence fills in once sizing has assessed them.
 renderPaths();
 showMigrationEngine();
-loadState();
+// A link straight to a phase: http://127.0.0.1:8765/#validate opens Phase 8.
+// After loadState, so the screen opens with the restored session behind it.
+function openFromHash(){
+  const id = decodeURIComponent((location.hash || '').slice(1));
+  if (id && /^[\w-]+$/.test(id) && document.getElementById('view-' + id)) show(id);
+}
+loadState().finally(openFromHash);
+window.addEventListener('hashchange', openFromHash);
 loadAwsConfig();
 </script>
 </body>
