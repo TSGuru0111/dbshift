@@ -338,6 +338,25 @@ details:not([open])>*:not(summary){display:none!important}
    2026-09-21. This is the same class of fault the chain rules below already
    guard with :not([style*="display:none"]); the cap needs the guard too. */
 .scrollcap[style*="display:none"],.scrollcap[style*="display: none"]{display:none!important}
+/* Discover's dataset list sits under a tile row, so on a laptop it was left at
+   the 150px floor -- one row, and `overscroll-behavior:contain` then swallowed
+   the wheel at the list's ends, so the pane looked frozen under the cursor.
+   A taller floor makes it a usable window, and `auto` hands the wheel to the
+   pane once the list has nothing left to scroll. */
+#discAcc.scrollcap{min-height:min(420px,60vh);overscroll-behavior:auto}
+/* The actual reason these lists would not scroll: `.acc` (declared further
+   down) sets overflow:hidden and, at equal specificity, beat .scrollcap's
+   overflow-y:auto -- so the box was capped in height but clipped, not
+   scrollable. Affects #discAcc, #convList, #probeList and #ruleList. */
+.acc.scrollcap{overflow-y:auto}
+/* Phase 4 is the one view with content AFTER its capped list (the Technical
+   disclosure). The cap makes every ancestor of the list shrinkable
+   (min-height:0) inside a view fixed at the pane's height, so once the
+   disclosure opens and the view overflows, the ancestors collapse below their
+   contents and the disclosure paints over the list. While it is open, let the
+   view size to its contents and the pane scroll instead. */
+#view-remediate:has(#remTech[open]){height:auto}
+#view-remediate:has(#remTech[open]) #sctRemGroups{min-height:min(420px,60vh)}
 /* One band of context across the top, then the table gets the rest of the
    screen. These three used to stack, which left a 36-row action-item table
    about one row tall.
@@ -1338,7 +1357,7 @@ tr:last-child td{border-bottom:none}
          what the phase leads with, because SCT is the assessment a client
          reads. Hidden rather than deleted -- Phase 6's render reads
          STATE.remediation, and the rehearsal registration below belongs to it. -->
-    <details style="margin-bottom:16px">
+    <details id="remTech" style="margin-bottom:16px">
       <summary style="cursor:pointer;font-size:12.5px;color:var(--ink-3)">
         Technical: the 50-rule remediation path and the rehearsal database</summary>
 
