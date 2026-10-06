@@ -21,6 +21,14 @@ combinations this project does not perform (MySQL→RDS Oracle, Oracle→RDS MyS
 | MySQL | RDS for **MySQL** | homogeneous | **Phases 1–8 built 2026-09-30**; 1–5 proven; 6 renders (MySQL 8.4 — 8.0 is past RDS standard support); schema copy + Phase 8 proven on a MySQL 8.4.11 stand-in; not yet run on AWS |
 | MySQL | RDS for **PostgreSQL** | heterogeneous | **Phases 1–8 proven for real 2026-09-30** — deployed RDS PostgreSQL 16.15, DMS 19/19 tables (196,544 rows, 0 errors), Phase 8: 19/19 counts, 18/19 identical checksums, 1 decided zero-date loss; torn down. Problems and fixes: `docs/20-mysql-problems-log.md` |
 
+**The MySQL estate is 5 GB since 2026-10-06, not 35 MB.** `scale_data.py` grew
+`dbmig_mysql_app` on EC2 to **5.03 GB / ~25.9M rows** (4.22M orders, 12.66M lines)
+by adding orders and their customers only — every defect table, `clickstream_raw`
+and the aggregates unchanged, 12/12 defects, object counts as before. Every
+figure above dated before that describes the 35 MB estate: expect Phase 7's DMS
+load and Phase 8's level-4 checksum to take far longer. `--remove` undoes it.
+`scripts/mysql-source/README.md` has the measurements.
+
 **The MySQL path, as it stands.** `engines/` holds the seam (47/47),
 `collector/dialect.py` the connection and bind style, `collector/probes_mysql/`
 ten probes over `information_schema` emitting **the same dataset names and, since

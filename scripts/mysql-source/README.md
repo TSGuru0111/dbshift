@@ -15,6 +15,34 @@ python scripts/mysql-source/verify_defects.py            # must print 12/12
 Replace the `CHANGE_ME_*` placeholders in `01_setup_admin.sql` before running it,
 or pipe it through `sed`. Passwords belong in `credentials.local.ps1`, never here.
 
+## Growing it to a realistic size (optional)
+
+The estate above is ~35 MB. `scale_data.py` grows it in place to a target size by
+adding orders (with lines, payments and audit rows) and the customers who placed
+them -- generated on the server, in batches, until the schema reaches the target:
+
+```bash
+DBSHIFT_MYSQL_APP_PASSWORD='...' python scripts/mysql-source/scale_data.py \
+    --dsn <host>:3306/dbmig_mysql_app --target-gb 5          # ~3.9M orders, ~12M lines
+python scripts/mysql-source/scale_data.py --dsn ... --remove # undo: only its own rows
+```
+
+It never touches a defect-carrying table, product data or the aggregates, so
+`verify_defects.py` still reports 12/12 and the object counts do not change.
+Proven on a local MySQL 8.0.46 built from these scripts: 12/12 after growing,
+every audit row inside its 2023-2026 partition, every order total equal to its
+lines, and `--remove` back to the original counts. **Binary logging is on**, so
+5 GB of inserts also writes ~5 GB of binlog, kept 7 days -- budget ~12 GB free.
+
+**Run on the EC2 estate 2026-10-06: 35 MB -> 5.03 GB** (2.83 GB data, 2.20 GB
+indexes) in 21 batches, ~25 min. 704,993 customers, 1,057,489 addresses,
+4,220,000 orders, 12,660,000 lines, 2,954,000 payments, 4,219,424 audit rows;
+clickstream_raw and every defect table unchanged. After it: 12/12 defects, 0 audit
+rows in `pmax`, 0 orders whose total differs from its lines, object counts
+19 tables / 3 views / 5 routines / 2 triggers / 1 event as before. **The host was
+stopped mid-batch once**; that batch rolled back whole and a re-run resumed from
+the measured size, which is the behaviour the per-batch transaction is for.
+
 ## What gets built
 
 `dbmig_mysql_app` — a retail order estate, deliberately a different domain from
