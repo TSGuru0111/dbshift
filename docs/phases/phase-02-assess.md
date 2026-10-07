@@ -225,6 +225,8 @@ Recall **7 of 7 detectable, severity exact on all 7**.
 
 ## Change log
 
+- **2026-10-06 — the hidden 50-rule panel is removed from Assess.** The always-disabled "Run assessment" row, scores, issue table and exports (and their JavaScript) are gone from `web/static/index.html`. `assess/`, `/api/assess` and the `/api/assessment*` downloads stay for Phases 3, 5-7 and 10. `CATLABEL` was kept for the Rules & probes catalogue.
+
 **2026-09-29** — **MySQL added as a second source; Phase 2 for it is real AWS SCT.**
 
 New: `sct/selftest_mysql.py` (64/64). Changed: `sct/targets.py` (per-source

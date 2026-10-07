@@ -303,6 +303,8 @@ Console: **Phase 4 - Remediate**.
 
 ## Change log
 
+- **2026-10-06 — the 50-rule remediation screen is removed from the console.** The *Technical* disclosure (fix generation status, rehearsal-database registration, "Plan remediations", proposed/routed fixes) and its JavaScript are gone from `web/static/index.html`; `remediate/` and `/api/remediate`, `/api/rehearsal` stay. The console no longer produces `remediation_plan.json` — run `python -m remediate.run` for it. `gateRow` was kept: 4b's rows use it.
+
 **2026-09-16** — **A proven fix can be applied and kept.** Client feedback: "if
 it is broken in source, correct it and write it to target using agent." The
 phase proved fixes and then threw them away -- `rehearsal.py` applies each one
