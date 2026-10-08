@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ganit DBShift — database migration console</title>
-<meta name="description" content="Ganit DBShift: assess an Oracle or MySQL estate, convert its stored code, and migrate it to Amazon RDS — with the evidence for every decision.">
+<title>Ganit QuantumShift X AI — database migration console</title>
+<meta name="description" content="Ganit QuantumShift X AI: assess an Oracle or MySQL estate, convert its stored code, and migrate it to Amazon RDS — with the evidence for every decision.">
 <meta name="color-scheme" content="light">
 <meta name="robots" content="noindex">
 <!-- The Ganit mark, as a favicon. It was an empty data: URI, which suppressed
@@ -115,8 +115,9 @@ main:focus{outline:none}
   border-bottom:1px solid var(--g-navy-3);text-decoration:none;color:inherit;min-width:0}
 .brandmark .ico{width:74px;height:36px;flex:none}
 .brandmark .bt{font-family:Archivo,system-ui,sans-serif;font-size:14px;font-weight:600;
-  letter-spacing:.02em;color:var(--on-chrome-2);white-space:nowrap;overflow:hidden;
-  text-overflow:ellipsis}
+  letter-spacing:.02em;color:var(--on-chrome-2);line-height:1.3;text-wrap:balance}
+/* Wraps rather than ellipsising: "Ganit QuantumShift X AI" is wider than the
+   rail at laptop widths, and a brand cut to "QuantumShift X…" reads as broken. */
 .brandmark .bt b{font-weight:700;color:var(--on-chrome)}
 .sidefoot{padding:11px 14px 13px;border-top:1px solid var(--g-navy-3);
   display:flex;align-items:center;gap:10px;color:var(--on-chrome-3)}
@@ -939,7 +940,7 @@ tr:last-child td{border-bottom:none}
 <aside class="sidebar">
   <div class="brandmark">
     <svg class="ico" aria-hidden="true"><use href="#lg-ganit-dark"></use></svg>
-    <span class="bt">Ganit <b>DBShift</b></span>
+    <span class="bt">Ganit <b>QuantumShift X AI</b></span>
   </div>
   <nav class="rail" id="rail"></nav>
   <div class="sidefoot" id="sidefoot" title="The source engine and the target it migrates to">
@@ -2881,7 +2882,7 @@ function showSctScopeNote(){
           ? ' <b>Zero action items is the expected result here</b>, not a step that failed.'
           : ''}</div>`
     : `<div class="note warn" style="font-size:12.5px"><b>${esc(t.label)} is out of
-       DBShift's migration scope.</b> ${esc(t.scope_note)} SCT will assess it for comparison;
+       QuantumShift X AI's migration scope.</b> ${esc(t.scope_note)} SCT will assess it for comparison;
        it is not a migration path, and no later phase will accept it.</div>`;
 }
 
@@ -3080,7 +3081,7 @@ function renderSegregation(seg){
   $('#sctUnmappedRoutes').style.display = un.length ? '' : 'none';
   if (un.length) $('#sctUnmappedRoutes').innerHTML =
     `<div class="note warn" style="font-size:12.5px"
-          title="DBShift has no rule yet for these SCT codes: ${un.map(i => esc(i.issue_code)).join(', ')}. An unrecognised item is never assumed safe, so it is left for an engineer rather than fixed automatically. Add a row to sct/route.py once each is understood."><b>${
+          title="QuantumShift X AI has no rule yet for these SCT codes: ${un.map(i => esc(i.issue_code)).join(', ')}. An unrecognised item is never assumed safe, so it is left for an engineer rather than fixed automatically. Add a row to sct/route.py once each is understood."><b>${
       un.length} unrecognised code${un.length === 1 ? '' : 's'}</b> — left for an engineer
       <span class="mono" style="opacity:.75">${un.map(i => esc(i.issue_code)).join(', ')}</span></div>`;
 }

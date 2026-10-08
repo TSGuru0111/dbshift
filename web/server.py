@@ -96,7 +96,7 @@ from . import awscreds, preflight, settings
 
 STATIC = Path(__file__).resolve().parent / "static"
 
-app = FastAPI(title="DBShift Console")
+app = FastAPI(title="QuantumShift X AI Console")
 
 
 # --------------------------------------------------------------------------- state
@@ -1180,7 +1180,7 @@ def sct_assess(target: str = "", force: bool = False):
         if not target_row["in_scope"]:
             # Allowed -- a client asks for the comparison -- but never silently.
             emit({"event": "note", "level": "warn",
-                  "message": f"{target_row['label']} is out of DBShift's migration scope",
+                  "message": f"{target_row['label']} is out of QuantumShift X AI's migration scope",
                   "detail": target_row["scope_note"]})
 
         emit({"event": "stage", "stage": "run",
@@ -3330,7 +3330,7 @@ def cutover_execute(req: CutoverExecute):
 def main() -> int:
     import uvicorn
 
-    print("DBShift console -> http://127.0.0.1:8765")
+    print("QuantumShift X AI console -> http://127.0.0.1:8765")
     uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
     return 0
 
