@@ -3783,6 +3783,12 @@ $('#ddlPostLoad').onchange = () => {
       'finishes to add the keys and indexes.';
 };
 
+// The constraints left off so far in this attempt. Each "apply without X" adds X
+// to the list; sending only X made the loop forget the earlier ones, so a
+// source with several NOVALIDATE foreign keys bounced between them forever.
+// A plain Apply press starts a fresh attempt and clears it.
+let DDL_SKIP = [];
+
 // Takes the skip list as an argument so the failure branch below can offer
 // "apply without <constraint>" and re-enter with it.
 async function applyDdl(skip_constraints = []) {
@@ -3848,14 +3854,17 @@ async function applyDdl(skip_constraints = []) {
                data-skip="${esc(name)}">Apply without ${esc(name)}</button></div></div>` : ''}
          </div>`;
       const skipBtn = $('#btnDdlSkip');
-      if (skipBtn) skipBtn.onclick = () => applyDdl([skipBtn.dataset.skip]);
+      if (skipBtn) skipBtn.onclick = () => {
+        DDL_SKIP = [...new Set([...DDL_SKIP, ...skip_constraints, skipBtn.dataset.skip])];
+        applyDdl(DDL_SKIP);
+      };
     }
   } finally {
     btn.disabled = false;
   }
 }
 
-$('#btnDdlApply').onclick = () => applyDdl();
+$('#btnDdlApply').onclick = () => { DDL_SKIP = []; applyDdl(); };
 
 // Three panes, one scroll region. Panes are hidden, never detached: a driver
 // reaches #ddlNoteList whichever pane is on screen.
